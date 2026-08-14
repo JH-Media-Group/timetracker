@@ -17,15 +17,27 @@ import { cn } from "@/lib/cn";
 import { Button, Card, Skeleton } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { useApp } from "@/components/app/providers";
+import { useTimer } from "@/components/app/timer";
 import { ProjectPicker, TaskSelect, defaultTaskFor } from "@/components/app/project-picker";
 import type { TimeEntry } from "@/lib/types";
-import { addDays, formatDuration, isoDate, parseDuration } from "@/lib/format";
+import { addDays, formatClock, formatDuration, isoDate, parseDuration } from "@/lib/format";
 
 interface Row { key: string; projectId: string; taskId: string; notes?: string; cells: Record<string, TimeEntry[]> }
 
-export function WeekView({ weekStart, userId, entries, loading }: {
+export function WeekView({ weekStart, userId, entries, loading, selectedDay }: {
   weekStart: Date; userId: string; entries: TimeEntry[]; loading: boolean;
+  /** The day the strip above has selected, marked here so the two agree. */
+  selectedDay?: string;
 }) {
+  /**
+   * The one clock (TALLY-42).
+   *
+   * `useTimer` already ticks once a second and derives elapsed time from the
+   * server's `timerStartedAt` rather than counting up locally, so a sleeping
+   * tab is right the moment it wakes. Reading it here means the cell and the
+   * topbar cannot disagree, and there is still only one interval in the app.
+   */
+  const { running, elapsed } = useTimer();
   const { projectById, taskById, clientById, settings } = useApp();
   const qc = useQueryClient();
   const toast = useToast();
@@ -80,7 +92,17 @@ export function WeekView({ weekStart, userId, entries, loading }: {
           <tr className="border-b border-border bg-bg-muted">
             <th className="sticky left-0 z-10 min-w-[260px] bg-bg-muted px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.04em] text-ink-tertiary">Project / Task</th>
             {days.map((d) => (
-              <th key={isoDate(d)} className="w-[90px] px-2 py-2 text-right text-xs font-semibold uppercase tracking-[0.04em] text-ink-tertiary">
+              <th
+                key={isoDate(d)}
+                className={cn(
+                  "w-[90px] px-2 py-2 text-right text-xs font-semibold uppercase tracking-[0.04em] text-ink-tertiary",
+                  /* The selected column, bordered rather than only tinted. A
+                     transparent border on every other cell keeps the widths
+                     identical, so nothing shifts as the selection moves. */
+                  "border-x border-transparent",
+                  isoDate(d) === selectedDay && "border-x-border-strong bg-bg-muted text-ink"
+                )}
+              >
                 <div>{["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][(d.getDay() + 6) % 7]}</div>
                 <div className="font-normal normal-case text-ink-tertiary">{d.getDate()}</div>
               </th>
@@ -105,12 +127,24 @@ export function WeekView({ weekStart, userId, entries, loading }: {
                   const key = isoDate(d);
                   const cell = row.cells[key] ?? [];
                   const seconds = cell.reduce((a, e) => a + e.durationSeconds, 0);
-                  const isRunning = cell.some((e) => e.timerStartedAt);
+                  /* The timer in THIS cell, not merely somewhere on the row: an
+                     entry can be running on one day while another day of the
+                     same row is settled. */
+                  const liveHere = running && cell.some((e) => e.id === running.id);
                   const inferred = cell.some((e) => !e.startedAt);
                   return (
-                    <td key={key} className="px-1 py-1">
+                    <td
+                      key={key}
+                      className={cn(
+                        "px-1 py-1 border-x border-transparent",
+                        key === selectedDay && "border-x-border-strong bg-bg-muted/40"
+                      )}
+                    >
                       <WeekCell
-                        seconds={seconds} running={isRunning} inferred={inferred}
+                        seconds={seconds}
+                        running={!!liveHere}
+                        liveSeconds={liveHere ? elapsed : undefined}
+                        inferred={inferred}
                         onCommit={(secs) => save.mutate({ projectId: row.projectId, taskId: row.taskId, notes: row.notes, spentOn: key, seconds: secs })}
                       />
                     </td>
@@ -169,13 +203,37 @@ export function WeekView({ weekStart, userId, entries, loading }: {
   );
 }
 
-function WeekCell({ seconds, running, inferred, onCommit }: {
-  seconds: number; running: boolean; inferred: boolean; onCommit: (seconds: number) => void;
+function WeekCell({ seconds, running, liveSeconds, inferred, onCommit }: {
+  seconds: number; running: boolean;
+  /** Elapsed time when the timer is running in this cell, ticking. */
+  liveSeconds?: number;
+  inferred: boolean; onCommit: (seconds: number) => void;
 }) {
   const { settings } = useApp();
   const [text, setText] = React.useState("");
   const [editing, setEditing] = React.useState(false);
-  const display = seconds ? formatDuration(seconds, settings.timeDisplay) : "";
+
+  /**
+   * A running cell counts up (TALLY-42).
+   *
+   * The day and calendar views both did this and the week grid did not, so a
+   * timer was invisible here and Jason had to look at the topbar to know it was
+   * going. `liveSeconds` is what has elapsed since it started; `seconds` is what
+   * is settled, which for a running entry is what it had before this run.
+   */
+  const shown = running && liveSeconds != null ? seconds + liveSeconds : seconds;
+
+  /**
+   * A running cell reads as a clock, a settled one in the account's format.
+   *
+   * Decimal hours to two places only changes every 36 seconds, so a ticking
+   * timer rendered that way looks frozen, which is the thing this was meant to
+   * fix. The day view already switches to a clock while running; the week grid
+   * now matches it.
+   */
+  const display = running
+    ? formatClock(shown)
+    : shown ? formatDuration(shown, settings.timeDisplay) : "";
 
   return (
     <div className="relative">

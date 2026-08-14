@@ -503,6 +503,7 @@ function RetainerList() {
         <RetainerDialog
           title="New retainer"
           submitLabel="Open retainer"
+          existing={list}
           onClose={() => setOpening(false)}
           onDone={refresh}
         />
@@ -594,12 +595,15 @@ function RetainerDialog({
   title,
   submitLabel,
   retainer,
+  existing = [],
   onClose,
   onDone,
 }: {
   title: string;
   submitLabel: string;
   retainer?: Retainer;
+  /** The retainers that already exist, so a dead end is visible before it is chosen. */
+  existing?: Retainer[];
   onClose: () => void;
   onDone: () => void;
 }) {
@@ -608,6 +612,26 @@ function RetainerDialog({
   const [clientId, setClientId] = React.useState("");
   const [amount, setAmount] = React.useState("");
   const [note, setNote] = React.useState("");
+  /**
+   * The refusal, shown against the field it belongs to (TALLY-45).
+   *
+   * A toast alone was the whole feedback, and Jason could not tell a refusal
+   * from a success from nothing happening. An error about the client belongs
+   * next to the client.
+   */
+  const [error, setError] = React.useState<string | null>(null);
+
+  /**
+   * Which clients already hold a client-wide retainer.
+   *
+   * One live retainer per client, or per project within a client, which the
+   * database enforces with a unique index. Marking them in the list means the
+   * dead end is visible before it is chosen rather than after.
+   */
+  const taken = React.useMemo(
+    () => new Set(existing.filter((r) => !r.projectId && !r.archivedAt).map((r) => r.clientId)),
+    [existing]
+  );
 
   const cents = Math.round((Number(amount) || 0) * 100);
 
@@ -616,19 +640,26 @@ function RetainerDialog({
       retainer
         ? api.addRetainerFunds(retainer.id, { amountCents: cents, note: note.trim() || null })
         : api.createRetainer({ clientId, openingCents: cents, note: note.trim() || null }),
-    onSuccess: () => {
-      toast.push({ tone: "success", title: retainer ? "Funds added." : "Retainer opened." });
+    onSuccess: (r) => {
+      toast.push({
+        tone: "success",
+        title: retainer
+          ? `Added ${formatMoney(cents)}. The balance is now ${formatMoney(r.balanceCents)}.`
+          : `Retainer opened for ${clients.find((c) => c.id === clientId)?.name ?? "the client"}.`,
+      });
       onDone();
       onClose();
     },
-    onError: (e: unknown) =>
-      toast.push({
-        tone: "danger",
-        title: e instanceof Error ? e.message : "That did not work.",
-      }),
+    onError: (e: unknown) => {
+      const message = e instanceof Error ? e.message : "That did not work.";
+      setError(message);
+      toast.push({ tone: "danger", title: message });
+    },
   });
 
-  const canSubmit = retainer ? cents > 0 : clientId !== "" && cents >= 0;
+  const canSubmit = retainer
+    ? cents > 0
+    : clientId !== "" && cents >= 0 && !taken.has(clientId);
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
@@ -650,11 +681,22 @@ function RetainerDialog({
       >
       <div className="flex flex-col gap-4">
         {!retainer && (
-          <Field label="Client" required>
-            <Select value={clientId} onChange={(e) => setClientId(e.target.value)}>
+          <Field
+            label="Client"
+            required
+            error={error ?? (clientId && taken.has(clientId)
+              ? "This client already has a retainer. Add funds to it instead."
+              : undefined)}
+          >
+            <Select
+              value={clientId}
+              onChange={(e) => { setClientId(e.target.value); setError(null); }}
+            >
               <option value="">Choose a client</option>
               {clients.map((c) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
+                <option key={c.id} value={c.id} disabled={taken.has(c.id)}>
+                  {c.name}{taken.has(c.id) ? " (already has one)" : ""}
+                </option>
               ))}
             </Select>
           </Field>

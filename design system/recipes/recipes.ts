@@ -453,6 +453,26 @@ export const dialogContentClass = [
   "max-md:rounded-b-none",
 ].join(" ");
 
+/**
+ * A tray that slides in from the right.
+ *
+ * Same machinery as a dialog, different shape. A dialog is for one decision;
+ * a tray is for a record you want open beside the list you came from, which is
+ * why it takes the height and leaves the left of the screen visible.
+ *
+ * Wide, because the things that go in it are tables. `max-w-[880px]` leaves a
+ * name column readable behind it on a laptop, which is what makes it a tray
+ * rather than a modal that happens to be on the right (TALLY-41).
+ */
+export const trayContentClass = [
+  "fixed inset-y-0 right-0 z-(--z-modal) flex w-full max-w-[880px] flex-col",
+  "border-l border-border bg-surface shadow-xl",
+  "data-[state=open]:animate-in data-[state=open]:slide-in-from-right",
+  "data-[state=closed]:animate-out data-[state=closed]:slide-out-to-right",
+  /* On a phone there is no "beside", so it takes the screen. */
+  "max-md:max-w-none",
+].join(" ");
+
 export const tooltipClass = [
   "z-(--z-tooltip) rounded-md bg-ink px-2 py-1 text-sm text-ink-inverse shadow-md",
   "data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0",

@@ -377,9 +377,20 @@ export default function ProjectDetailPage() {
                         const u = userById.get(uid);
                         return (
                           <div key={uid} className="flex items-center px-4 py-2 pl-11">
+                            {/*
+                              The person links through (TALLY-12). The Team tab
+                              always did; nested under a task they were text,
+                              which is where somebody actually notices a name
+                              and wants to know more about them.
+                            */}
                             <span className="flex min-w-0 flex-1 items-center gap-2">
                               {u && <Avatar user={u} size="xs" />}
-                              <span className="truncate text-ink-secondary">{u?.firstName} {u?.lastName}</span>
+                              <Link
+                                href={`/team/${uid}`}
+                                className="truncate text-ink-secondary hover:text-ink hover:underline"
+                              >
+                                {u?.firstName} {u?.lastName}
+                              </Link>
                             </span>
                             <span className="w-24 text-right tabular-nums text-ink-secondary">{formatDuration(secs, settings.timeDisplay)}</span>
                             <span className="w-36" />

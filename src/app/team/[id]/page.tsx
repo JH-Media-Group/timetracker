@@ -20,8 +20,7 @@ import {
   addDays, formatDateUS, formatDuration, formatMoney, formatPercent, isoDate, startOfWeek,
 } from "@/lib/format";
 import type { TimeEntry } from "@/lib/types";
-import {
-  Avatar, Badge, Button, Card, EmptyState, Spinner, Meter, Tabs,
+import {Avatar, Badge, Button, Card, EmptyState, Spinner, Meter, Tabs, Select,
 } from "@/components/ui/primitives";
 import { PageBody, PageHeader, PeriodPicker, usePeriod } from "@/components/app/page-chrome";
 import { Kpi, KpiRow, SectionTitle } from "@/components/app/kpi";
@@ -106,9 +105,33 @@ export default function PersonDetailPage() {
       .sort((a, b) => b.seconds - a.seconds);
   }, [list, projectById]);
 
+  /**
+   * Recent time, filterable by project (TALLY-16).
+   *
+   * Forty entries across a dozen projects answers "what have they been doing"
+   * and not "what did they do on this one", which is the question somebody
+   * actually has when they open a person from a project.
+   *
+   * The projects offered are the ones this person has actually booked to in the
+   * period, so the list never contains a choice that yields nothing.
+   */
+  const [recentProject, setRecentProject] = React.useState("");
+
+  const recentProjects = React.useMemo(() => {
+    const ids = new Set(list.map((e) => e.projectId));
+    return [...ids]
+      .map((id) => projectById.get(id))
+      .filter((p): p is NonNullable<typeof p> => !!p)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [list, projectById]);
+
   const recent = React.useMemo(
-    () => [...list].sort((a, b) => b.spentOn.localeCompare(a.spentOn)).slice(0, 40),
-    [list]
+    () =>
+      [...list]
+        .filter((e) => !recentProject || e.projectId === recentProject)
+        .sort((a, b) => b.spentOn.localeCompare(a.spentOn))
+        .slice(0, 40),
+    [list, recentProject]
   );
 
   // The bootstrap fetch has to finish before "not found" is the truth.
@@ -315,8 +338,29 @@ export default function PersonDetailPage() {
 
         {tab === "entries" && (
           <Card className="mt-3" padded={false}>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
+              <Select
+                aria-label="Filter recent time by project"
+                value={recentProject}
+                onChange={(e) => setRecentProject(e.target.value)}
+                className="w-[260px]"
+              >
+                <option value="">All projects</option>
+                {recentProjects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </Select>
+              <span className="text-sm text-ink-tertiary">
+                {recent.length === 40 ? "Showing the 40 most recent" : `${recent.length} ${recent.length === 1 ? "entry" : "entries"}`}
+              </span>
+            </div>
+
             {recent.length === 0 ? (
-              <div className="p-4"><EmptyState title="No time in this period.">Try a wider range.</EmptyState></div>
+              <div className="p-4">
+                <EmptyState title={recentProject ? "No time on that project." : "No time in this period."}>
+                  {recentProject ? "Try another project, or a wider range." : "Try a wider range."}
+                </EmptyState>
+              </div>
             ) : (
               <>
                 <div className="flex items-center border-b border-border bg-bg-muted px-4 py-2 text-xs font-semibold uppercase tracking-[0.04em] text-ink-tertiary">

@@ -11,14 +11,13 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
-import { Check } from "lucide-react";
+import { Check, ChevronDown, ChevronUp } from "lucide-react";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatDateUS, formatDuration, formatWeekRange, relativeTime, toDate } from "@/lib/format";
 import { SUBMISSION_LABEL } from "@/lib/labels";
 import type { SubmissionState, TimeEntry, TimesheetSubmission } from "@/lib/types";
-import {
-  Avatar, Badge, Button, Card, EmptyState, Select, Spinner, Tooltip,
+import {Avatar, Badge, Button, Card, EmptyState, Select, Spinner, Tooltip, Tray,
 } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { PageBody, PageHeader, useUrlState } from "@/components/app/page-chrome";
@@ -244,25 +243,73 @@ export default function ApprovalsPage() {
           }
         />
 
-        {expanded && <SubmissionDetail id={expanded} rows={rows} onClose={() => setExpanded(null)} onReview={review} />}
+        <SubmissionTray
+          id={expanded}
+          rows={rows}
+          onClose={() => setExpanded(null)}
+          onOpen={setExpanded}
+          onReview={review}
+        />
       </PageBody>
     </>
   );
 }
 
-/** The week behind one submission, opened under the table rather than in a modal
- *  so the reviewer keeps the queue in view. */
-function SubmissionDetail({
-  id, rows, onClose, onReview,
+/**
+ * The week behind one submission, in a tray (TALLY-41).
+ *
+ * It used to open under the table. That works for eleven people and fails for a
+ * hundred: the hours you are judging end up a screen away from the row you are
+ * judging, and the approve button goes with them. The tray keeps the decision
+ * and the evidence together, and the queue stays visible to its left.
+ *
+ * Moving between people without closing is the other half. A reviewer works
+ * down a queue, so the arrow keys step through it and the tray reloads in
+ * place.
+ */
+function SubmissionTray({
+  id, rows, onClose, onOpen, onReview,
 }: {
-  id: string;
+  id: string | null;
   rows: Row[];
   onClose: () => void;
+  onOpen: (id: string) => void;
   onReview: (ids: string[], next: "approved" | "changes_requested", note?: string) => Promise<void>;
 }) {
-  const row = rows.find((r) => r.id === id);
+  const row = id ? rows.find((r) => r.id === id) : undefined;
   const { projectById, taskById } = useApp();
   const [note, setNote] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+
+  // A note belongs to the person it was typed for, not to the tray.
+  React.useEffect(() => setNote(""), [id]);
+
+  const index = row ? rows.findIndex((r) => r.id === row.id) : -1;
+  const step = React.useCallback(
+    (by: number) => {
+      const next = rows[index + by];
+      if (next) onOpen(next.id);
+    },
+    [rows, index, onOpen]
+  );
+
+  /**
+   * Up and down move through the queue.
+   *
+   * Ignored while a field has focus, or typing a note would navigate away
+   * mid-sentence.
+   */
+  React.useEffect(() => {
+    if (!row) return;
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.key === "ArrowDown") { e.preventDefault(); step(1); }
+      if (e.key === "ArrowUp") { e.preventDefault(); step(-1); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [row, step]);
 
   const { data: entries, isLoading } = useQuery({
     queryKey: ["time", "submission", row?.userId, row?.periodStart, row?.periodEnd],
@@ -270,7 +317,21 @@ function SubmissionDetail({
     enabled: !!row,
   });
 
-  if (!row) return null;
+  const act = async (next: "approved" | "changes_requested") => {
+    if (!row) return;
+    setBusy(true);
+    try {
+      await onReview([row.id], next, note.trim() || undefined);
+      // Straight on to the next person, because that is what a queue is for.
+      const following = rows[index + 1];
+      if (following && following.id !== row.id) onOpen(following.id);
+      else onClose();
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!row) return <Tray open={false} onOpenChange={onClose} title="">{null}</Tray>;
 
   const byDay = new Map<string, TimeEntry[]>();
   for (const e of (entries ?? []) as TimeEntry[]) {
@@ -278,34 +339,46 @@ function SubmissionDetail({
   }
 
   return (
-    <Card className="mt-4" padded={false}>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-3">
-        <div className="flex min-w-0 items-center gap-2.5">
+    <Tray
+      open={!!row}
+      onOpenChange={(v) => !v && onClose()}
+      title={
+        <span className="flex items-center gap-2.5">
           <Avatar user={row} size="sm" />
-          <div className="min-w-0">
-            <div className="truncate font-medium text-ink">{row.name}</div>
-            <div className="truncate text-sm text-ink-tertiary">
-              {row.period} · {formatDuration(row.seconds)} hours
-            </div>
-          </div>
-        </div>
-        <div className="flex flex-wrap items-center gap-2">
+          {row.name}
+        </span>
+      }
+      subtitle={`${row.period} · ${formatDuration(row.seconds)} hours`}
+      actions={
+        <span className="flex items-center gap-1 pr-1 text-sm text-ink-tertiary">
+          <Button variant="ghost" size="icon-sm" aria-label="Previous person"
+            disabled={index <= 0} onClick={() => step(-1)}>
+            <ChevronUp className="size-4" />
+          </Button>
+          <span className="tabular-nums">{index + 1} of {rows.length}</span>
+          <Button variant="ghost" size="icon-sm" aria-label="Next person"
+            disabled={index >= rows.length - 1} onClick={() => step(1)}>
+            <ChevronDown className="size-4" />
+          </Button>
+        </span>
+      }
+      footer={
+        <>
           <input
             value={note}
             onChange={(e) => setNote(e.target.value)}
             placeholder="Note for the person (optional)"
-            className="h-8 w-[240px] rounded-md border border-border bg-surface px-2.5 text-base outline-none focus:border-focus focus:shadow-[var(--focus-ring)]"
+            className="mr-auto h-9 w-[280px] rounded-md border border-border bg-surface px-2.5 text-base outline-none focus:border-focus focus:shadow-[var(--focus-ring)]"
           />
-          <Button variant="secondary" size="sm" onClick={() => onReview([row.id], "changes_requested", note).then(onClose)}>
+          <Button variant="secondary" loading={busy} onClick={() => act("changes_requested")}>
             Request changes
           </Button>
-          <Button variant="primary" size="sm" onClick={() => onReview([row.id], "approved", note).then(onClose)}>
+          <Button variant="primary" loading={busy} onClick={() => act("approved")}>
             <Check className="size-3.5" />Approve week
           </Button>
-          <Button variant="ghost" size="sm" onClick={onClose}>Close</Button>
-        </div>
-      </div>
-
+        </>
+      }
+    >
       {isLoading ? (
         <div className="flex items-center gap-2 p-4 text-base text-ink-secondary"><Spinner className="size-4" />Loading the week…</div>
       ) : byDay.size === 0 ? (
@@ -333,6 +406,6 @@ function SubmissionDetail({
           </div>
         ))
       )}
-    </Card>
+    </Tray>
   );
 }

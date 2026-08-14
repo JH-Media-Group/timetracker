@@ -22,7 +22,7 @@ import { cn } from "@/lib/cn";
 import { avatarGradient, initials as makeInitials } from "@/lib/format";
 import {
   avatarVariants, badgeVariants, bannerVariants, buttonVariants, cardVariants,
-  choiceCardVariants, dialogContentClass, dialogOverlayClass, dropzoneVariants,
+  choiceCardVariants, dialogContentClass, dialogOverlayClass, dropzoneVariants, trayContentClass,
   errorTextClass, helpTextClass, inputVariants, kbdClass, labelClass,
   menuItemClass, menuSeparatorClass, meterTrackClass, popoverClass,
   presenceDotVariants, requiredMarkClass, segmentedItemClass, segmentedRootClass,
@@ -388,6 +388,60 @@ export function DialogContent({
 
 export const DialogTrigger = RDialog.Trigger;
 export const DialogClose = RDialog.Close;
+
+/**
+ * A tray: a dialog that arrives from the right and keeps its height.
+ *
+ * Built on `RDialog` rather than beside it, so focus trapping, Escape, the
+ * overlay and returning focus to whatever opened it are the behaviours that
+ * already work everywhere else. The only differences are the shape and that the
+ * body scrolls on its own, because a tray holds a table.
+ *
+ * **A picker inside a tray needs `portal={false}`,** for the same reason it does
+ * inside a dialog: this is modal, and a portalled popover renders outside the
+ * subtree that traps focus (TALLY-39).
+ */
+export function Tray({
+  open, onOpenChange, title, subtitle, actions, children, footer,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  title: React.ReactNode;
+  subtitle?: React.ReactNode;
+  /** Sits in the header, where it stays reachable however far the body scrolls. */
+  actions?: React.ReactNode;
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+}) {
+  return (
+    <RDialog.Root open={open} onOpenChange={onOpenChange}>
+      <RDialog.Portal>
+        <RDialog.Overlay className={dialogOverlayClass} />
+        <RDialog.Content className={trayContentClass} aria-describedby={undefined}>
+          <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+            <div className="min-w-0">
+              <RDialog.Title className="truncate text-lg font-semibold text-ink">{title}</RDialog.Title>
+              {subtitle && <div className="mt-0.5 truncate text-base text-ink-secondary">{subtitle}</div>}
+            </div>
+            <div className="flex shrink-0 items-center gap-2">
+              {actions}
+              <RDialog.Close asChild>
+                <Button variant="ghost" size="icon-sm" aria-label="Close"><X className="size-4" /></Button>
+              </RDialog.Close>
+            </div>
+          </div>
+
+          {/* The body is the only scroll region, so the header and footer stay put. */}
+          <div className="min-h-0 flex-1 overflow-y-auto">{children}</div>
+
+          {footer && (
+            <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3">{footer}</div>
+          )}
+        </RDialog.Content>
+      </RDialog.Portal>
+    </RDialog.Root>
+  );
+}
 
 /* ------------------------------------------------------ Overlays: Popover */
 

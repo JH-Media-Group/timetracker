@@ -1,12 +1,12 @@
 "use client";
 
 import * as React from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Copy, Lock, MoreHorizontal, Play, Square } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ChevronDown, Clock, Copy, Lock, MoreHorizontal, Play } from "lucide-react";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { entryRowVariants } from "@/components/ui/recipes";
-import { Button, Card, EmptyState, Menu, MenuItem, MenuSeparator, Skeleton, Badge } from "@/components/ui/primitives";
+import { Button, Card, EmptyState, Menu, MenuItem, MenuSeparator, Skeleton, Badge, Tooltip } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { useApp } from "@/components/app/providers";
 import { useTimer } from "@/components/app/timer";
@@ -36,24 +36,67 @@ export function DayView({ date, userId, entries, loading }: {
   const toast = useToast();
   const [expanded, setExpanded] = React.useState<string | null>(null);
 
+  /**
+   * What "the most recent day" actually is, found before the button is pressed.
+   *
+   * One request for the fortnight, not fourteen. The old code walked back a day
+   * at a time asking the server about each one, up to fourteen sequential round
+   * trips on every click, and it could not say anything about the source day
+   * beforehand because it only looked once you had committed.
+   *
+   * Fetching it up front is what makes the tooltip possible (TALLY-44): the
+   * button can name the day and the number of entries, so the decision happens
+   * before the action rather than after it.
+   */
+  const { data: lookback = [] } = useQuery({
+    queryKey: ["time", "copy-source", userId, date],
+    queryFn: () =>
+      api.listTimeEntries({
+        userId,
+        from: isoDate(addDays(toDate(date), -14)),
+        to: isoDate(addDays(toDate(date), -1)),
+      }),
+  });
+
+  const source = React.useMemo(() => {
+    const days = lookback.map((e) => e.spentOn).sort();
+    const day = days.at(-1);
+    if (!day) return null;
+    return { day, count: lookback.filter((e) => e.spentOn === day).length };
+  }, [lookback]);
+
   const copy = useMutation({
     mutationFn: async (withDurations: boolean) => {
-      // Most recent day with entries, looking back up to two weeks.
-      let from: string | null = null;
-      for (let i = 1; i <= 14; i++) {
-        const d = isoDate(addDays(toDate(date), -i));
-        const rows = await api.listTimeEntries({ userId, from: d, to: d });
-        if (rows.length) { from = d; break; }
-      }
-      if (!from) throw new Error("No previous day with entries to copy.");
-      return api.copyDay(from, date, userId, withDurations);
+      if (!source) throw new Error("No previous day with entries to copy.");
+      return api.copyDay(source.day, date, userId, withDurations);
     },
     onSuccess: (made) => {
       qc.invalidateQueries({ queryKey: ["time"] });
-      toast.push({ tone: "success", title: `Copied ${made.length} ${made.length === 1 ? "entry" : "entries"}.` });
+      toast.push({
+        tone: "success",
+        title: `Copied ${made.length} ${made.length === 1 ? "entry" : "entries"} from ${formatDayLong(toDate(source!.day))}.`,
+        /**
+         * Undo removes exactly what was just created, by id.
+         *
+         * Copied entries arrive with no duration, so there is normally nothing
+         * to lose. If one has already been typed into, the delete still applies:
+         * the toast is short and this is the price of an undo that is simple
+         * enough to be trusted. Anything cleverer would have to guess which
+         * edits were deliberate.
+         */
+        undo: async () => {
+          await Promise.all(made.map((e) => api.deleteTimeEntry(e.id)));
+          qc.invalidateQueries({ queryKey: ["time"] });
+        },
+      });
     },
     onError: (e: Error) => toast.push({ tone: "danger", title: e.message }),
   });
+
+  /** What the button will do, in words, before it is pressed. */
+  const copyLabel = source
+    ? `Copy ${source.count} ${source.count === 1 ? "entry" : "entries"} from ${formatDayLong(toDate(source.day))}. Durations are left blank.`
+    : "Nothing to copy: no time tracked in the previous fortnight.";
 
   const total = dayEntries.reduce((a, e) => a + e.durationSeconds, 0);
   const quote = QUOTES[toDate(date).getDate() % QUOTES.length]!;
@@ -77,10 +120,12 @@ export function DayView({ date, userId, entries, loading }: {
           &ldquo;{quote[0]}&rdquo;<br />&ndash; {quote[1]}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="secondary" loading={copy.isPending} onClick={() => copy.mutate(false)}>
-            <Copy className="size-3.5" />Copy from the most recent day (projects only)
-          </Button>
-          <Menu trigger={<Button variant="secondary" size="icon" aria-label="Copy options"><ChevronDown className="size-4" /></Button>}>
+          <Tooltip content={copyLabel}>
+            <Button variant="secondary" loading={copy.isPending} disabled={!source} onClick={() => copy.mutate(false)}>
+              <Copy className="size-3.5" />Copy from the most recent day (projects only)
+            </Button>
+          </Tooltip>
+          <Menu trigger={<Button variant="secondary" size="icon" aria-label="Copy options" disabled={!source}><ChevronDown className="size-4" /></Button>}>
             <MenuItem onSelect={() => copy.mutate(true)}>Copy with durations</MenuItem>
           </Menu>
           <Button variant="primary" onClick={() => entry.open({ spentOn: date, userId })}>Add your first entry</Button>
@@ -103,10 +148,12 @@ export function DayView({ date, userId, entries, loading }: {
       </Card>
 
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="secondary" loading={copy.isPending} onClick={() => copy.mutate(false)}>
-          <Copy className="size-3.5" />Copy from the most recent day (projects only)
-        </Button>
-        <Menu trigger={<Button variant="secondary" size="icon" aria-label="Copy options"><ChevronDown className="size-4" /></Button>}>
+        <Tooltip content={copyLabel}>
+          <Button variant="secondary" loading={copy.isPending} disabled={!source} onClick={() => copy.mutate(false)}>
+            <Copy className="size-3.5" />Copy from the most recent day (projects only)
+          </Button>
+        </Tooltip>
+        <Menu trigger={<Button variant="secondary" size="icon" aria-label="Copy options" disabled={!source}><ChevronDown className="size-4" /></Button>}>
           <MenuItem onSelect={() => copy.mutate(true)}>Copy with durations</MenuItem>
         </Menu>
       </div>
@@ -149,28 +196,36 @@ function EntryRow({ entry, expanded, onToggle }: { entry: TimeEntry; expanded: b
   return (
     <div className={cn("border-b border-border last:border-b-0")}>
       <div className={entryRowVariants({ state: isRunning ? "running" : locked ? "locked" : "default" })}>
-        <div className="w-[76px] shrink-0 font-mono text-sm text-ink-secondary">
+        <div className="w-[84px] shrink-0 text-md text-ink-secondary">
           {entry.startedAt ? (
             <>
-              <div>{formatClockTime(minutesOfDay(entry.startedAt))}</div>
-              <div>{isRunning ? <span className="text-live">running</span> : entry.endedAt ? formatClockTime(minutesOfDay(entry.endedAt)) : "—"}</div>
+              <div className="font-medium text-ink">{formatClockTime(minutesOfDay(entry.startedAt))}</div>
+              <div className="text-base">
+                {isRunning
+                  ? <span className="font-medium text-live">running</span>
+                  : entry.endedAt ? formatClockTime(minutesOfDay(entry.endedAt)) : "—"}
+              </div>
             </>
           ) : <div className="text-ink-tertiary">—</div>}
         </div>
 
         <button className="min-w-0 flex-1 text-left" onClick={onToggle} aria-expanded={expanded}>
           {/*
-            The client was --text-tertiary, which tokens.css calls the floor:
-            "nothing smaller or lighter than this is allowed to carry meaning".
-            At text-sm it was under that floor in practice and Jason could not
-            read it at a glance (TALLY-47). One step up, still clearly secondary
-            to the project name beside it.
+            Project first, client after it in parentheses, matching Harvest.
+            The old order led with the client at --text-tertiary, the token file's
+            own floor, so the first thing on the row was the hardest thing to
+            read. Leading with the project puts the emphasis where the eye
+            already goes and the contrast problem stops being one.
+
+            One step larger throughout, which is the rest of what makes Harvest's
+            version of this page easier to read: --fs-lg for the project,
+            --fs-md for everything beside it.
           */}
-          <div className="truncate">
-            <span className="text-sm text-ink-secondary">{client?.name}</span>{" "}
-            <span className="font-medium text-ink">{project?.name}</span>
+          <div className="truncate text-lg leading-snug">
+            <span className="font-semibold text-ink">{project?.name}</span>
+            {client?.name && <span className="ml-1.5 font-normal text-ink-secondary">({client.name})</span>}
           </div>
-          <div className="truncate text-ink-secondary">
+          <div className="truncate text-md text-ink-secondary">
             {task?.name}
             {entry.notes && <><span className="mx-1.5 text-ink-tertiary">·</span>{entry.notes}</>}
             {!entry.isBillable && <Badge variant="outline" className="ml-2">Non-billable</Badge>}
@@ -179,13 +234,24 @@ function EntryRow({ entry, expanded, onToggle }: { entry: TimeEntry; expanded: b
 
         {locked && <Lock className="size-3 shrink-0 text-ink-tertiary" aria-label="Locked: on a sent invoice" />}
 
-        <div className={cn("shrink-0 text-lg font-semibold tabular-nums", isRunning && "font-mono")}>
+        <div className={cn("shrink-0 text-xl font-semibold tabular-nums", isRunning && "font-mono")}>
           {isRunning ? formatClock(duration) : formatDuration(duration, settings.timeDisplay)}
         </div>
 
+        {/*
+          Stop says "Stop", and its clock pulses.
+
+          An icon alone made the most consequential control on the page the
+          smallest and least labelled thing on it. Harvest gives it a word and a
+          moving icon, which is right: the row is already tinted and the timer is
+          already counting, so the button is the one element that should say what
+          pressing it does. `animate-pulse-live` is the same animation the topbar
+          dot uses, so the two live signals move together.
+        */}
         {isRunning ? (
-          <Button variant="danger" size="icon-sm" aria-label="Stop timer" onClick={() => stop()}>
-            <Square className="size-3 fill-current" />
+          <Button variant="danger" size="sm" onClick={() => stop()}>
+            <Clock className="size-3.5 animate-pulse-live" aria-hidden />
+            Stop
           </Button>
         ) : (
           <Button variant="secondary" size="icon-sm" aria-label="Start a timer from this entry" onClick={() => restart(entry.id)}>

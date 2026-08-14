@@ -10,15 +10,17 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
-import { Paperclip, Plus } from "lucide-react";
+import { Paperclip, Plus, Trash2 } from "lucide-react";
 import * as api from "@/lib/api";
-import { formatMoney, isoDate, parseMoney } from "@/lib/format";
+import { formatDateUS, formatMoney, isoDate, parseMoney } from "@/lib/format";
 import type { Expense } from "@/lib/types";
 import {
   Avatar, Badge, Button, Card, Checkbox, Dialog, DialogContent, Dropzone, EmptyState,
-  Field, Input, Segmented, Select, Textarea, Affix } from "@/components/ui/primitives";
+  Field, Input, Segmented, Select, Textarea, Affix, Tray,
+} from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { PageBody, PageHeader, PeriodPicker, usePeriod, useUrlState } from "@/components/app/page-chrome";
 import { DataGrid } from "@/components/app/data-grid";
@@ -43,6 +45,8 @@ export default function ExpensesPage() {
   const qc = useQueryClient();
   const toast = useToast();
   const { params, set } = useUrlState();
+  /** The expense open in the tray (TALLY-43). A row used to be a dead end. */
+  const [openId, setOpenId] = React.useState<string | null>(null);
   const { me, userById, projectById, clientById, categoryById, expenseCategories } = useApp();
   const can = useCan();
   const { granularity, anchor, period, onChange } = usePeriod("month", ["week", "month", "quarter", "year", "all"]);
@@ -196,6 +200,7 @@ export default function ExpensesPage() {
           totals={totals}
           height={600}
           selectable={can("expense:manage")}
+          onRowOpen={(r) => setOpenId(r.id)}
           filters={
             <Select
               value={view}
@@ -260,7 +265,153 @@ export default function ExpensesPage() {
       </PageBody>
 
       <ExpenseDialog open={creating} onOpenChange={setCreating} />
+      <ExpenseTray
+        expense={(expenses as Expense[] | undefined)?.find((e) => e.id === openId) ?? null}
+        onClose={() => setOpenId(null)}
+      />
     </>
+  );
+}
+
+/**
+ * One expense, opened from its row (TALLY-43).
+ *
+ * A row used to go nowhere, so the receipt column could say a receipt existed
+ * and there was no way to look at it. The same tray Approvals uses, because two
+ * screens inventing two ways to open a record is how they drift.
+ *
+ * Everything already stored is shown. **The receipt is the one thing that is
+ * not**, because receipts need object storage (TALLY-21) and there is nothing
+ * behind the indicator yet. It says so, rather than offering a link to nothing.
+ */
+function ExpenseTray({ expense, onClose }: { expense: Expense | null; onClose: () => void }) {
+  const { projectById, clientById, categoryById, userById } = useApp();
+  const can = useCan();
+  const qc = useQueryClient();
+  const toast = useToast();
+
+  const project = expense ? projectById.get(expense.projectId) : undefined;
+  const client = project ? clientById.get(project.clientId) : undefined;
+  const category = expense ? categoryById.get(expense.categoryId) : undefined;
+  const person = expense ? userById.get(expense.userId) : undefined;
+
+  /**
+   * An expense on a sent invoice is locked, exactly as a time entry is: the
+   * client has the document, so the number behind it cannot move.
+   */
+  const locked = !!expense?.invoiceId;
+  const editable = can("expense:manage") && !locked;
+
+  const patch = useMutation({
+    mutationFn: (p: Parameters<typeof api.updateExpense>[1]) => api.updateExpense(expense!.id, p),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["expenses"] });
+      toast.push({ tone: "success", title: "Expense updated." });
+    },
+    onError: (e: unknown) =>
+      toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not update it." }),
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api.deleteExpense(expense!.id),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["expenses"] });
+      toast.push({ tone: "danger", title: "Expense deleted." });
+      onClose();
+    },
+  });
+
+  if (!expense) return <Tray open={false} onOpenChange={onClose} title="">{null}</Tray>;
+
+  const rows: [string, React.ReactNode][] = [
+    ["Project", project?.name ?? "Unknown project"],
+    ["Client", client?.name ?? "Unknown client"],
+    ["Category", category?.name ?? "Uncategorised"],
+    ["Date", formatDateUS(expense.spentOn)],
+    ["Person", person ? `${person.firstName} ${person.lastName}` : "Unknown"],
+    ["Amount", <span key="a" className="tabular-nums font-medium text-ink">{formatMoney(expense.totalCents)}</span>],
+    ...(expense.units != null ? ([["Units", String(expense.units)]] as [string, React.ReactNode][]) : []),
+  ];
+
+  return (
+    <Tray
+      open
+      onOpenChange={(v) => !v && onClose()}
+      title={formatMoney(expense.totalCents)}
+      subtitle={`${project?.name ?? "Unknown project"} · ${formatDateUS(expense.spentOn)}`}
+      footer={
+        editable ? (
+          <Button variant="ghost" loading={remove.isPending} onClick={() => remove.mutate()}>
+            <Trash2 className="size-4" />Delete
+          </Button>
+        ) : (
+          <span className="text-base text-ink-tertiary">
+            {locked ? "On a sent invoice, so it cannot be changed." : "You can see this expense but not change it."}
+          </span>
+        )
+      }
+    >
+      <div className="flex flex-col gap-5 p-5">
+        <dl className="grid grid-cols-[130px_1fr] gap-y-2.5 text-base">
+          {rows.map(([label, value]) => (
+            <React.Fragment key={label}>
+              <dt className="text-ink-tertiary">{label}</dt>
+              <dd className="min-w-0 text-ink">{value}</dd>
+            </React.Fragment>
+          ))}
+        </dl>
+
+        {expense.notes && (
+          <div>
+            <div className="mb-1 text-sm font-medium text-ink-secondary">Notes</div>
+            <p className="whitespace-pre-line text-base text-ink">{expense.notes}</p>
+          </div>
+        )}
+
+        <div className="flex flex-col gap-2">
+          <label className="flex items-center gap-2 text-base text-ink">
+            <Checkbox
+              checked={expense.isBillable}
+              disabled={!editable || patch.isPending}
+              onCheckedChange={(v) => patch.mutate({ isBillable: v })}
+            />
+            Bill this back to the client
+          </label>
+          <label className="flex items-center gap-2 text-base text-ink">
+            <Checkbox
+              checked={expense.isReimbursable}
+              disabled={!editable || patch.isPending}
+              onCheckedChange={(v) => patch.mutate({ isReimbursable: v })}
+            />
+            Reimburse the person for this
+          </label>
+        </div>
+
+        {/*
+          Said plainly. The grid shows a receipt indicator, and until object
+          storage exists (TALLY-21) there is nothing behind it. A disabled
+          "View receipt" button would imply the file is there and merely
+          unavailable, which is a different and untrue claim.
+        */}
+        <div className="rounded-md border border-border bg-bg-muted px-4 py-3">
+          <div className="text-base font-medium text-ink">Receipt</div>
+          <p className="mt-0.5 text-base text-ink-secondary">
+            {expense.receiptName
+              ? `"${expense.receiptName}" was recorded against this expense. Receipts cannot be shown yet: they need file storage, which is not configured.`
+              : "No receipt on this expense."}
+          </p>
+        </div>
+
+        {expense.invoiceId && (
+          <Link
+            href={`/invoices/${expense.invoiceId}`}
+            className="text-base text-accent hover:underline"
+          >
+            On an invoice
+          </Link>
+        )}
+      </div>
+    </Tray>
   );
 }
 

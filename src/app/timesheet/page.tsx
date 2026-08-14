@@ -9,7 +9,8 @@ import { cn } from "@/lib/cn";
 import {
   addDays, formatDayLong, formatDuration, formatWeekRange, isoDate, startOfWeek, toDate,
 } from "@/lib/format";
-import { Button, Segmented } from "@/components/ui/primitives";
+import {Button, Segmented, Select,
+} from "@/components/ui/primitives";
 import { PageBody, PageHeader, useUrlState } from "@/components/app/page-chrome";
 import { useApp } from "@/components/app/providers";
 import { useEntryDialog } from "@/components/app/entry-editor";
@@ -23,7 +24,7 @@ type View = "day" | "week" | "calendar";
 
 export default function TimesheetPage() {
   const { params, set } = useUrlState();
-  const { me, settings, userById } = useApp();
+  const { me, settings, userById, projectById } = useApp();
   const entry = useEntryDialog();
 
   const view = (params.get("view") as View) || "day";
@@ -34,10 +35,38 @@ export default function TimesheetPage() {
   const isOther = userId !== me.id;
   const person = userById.get(userId);
 
-  const { data: entries = [], isLoading } = useQuery({
+  const { data: allEntries = [], isLoading } = useQuery({
     queryKey: ["time", userId, isoDate(weekStart)],
     queryFn: () => api.listTimeEntries({ userId, from: isoDate(weekStart), to: isoDate(addDays(weekStart, 6)) }),
   });
+
+  /**
+   * A project filter over the week (TALLY-16).
+   *
+   * Filtered in the browser, not refetched: the week is already in hand, it is
+   * at most a few dozen entries, and a round trip per dropdown change would be
+   * slower and no more correct.
+   *
+   * The choices are the projects actually booked in this week, so the list never
+   * offers something that yields nothing. It resets when the week or the person
+   * changes, because a filter that survives into a week where it matches nothing
+   * looks exactly like an empty timesheet.
+   */
+  const [projectFilter, setProjectFilter] = React.useState("");
+  React.useEffect(() => setProjectFilter(""), [userId, isoDate(weekStart)]);
+
+  const weekProjects = React.useMemo(() => {
+    const ids = new Set(allEntries.map((e) => e.projectId));
+    return [...ids]
+      .map((id) => projectById.get(id))
+      .filter((p): p is NonNullable<typeof p> => !!p)
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [allEntries, projectById]);
+
+  const entries = React.useMemo(
+    () => (projectFilter ? allEntries.filter((e) => e.projectId === projectFilter) : allEntries),
+    [allEntries, projectFilter]
+  );
 
   const setDate = (d: Date) => set({ date: isoDate(d) });
   const step = (dir: -1 | 1) => setDate(addDays(date, view === "day" ? dir : 7 * dir));
@@ -59,12 +88,20 @@ export default function TimesheetPage() {
     return () => window.removeEventListener("keydown", onKey);
   }, [date, view, set]);
 
+  /**
+   * The week's real totals, from every entry rather than the filtered ones.
+   *
+   * A project filter narrows what you are looking at, not what the week
+   * contains. These feed the day strip and, through `weekTotal`, the submit
+   * button: filtering to one project and submitting a week that then reported
+   * only that project's hours would be a genuinely wrong number.
+   */
   const dayTotals = React.useMemo(() => {
     const out: Record<string, number> = {};
     for (let i = 0; i < 7; i++) out[isoDate(addDays(weekStart, i))] = 0;
-    for (const e of entries) if (out[e.spentOn] != null) out[e.spentOn]! += e.durationSeconds;
+    for (const e of allEntries) if (out[e.spentOn] != null) out[e.spentOn]! += e.durationSeconds;
     return out;
-  }, [entries, weekStart]);
+  }, [allEntries, weekStart]);
 
   const weekTotal = Object.values(dayTotals).reduce((a, b) => a + b, 0);
   const capacity = (person ?? me).weeklyCapacitySeconds;
@@ -119,6 +156,25 @@ export default function TimesheetPage() {
           {isoDate(date) !== isoDate(api.TODAY) && (
             <button className="text-base text-link underline" onClick={() => setDate(api.TODAY)}>Return to today</button>
           )}
+
+          {/*
+            Filter the week to one project (TALLY-16). Only offered when there
+            is more than one to choose between, because a dropdown with a single
+            option is furniture.
+          */}
+          {weekProjects.length > 1 && (
+            <Select
+              aria-label="Filter this week by project"
+              value={projectFilter}
+              onChange={(e) => setProjectFilter(e.target.value)}
+              className="ml-auto w-[230px]"
+            >
+              <option value="">All projects</option>
+              {weekProjects.map((p) => (
+                <option key={p.id} value={p.id}>{p.name}</option>
+              ))}
+            </Select>
+          )}
         </div>
 
         {/* Week strip */}
@@ -133,14 +189,17 @@ export default function TimesheetPage() {
             const missing = isWeekday && total === 0 && d < api.TODAY;
             return (
               <button key={key} onClick={() => setDate(d)}
-                className={cn("flex flex-col items-start gap-0.5 bg-surface px-3 py-2 text-left transition-colors hover:bg-surface-hover",
-                  isSel && "bg-bg-muted")}>
-                <span className={cn("flex items-center gap-1 text-base", isSel ? "font-medium text-ink" : "text-ink-secondary")}>
+                className={cn("flex flex-col items-start gap-0.5 bg-surface px-3 py-2.5 text-left transition-colors hover:bg-surface-hover",
+                  isSel && "bg-nav-active")}>
+                {/* One step larger, as on Harvest's version of this strip: the
+                   day names are the thing you aim at, so they should not be the
+                   same size as the meta around them. */}
+                <span className={cn("flex items-center gap-1 text-md", isSel ? "font-semibold text-ink" : "text-ink-secondary")}>
                   {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][(d.getDay() + 6) % 7]}
                   {isToday && !isSel && <span className="size-1 rounded-full bg-ink-tertiary" aria-hidden />}
                   {missing && <span className="size-1.5 rounded-full bg-warning" title="No time tracked" aria-hidden />}
                 </span>
-                <span className={cn("tabular-nums", total ? "font-semibold text-ink" : "text-ink-tertiary")}>
+                <span className={cn("text-lg tabular-nums", total ? "font-semibold text-ink" : "text-ink-tertiary")}>
                   {formatDuration(total, settings.timeDisplay)}
                 </span>
                 {isSel && <span className="mt-0.5 h-0.5 w-full rounded-full bg-accent" aria-hidden />}
@@ -148,8 +207,8 @@ export default function TimesheetPage() {
             );
           })}
           <div className="flex flex-col items-end gap-0.5 bg-surface px-3 py-2">
-            <span className="text-base text-ink-secondary">Week total</span>
-            <span className={cn("font-semibold tabular-nums", weekTotal >= capacity ? "text-success" : "text-ink")}>
+            <span className="text-md text-ink-secondary">Week total</span>
+            <span className={cn("text-lg font-semibold tabular-nums", weekTotal >= capacity ? "text-success" : "text-ink")}>
               {formatDuration(weekTotal, settings.timeDisplay)}
               <span className="ml-1 font-normal text-ink-tertiary">/ {Math.round(capacity / 3600)}</span>
             </span>
@@ -157,7 +216,7 @@ export default function TimesheetPage() {
         </div>
 
         {view === "day" && <DayView date={dateStr} userId={userId} entries={entries} loading={isLoading} />}
-        {view === "week" && <WeekView weekStart={weekStart} userId={userId} entries={entries} loading={isLoading} />}
+        {view === "week" && <WeekView weekStart={weekStart} userId={userId} entries={entries} loading={isLoading} selectedDay={dateStr} />}
         {view === "calendar" && <CalendarView weekStart={weekStart} userId={userId} entries={entries} loading={isLoading} />}
       </PageBody>
     </>
