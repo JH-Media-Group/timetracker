@@ -44,21 +44,21 @@ The working checklist for the backend build and the frontend wiring. Tick items 
 
 ## E3. Service kernel
 
-- [ ] `Ctx`, transaction wrapper, injectable clock
-- [ ] Buffered audit and outbox, flushed inside the transaction
-- [ ] Error taxonomy and RFC 9457 problem responses with a closed `code` union
-- [ ] Capability set, base profile mapping, `assertCan`
-- [ ] Scope predicates composed into SQL, not applied after the fetch
-- [ ] Serializers with field redaction for cost and billable rates
-- [ ] Idempotency key handling
-- [ ] Route helper that turns a service call into a response, uniformly
+- [x] `Ctx`, transaction wrapper, injectable clock
+- [x] Buffered audit and outbox, flushed inside the transaction
+- [x] Error taxonomy and RFC 9457 problem responses with a closed `code` union
+- [x] Capability set, base profile mapping, `assertCan`
+- [x] Scope predicates composed into SQL, not applied after the fetch
+- [x] Serializers with field redaction for cost and billable rates
+- [x] Idempotency key handling
+- [x] Route helper that turns a service call into a response, uniformly
 
 ## E4. Authentication
 
-- [ ] Session table, cookie session, argon2id password hashing
-- [ ] Sign in, sign out, session rotation, absolute cap
-- [ ] `/api/v1/me`, `/api/v1/me/capabilities`
-- [ ] Middleware that rejects unauthenticated API calls and redirects unauthenticated pages
+- [x] Session table, cookie session, argon2id password hashing
+- [x] Sign in, sign out, session rotation, absolute cap
+- [x] `/api/v1/me`, `/api/v1/me/capabilities`
+- [x] Middleware that rejects unauthenticated API calls and redirects unauthenticated pages
 - [ ] Google Workspace OIDC wired but inert until credentials arrive (permission item)
 
 ## E5. Reference and organize API
@@ -131,4 +131,4 @@ The working checklist for the backend build and the frontend wiring. Tick items 
 
 Collected as they come up; nothing here blocked the build.
 
-_(none yet)_
+1. **Google Workspace SSO credentials.** `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` for an OAuth client with `https://<host>/api/v1/auth/google/callback` as a redirect URI, and confirmation that `jhmediagroup.com` is the domain to pin. Until these exist the sign-in page offers password only, and the Google button stays hidden rather than leading to a configuration error.

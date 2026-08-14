@@ -14,12 +14,49 @@ import { z } from "zod";
 
 const bool = (v: string | undefined) => v === "1" || v === "true";
 
+/**
+ * Values that pass a naive length check but mean "nobody configured this".
+ *
+ * A session secret that shipped in the repository is not a secret, and the
+ * failure mode of accepting one is silent: the app boots, sessions work, and
+ * anybody who has read the repo can mint a valid cookie.
+ */
+const PLACEHOLDER_SECRETS = new Set([
+  "replace-me-with-32-random-bytes-base64",
+  "changeme",
+  "secret",
+  "test-session-secret-at-least-16-chars",
+]);
+
+/** How many bytes a secret actually carries, treating base64 as base64. */
+function decodedBytes(value: string): number {
+  const trimmed = value.trim();
+  if (/^[A-Za-z0-9+/=_-]+$/.test(trimmed) && trimmed.length >= 24) {
+    try {
+      return Buffer.from(trimmed, "base64").length;
+    } catch {
+      /* fall through to the raw length */
+    }
+  }
+  return Buffer.byteLength(trimmed, "utf8");
+}
+
 const schema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   DATABASE_URL: z.string().min(1, "DATABASE_URL is required"),
   TEST_DATABASE_URL: z.string().optional(),
   REDIS_URL: z.string().optional(),
-  SESSION_SECRET: z.string().min(16, "SESSION_SECRET must be at least 16 characters"),
+  SESSION_SECRET: z
+    .string()
+    .min(1, "SESSION_SECRET is required")
+    .refine((v) => !PLACEHOLDER_SECRETS.has(v.trim()), {
+      message:
+        "SESSION_SECRET is still the example value from .env.example. " +
+        "Generate one with: node -e \"console.log(require('crypto').randomBytes(32).toString('base64'))\"",
+    })
+    .refine((v) => decodedBytes(v) >= 32, {
+      message: "SESSION_SECRET must carry at least 32 bytes of entropy (44 base64 characters)",
+    }),
   APP_URL: z.string().url().default("http://localhost:3200"),
 
   GOOGLE_CLIENT_ID: z.string().optional(),
@@ -74,6 +111,14 @@ function read() {
 }
 
 const parsed = read();
+
+if (parsed.NODE_ENV === "production") {
+  if (!parsed.GOOGLE_CLIENT_ID) {
+    console.warn(
+      "[env] Google Workspace SSO is not configured. Password sign-in is the only route in."
+    );
+  }
+}
 
 export const env = {
   ...parsed,

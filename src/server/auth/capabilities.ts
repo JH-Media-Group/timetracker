@@ -30,6 +30,8 @@ export const CAPABILITIES = [
   "approval:review_all",
   "project:view",
   "project:manage",
+  // Reserved by BACKEND_PRD 7.2 for a narrower project role than Project
+  // Manager. No base profile grants it; a custom profile may.
   "project:manage_own",
   "project:archive",
   "client:view",
@@ -109,10 +111,13 @@ export const BASE_PROFILES: Record<BaseProfileKey, ProfileDefinition> = {
     othersScope: "team",
     capabilities: [
       ...EVERYONE,
+      // "team" reach over the whole time-others group, per the 7.2 matrix.
       "time:view_others",
       "time:edit_others",
+      "time:delete_others",
       "expense:view_others",
       "expense:edit_others",
+      "expense:delete_others",
       "expense:manage",
       "approval:review",
       "project:manage",

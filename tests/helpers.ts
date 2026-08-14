@@ -7,12 +7,19 @@
  */
 
 import { sql as raw } from "drizzle-orm";
-import { db, sql } from "@/server/db/client";
+import { closePool, db, sql } from "@/server/db/client";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
 import { BASE_PROFILES } from "@/server/auth/capabilities";
 
-/** Drizzle's bookkeeping table lives in its own schema, so `public` is enough. */
+/**
+ * Truncates every table in `public`.
+ *
+ * Both migration ledgers live in the `drizzle` schema precisely so this cannot
+ * wipe them: truncating the ledger would make the next `db:migrate` re-run
+ * every manual file, which is the sort of thing that looks fine until a file
+ * stops being idempotent.
+ */
 export async function resetDb() {
   const rows = await sql<{ tablename: string }[]>`
     SELECT tablename FROM pg_tables WHERE schemaname = 'public'
@@ -102,7 +109,7 @@ export async function makeProjectTask(projectId: string, taskId: string, over: P
 }
 
 export async function closeDb() {
-  await sql.end({ timeout: 5 });
+  await closePool();
 }
 
 export { db, sql, s, raw };
@@ -125,8 +132,12 @@ export async function expectConstraintViolation(promise: Promise<unknown>, const
       cur = (cur as { cause?: unknown }).cause;
     }
     const names = chain.map((c) => (c as { constraint_name?: string }).constraint_name).filter(Boolean);
+    if (names.includes(constraint)) return;
+
+    // Deliberately NOT a substring match on the message. The chain includes the
+    // failing SQL, which quotes the constraint name, so a text match would pass
+    // for any unrelated failure that happened to mention it.
     const text = chain.map((c) => String((c as Error).message ?? "")).join(" | ");
-    if (names.includes(constraint) || text.includes(constraint)) return;
     throw new Error(`Expected constraint "${constraint}". Got constraints [${names.join(", ")}] and message: ${text}`);
   }
   throw new Error(`Expected constraint "${constraint}" to reject the query, but it succeeded.`);

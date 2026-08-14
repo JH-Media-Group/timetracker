@@ -61,5 +61,8 @@ if (devUrl && databaseNameOf(devUrl) === testDbName && devUrl === testUrl) {
 }
 
 environment.DATABASE_URL = testUrl;
-environment.SESSION_SECRET ??= "test-session-secret-at-least-16-chars";
+// A real 32-byte value, because env.ts rejects the known placeholders. Fixed
+// rather than random so a session minted in one test file is readable in the
+// next.
+environment.SESSION_SECRET ??= "dGVzdC1vbmx5LXNlY3JldC0zMi1ieXRlcy1sb25nLXh4";
 environment.ALLOW_DESTRUCTIVE = "1";

@@ -21,8 +21,9 @@ declare global {
 export const sql =
   globalThis.__tallySql ??
   postgres(connectionString, {
-    // Eleven users on one droplet. A small pool keeps Postgres's memory
-    // predictable and makes connection exhaustion impossible to reach.
+    // Eleven users on one droplet. A small pool bounds Postgres's memory and
+    // backend count; the trade is that a burst queues client-side rather than
+    // opening connections the server then has to feed.
     max: env.isTest ? 5 : 12,
     idle_timeout: 30,
     connect_timeout: 10,
@@ -51,6 +52,19 @@ export const sql =
   });
 
 if (!env.isProduction) globalThis.__tallySql = sql;
+
+/**
+ * Closes the pool and clears the hot-reload stash.
+ *
+ * Clearing the stash is the part that matters: leaving a closed pool on
+ * `globalThis` means the next module that imports this file picks it up and
+ * every query fails with CONNECTION_ENDED. That bites the second test file in
+ * a worker, not the first, which makes it a confusing failure to diagnose.
+ */
+export async function closePool(): Promise<void> {
+  await sql.end({ timeout: 5 });
+  globalThis.__tallySql = undefined;
+}
 
 export const db = drizzle(sql, { schema, casing: "snake_case" });
 

@@ -109,7 +109,45 @@ CREATE INDEX IF NOT EXISTS notifications_unread_idx
 --> statement-breakpoint
 CREATE INDEX IF NOT EXISTS outbox_pending_idx ON outbox (id) WHERE published_at IS NULL;
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS sessions_live_idx ON sessions (token_hash) WHERE revoked_at IS NULL;
+-- =================================================== active-record indexes
+-- "Give me the active ones" is the query; a full btree over a column that is
+-- NULL for nearly every row will never be chosen for it and only costs writes.
+CREATE INDEX IF NOT EXISTS users_active_idx ON users (id) WHERE archived_at IS NULL;
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS clients_active_idx ON clients (name) WHERE archived_at IS NULL;
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS projects_active_client_idx ON projects (client_id) WHERE archived_at IS NULL;
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS tasks_active_idx ON tasks (name) WHERE archived_at IS NULL;
+--> statement-breakpoint
+
+-- Drop the unfiltered versions; they duplicate the above at write cost and
+-- serve no query the planner would choose them for.
+DROP INDEX IF EXISTS users_archived_at_idx;
+--> statement-breakpoint
+DROP INDEX IF EXISTS clients_archived_at_idx;
+--> statement-breakpoint
+DROP INDEX IF EXISTS projects_archived_at_idx;
+--> statement-breakpoint
+DROP INDEX IF EXISTS projects_client_idx;
+--> statement-breakpoint
+DROP INDEX IF EXISTS invoice_line_items_invoice_idx;
+--> statement-breakpoint
+DROP INDEX IF EXISTS sessions_live_idx;
+--> statement-breakpoint
+DROP INDEX IF EXISTS notifications_user_created_idx;
+--> statement-breakpoint
+
+-- Invoice-attachment lookups only ever want rows that have an invoice.
+DROP INDEX IF EXISTS time_entries_invoice_idx;
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS time_entries_invoice_idx
+  ON time_entries (invoice_id) WHERE invoice_id IS NOT NULL;
+--> statement-breakpoint
+DROP INDEX IF EXISTS expenses_invoice_idx;
+--> statement-breakpoint
+CREATE INDEX IF NOT EXISTS expenses_invoice_idx
+  ON expenses (invoice_id) WHERE invoice_id IS NOT NULL;
 --> statement-breakpoint
 
 -- ======================================================== unique by name
@@ -130,11 +168,37 @@ CREATE UNIQUE INDEX IF NOT EXISTS invoices_number_unique
 -- column does not prevent duplicates: two client-wide retainers (project_id
 -- NULL) would both be allowed, and so would two account-scope integrations.
 -- NULLS NOT DISTINCT is the fix, and it needs Postgres 15 or later.
-CREATE UNIQUE INDEX IF NOT EXISTS retainers_client_project_unique
-  ON retainers (client_id, project_id) NULLS NOT DISTINCT;
---> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS integration_connections_unique
-  ON integration_connections (provider, scope, user_id) NULLS NOT DISTINCT;
+-- IF NOT EXISTS matches on NAME ALONE. A database that ran an earlier version
+-- of this file already has an index with each of these names and WITHOUT the
+-- NULLS NOT DISTINCT property, so a plain CREATE ... IF NOT EXISTS is a silent
+-- no-op and the duplicate-row hole stays open. Check the property, not the
+-- name, and rebuild when it is wrong.
+DO $$
+DECLARE
+  target record;
+BEGIN
+  FOR target IN
+    SELECT * FROM (VALUES
+      ('retainers_client_project_unique', 'retainers', '(client_id, project_id)'),
+      ('integration_connections_unique', 'integration_connections', '(provider, scope, user_id)')
+    ) AS t(index_name, table_name, columns)
+  LOOP
+    IF EXISTS (
+      SELECT 1 FROM pg_index i
+      JOIN pg_class c ON c.oid = i.indexrelid
+      WHERE c.relname = target.index_name AND NOT i.indnullsnotdistinct
+    ) THEN
+      EXECUTE format('DROP INDEX IF EXISTS %I', target.index_name);
+    END IF;
+
+    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = target.index_name AND relkind = 'i') THEN
+      EXECUTE format(
+        'CREATE UNIQUE INDEX %I ON %I %s NULLS NOT DISTINCT',
+        target.index_name, target.table_name, target.columns
+      );
+    END IF;
+  END LOOP;
+END $$;
 --> statement-breakpoint
 
 -- ========================================= deferrable line item positions
@@ -143,9 +207,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS integration_connections_unique
 -- the reorder happen in any order and still guarantees a clean result.
 DO $$
 BEGIN
+  -- An earlier version of this file created a plain unique INDEX with this
+  -- name. pg_constraint has no row for a bare index, so a constraint-only
+  -- existence check passes and the ALTER then fails with "relation already
+  -- exists", aborting every statement in this transaction. Clear the index
+  -- first when it is not backing a constraint.
+  IF EXISTS (
+    SELECT 1 FROM pg_class c
+    WHERE c.relname = 'invoice_line_items_position_unique' AND c.relkind = 'i'
+  ) AND NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+    WHERE conname = 'invoice_line_items_position_unique'
+      AND conrelid = 'public.invoice_line_items'::regclass
+  ) THEN
+    DROP INDEX IF EXISTS invoice_line_items_position_unique;
+  END IF;
+
   IF NOT EXISTS (
     SELECT 1 FROM pg_constraint
-    WHERE conname = 'invoice_line_items_position_unique' AND conrelid = 'public.invoice_line_items'::regclass
+    WHERE conname = 'invoice_line_items_position_unique'
+      AND conrelid = 'public.invoice_line_items'::regclass
   ) THEN
     ALTER TABLE invoice_line_items ADD CONSTRAINT invoice_line_items_position_unique
       UNIQUE (invoice_id, position) DEFERRABLE INITIALLY DEFERRED;
@@ -279,6 +360,40 @@ BEGIN
     ALTER TABLE sessions ADD CONSTRAINT sessions_expiry_ordered
       CHECK (absolute_expires_at >= expires_at);
   END IF;
+
+  -- Cross-column invariants. These are the ones that corrupt money and time
+  -- rather than labels, so they belong in the database rather than a service.
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'time_entries_clock_ordered' AND conrelid = 'public.time_entries'::regclass) THEN
+    ALTER TABLE time_entries ADD CONSTRAINT time_entries_clock_ordered
+      CHECK (started_at IS NULL OR ended_at IS NULL OR ended_at >= started_at);
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'projects_dates_ordered' AND conrelid = 'public.projects'::regclass) THEN
+    ALTER TABLE projects ADD CONSTRAINT projects_dates_ordered
+      CHECK (starts_on IS NULL OR ends_on IS NULL OR ends_on >= starts_on);
+  END IF;
+
+  -- Paid may legitimately exceed the total (an overpayment), but nothing here
+  -- may be negative.
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'invoices_amounts_non_negative' AND conrelid = 'public.invoices'::regclass) THEN
+    ALTER TABLE invoices ADD CONSTRAINT invoices_amounts_non_negative
+      CHECK (subtotal_cents >= 0 AND total_cents >= 0 AND paid_cents >= 0 AND retainer_draw_cents >= 0);
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'retainers_balance_non_negative' AND conrelid = 'public.retainers'::regclass) THEN
+    ALTER TABLE retainers ADD CONSTRAINT retainers_balance_non_negative
+      CHECK (balance_cents >= 0);
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'expenses_total_non_negative' AND conrelid = 'public.expenses'::regclass) THEN
+    ALTER TABLE expenses ADD CONSTRAINT expenses_total_non_negative
+      CHECK (total_cents >= 0);
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'user_rates_non_negative' AND conrelid = 'public.user_rates'::regclass) THEN
+    ALTER TABLE user_rates ADD CONSTRAINT user_rates_non_negative
+      CHECK (amount_cents >= 0);
+  END IF;
 END $$;
 --> statement-breakpoint
 
@@ -298,15 +413,25 @@ CREATE INDEX IF NOT EXISTS users_name_trgm ON users USING gin ((first_name || ' 
 --> statement-breakpoint
 
 -- ============================================================ reporting view
--- Readability only. The report services compose their own aggregation so the
--- division by 3600 happens once, at the end (see BACKEND_PRD 3.6).
-CREATE OR REPLACE VIEW time_entry_facts AS
+-- Readability only. CREATE OR REPLACE cannot change a view's column list, so
+-- an edit that adds or removes a column fails on every already-migrated
+-- database unless the view is dropped first.
+--
+-- The money columns are deliberately NOT pre-divided. `(seconds * rate) / 3600`
+-- truncates per row, and a column named `billable_cents` is an invitation to
+-- SUM() it, which under-reports by up to half a cent per entry: real drift
+-- against a migration that has to reconcile to the cent. What this exposes is
+-- the product, in cent-seconds, so a caller sums first and divides once.
+DROP VIEW IF EXISTS time_entry_facts;
+--> statement-breakpoint
+CREATE VIEW time_entry_facts AS
 SELECT
   te.id, te.user_id, te.project_id, te.project_task_id, pt.task_id,
   p.client_id, te.spent_on, te.is_billable, te.duration_seconds,
   te.invoice_id, te.approval_id, te.billed_externally,
-  (te.duration_seconds * te.billable_rate_cents) / 3600 AS billable_cents,
-  (te.duration_seconds * te.cost_rate_cents)     / 3600 AS cost_cents,
+  te.billable_rate_cents, te.cost_rate_cents,
+  (te.duration_seconds::bigint * te.billable_rate_cents) AS billable_cent_seconds,
+  (te.duration_seconds::bigint * te.cost_rate_cents)     AS cost_cent_seconds,
   p.billing_type, p.archived_at IS NOT NULL AS project_archived
 FROM time_entries te
 JOIN project_tasks pt ON pt.id = te.project_task_id

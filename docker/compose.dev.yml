@@ -1,9 +1,15 @@
 # Local development stack.
 #
-# The ports are deliberately not the defaults: this machine already runs
-# Postgres on 5432 and 5433 and Redis on 6379, 6380, and 6381 for other
-# projects. Picking 5434 and 6382 means Tally can come up without stopping
-# anything else.
+# Two deliberate choices:
+#
+#   1. Ports are bound to 127.0.0.1, not 0.0.0.0. A Postgres whose password is
+#      committed to the repo and a Redis with no auth at all have no business
+#      listening on the LAN; an open Redis in particular is a documented path
+#      to remote code execution through CONFIG SET dir.
+#
+#   2. The ports themselves are non-default. This machine already runs Postgres
+#      on 5432 and 5433 and Redis on 6379, 6380, and 6381 for other projects, so
+#      Tally comes up without stopping anything else.
 name: tally-dev
 
 services:
@@ -15,13 +21,17 @@ services:
       POSTGRES_USER: tally
       POSTGRES_PASSWORD: tally_dev_password
       POSTGRES_DB: tally
-      # Deterministic collation, so `lower(name)` unique indexes and ORDER BY
-      # behave the same here as on the droplet.
-      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+      # UTF-8 collation, matching what initdb produces on the droplet. The C
+      # locale would be faster and wrong: under it citext does not fold
+      # accented characters, so 'JOSÉ@x.com' and 'josé@x.com' would be two
+      # different users here and one user in production.
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+      LANG: en_US.utf8
     ports:
-      - "5434:5432"
+      - "127.0.0.1:5434:5432"
     volumes:
       - tally_pg:/var/lib/postgresql/data
+      - ./postgres-init:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U tally -d tally"]
       interval: 5s
@@ -34,7 +44,7 @@ services:
     restart: unless-stopped
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6382:6379"
+      - "127.0.0.1:6382:6379"
     volumes:
       - tally_redis:/data
     healthcheck:

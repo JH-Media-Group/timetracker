@@ -262,7 +262,22 @@ function MobileTabs() {
 
 /* ---------------------------------------------------------------- shell */
 
+/**
+ * Routes that render on their own, without the shell.
+ *
+ * Sign-in has no navigation to show and no session to build it from, so
+ * wrapping it in the app chrome would render a sidebar full of links that all
+ * bounce back here.
+ */
+const BARE_ROUTES = ["/signin"];
+
 export function AppShell({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  if (BARE_ROUTES.some((r) => pathname.startsWith(r))) return <>{children}</>;
+  return <AppShellChrome>{children}</AppShellChrome>;
+}
+
+function AppShellChrome({ children }: { children: React.ReactNode }) {
   const [collapsed, setCollapsed] = React.useState(false);
   const palette = useCommandPalette();
   const entry = useEntryDialog();

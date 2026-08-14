@@ -18,10 +18,9 @@ test-results/
 playwright-report/
 .vitest/
 
-# env
+# env: everything except the committed example
 .env
-.env.local
-.env.*.local
+.env.*
 !.env.example
 
 # database volumes and dumps

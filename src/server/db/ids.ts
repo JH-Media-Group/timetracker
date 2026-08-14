@@ -18,7 +18,7 @@
  *     next millisecond instead of wrapping, which would reorder the batch.
  */
 
-import { randomBytes, randomUUID } from "node:crypto";
+import { randomBytes } from "node:crypto";
 
 const SEQUENCE_MAX = 0xfff; // 12 bits
 
@@ -86,5 +86,3 @@ export const isUuid = (v: unknown): v is string => typeof v === "string" && UUID
  * session token must not carry a readable creation time.
  */
 export const randomToken = (bytes = 32) => randomBytes(bytes).toString("base64url");
-
-export { randomUUID };

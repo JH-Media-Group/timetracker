@@ -210,6 +210,36 @@ export const userRates = pgTable(
   (t) => [index("user_rates_lookup_idx").on(t.userId, t.kind, t.startsOn)]
 );
 
+/**
+ * Invitations.
+ *
+ * Provisioning is by invite only: first sign-in matches an existing row by
+ * email and never auto-creates, so a Google account inside the domain is not
+ * by itself an account here. The token is single-use, hashed at rest, and
+ * expires in seven days.
+ */
+export const userInvites = pgTable(
+  "user_invites",
+  {
+    id: pk(),
+    email: citext().notNull(),
+    profileId: uuid()
+      .notNull()
+      .references(() => permissionProfiles.id),
+    firstName: text(),
+    lastName: text(),
+    employmentType: text().notNull().default("employee"),
+    tokenHash: text().notNull().unique(),
+    invitedBy: uuid().references(() => users.id),
+    expiresAt: ts().notNull(),
+    acceptedAt: ts(),
+    acceptedUserId: uuid().references(() => users.id),
+    revokedAt: ts(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("user_invites_email_idx").on(t.email)]
+);
+
 /** Auth.js-style database sessions, so revocation is immediate. */
 export const sessions = pgTable(
   "sessions",
@@ -248,7 +278,9 @@ export const clients = pgTable(
     archivedAt: ts(),
     externalRef: externalRef(),
     createdAt: createdAt(),
+    createdBy: uuid(),
     updatedAt: updatedAt(),
+    updatedBy: uuid(),
   },
   (t) => [index("clients_archived_at_idx").on(t.archivedAt)]
 );
@@ -302,7 +334,9 @@ export const projects = pgTable(
     archivedAt: ts(),
     externalRef: externalRef(),
     createdAt: createdAt(),
+    createdBy: uuid(),
     updatedAt: updatedAt(),
+    updatedBy: uuid(),
   },
   (t) => [
     index("projects_client_idx").on(t.clientId),
@@ -338,7 +372,9 @@ export const tasks = pgTable("tasks", {
   archivedAt: ts(),
   externalRef: externalRef(),
   createdAt: createdAt(),
+  createdBy: uuid(),
   updatedAt: updatedAt(),
+  updatedBy: uuid(),
 });
 
 /** A task made available on a project. Time entries reference THIS, not tasks. */
@@ -988,3 +1024,4 @@ export type ExpenseRow = typeof expenses.$inferSelect;
 export type InvoiceRow = typeof invoices.$inferSelect;
 export type SettingsRow = typeof settings.$inferSelect;
 export type SubmissionRow = typeof timesheetSubmissions.$inferSelect;
+export type InviteRow = typeof userInvites.$inferSelect;
