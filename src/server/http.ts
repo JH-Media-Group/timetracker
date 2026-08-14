@@ -271,19 +271,32 @@ function publicCtx(req: NextRequest, requestId: string): Ctx {
  * own address and walk straight through a per-IP rate limit, and puts a value
  * of their choosing into `sessions.ip` and the audit log.
  *
- * **Read the last hop, not the first.** The header is a trail, and a proxy
- * appends to it: Caddy's `reverse_proxy` and nginx's `$proxy_add_x_forwarded_for`
- * both leave whatever arrived in place and add the address they actually saw on
- * the end. So a request carrying `X-Forwarded-For: 10.0.0.1` reaches us as
- * `10.0.0.1, <the real address>`, and the first element is the one the caller
- * chose. Taking it would hand an attacker a fresh rate-limit bucket per request
- * and let them write any address they like into the audit log, which is worse
- * than no address at all: a gap in the record reads as a gap, an invented
+ * **Read the last hop, not the first.** The header is a trail, and where a proxy
+ * appends to it (nginx's `$proxy_add_x_forwarded_for`, or Caddy once
+ * `trusted_proxies` is configured) the entries on the left are whatever the
+ * caller sent and the one on the right is the address the proxy actually saw.
+ * Taking the first element would hand an attacker a fresh rate-limit bucket per
+ * request and let them write any address they like into the audit log, which is
+ * worse than no address at all: a gap in the record reads as a gap, an invented
  * address reads as evidence.
  *
- * Trusting the last hop assumes exactly one proxy in front. That is what we
- * deploy, and if a second one is ever added this function has to count from the
- * right rather than take the end.
+ * Be accurate about our own deployment, because the first version of this
+ * comment was not. Caddy 2.7 and later trust no proxy by default, and *replace*
+ * an untrusted caller's `X-Forwarded-For` rather than appending to it. Our
+ * Caddyfile sets no `trusted_proxies`, so today the header carries exactly one
+ * address and first and last are the same value: the safety here comes from
+ * Caddy, and this function is choosing the same element either way.
+ *
+ * It stops being the same the moment a second proxy is added and Caddy is told
+ * to trust it, because then the trail is real. With N trusted hops the client is
+ * the (N+1)th from the right, so this needs a hop count rather than `.at(-1)`.
+ * Written down because the change that breaks it is a Caddyfile edit, not a code
+ * edit, and nothing here would notice.
+ *
+ * The value is validated before it leaves, because it goes into two `inet`
+ * columns. An unparseable address would throw at insert, and audit rows are
+ * written inside the same transaction as the mutation they describe, so a bad
+ * header would roll back somebody's saved work at commit time.
  */
 export function clientIp(req: NextRequest): string | null {
   if (!env.TRUST_PROXY) return null;
@@ -295,12 +308,35 @@ export function clientIp(req: NextRequest): string | null {
       .map((hop) => hop.trim())
       .filter(Boolean);
     const nearest = hops.at(-1);
-    if (nearest) return nearest;
+    if (nearest) return asAddress(nearest);
   }
 
   // Single-valued and set by the proxy itself, so there is no trail to walk.
   const real = req.headers.get("x-real-ip");
-  if (real) return real.trim() || null;
+  if (real) return asAddress(real.trim());
+
+  return null;
+}
+
+/**
+ * The value if it is an IP address, otherwise null.
+ *
+ * Deliberately not a full parser. It has to be strict enough that Postgres will
+ * accept it as `inet`, and anything that gets past this and still fails there
+ * is a bug worth hearing about rather than one to swallow.
+ */
+function asAddress(value: string): string | null {
+  if (!value || value.length > 45) return null;
+
+  // IPv4, four octets in range.
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(value);
+  if (v4) {
+    return v4.slice(1).every((octet) => Number(octet) <= 255 && !/^0\d/.test(octet)) ? value : null;
+  }
+
+  // IPv6, including the bracketed and IPv4-mapped forms a proxy may send.
+  const bare = value.startsWith("[") && value.endsWith("]") ? value.slice(1, -1) : value;
+  if (/^[0-9a-fA-F:]+(?:\.\d{1,3}){0,3}$/.test(bare) && bare.includes(":")) return bare;
 
   return null;
 }

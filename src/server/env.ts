@@ -171,7 +171,6 @@ if (parsed.NODE_ENV === "production") {
  * rather than silently meaning "no".
  */
 
-const parsed_isProduction = parsed.NODE_ENV === "production";
 
 export const env = {
   ...parsed,

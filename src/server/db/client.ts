@@ -19,46 +19,68 @@ declare global {
 }
 
 /**
- * Under test, a Date that reaches the driver as a bind parameter is a bug.
+ * Under test, a Date that reaches the database layer as a bind parameter is a bug.
  *
- * Drizzle's column mappers turn a Date into a string long before it gets here,
- * so a Date arriving as a parameter means it went in through a raw `sql`
- * template, where it has no column to be typed by. The driver then tries to
- * serialise an object as text and throws `ERR_INVALID_ARG_TYPE` at whatever
- * moment that line happens to run. That bug has been written four times, and
- * three of the four hid in code that runs rarely: a timer stop, a nightly
- * purge, an hourly session touch.
+ * Drizzle's column mappers turn a Date into a string long before this point, so
+ * a Date arriving as a parameter means it went in through a raw `sql` template,
+ * where it has no column to be typed by. The driver then tries to serialise an
+ * object as text and throws `ERR_INVALID_ARG_TYPE` at whatever moment that line
+ * happens to run. That bug has been written four times, and three of the four
+ * hid in code that runs rarely: a timer stop, a nightly purge, an hourly
+ * session touch.
  *
  * `tests/sql-literals.test.ts` catches this statically, including in code no
  * test ever executes, which is where two of the four lived. This is the other
  * half: any query a test actually runs is checked no matter how the value got
- * into the template, so the two together cover both the unreached and the
- * unwritten. Neither subsumes the other.
+ * into the template, and in particular no matter whether the type checker could
+ * see it, which is how `any` gets covered. Neither half subsumes the other.
  *
- * Test-only because it costs a scan of every parameter list on every query, and
- * because production has no business discovering this at runtime: by then the
- * query has already failed.
+ * WHY THIS IS DRIZZLE'S LOGGER AND NOT POSTGRES.JS'S `debug` HOOK
  *
- * Scope, precisely. postgres.js on its own does handle a Date: it infers OID
- * 1184 and serialises with `toISOString()`. This hook is on the pool drizzle
- * uses, and everything that reaches it has been through drizzle, where a Date
- * arrives as an untyped bind parameter with no column to be inferred from and
- * the driver throws. The migration runner builds its own postgres.js client
- * (`migrate.ts`) and is untouched by this, which is correct: there a Date is
- * genuinely fine.
+ * The first version threw from inside postgres.js's `debug` callback, and a
+ * reviewer showed that it corrupts the connection under concurrency. `debug`
+ * fires inside `build(q)`, after the query has been pushed onto the connection's
+ * `sent` array. Throwing there unwinds into the driver's own error path, which
+ * rejects whichever query the connection currently points at rather than the one
+ * that offended, skips the Sync it would need to resynchronise, and leaves the
+ * offending entry in `sent` so the next `ReadyForQuery` hands it the *following*
+ * query's rows. Reproduced deterministically with three concurrent queries: the
+ * innocent first query was rejected with the Date error, the actual offender
+ * resolved successfully carrying the third query's result set, and the third got
+ * a protocol error. The pool is `max: 5` under test and several services issue
+ * nine queries in one `Promise.all`, so this was reachable, and a guard that
+ * misattributes the failure and silently returns the wrong rows is worse than
+ * the bug it was watching for.
+ *
+ * Drizzle's `logger.logQuery` runs in drizzle's own code before the driver is
+ * called at all. Throwing there rejects exactly the call that made the mistake,
+ * the query is never sent, and the connection state machine is never entered.
+ *
+ * As a side benefit it also avoids postgres.js's `debug` option flipping
+ * `enumerable` on every query's parameters, which put argon2 hashes and session
+ * token hashes into vitest failure output.
+ *
+ * Test-only, because production has no business discovering this at runtime: by
+ * then the query has already failed. Note also that postgres.js on its own
+ * handles a Date correctly (OID 1184, serialised with `toISOString()`); it is
+ * specifically the drizzle path, where the parameter arrives untyped, that
+ * breaks. The migration runner builds its own postgres.js client and is
+ * untouched, which is right.
  */
-function refuseDateParameters(_connection: number, query: string, parameters: unknown[]): void {
-  const index = parameters.findIndex((value) => value instanceof Date);
-  if (index === -1) return;
+const dateParameterGuard = {
+  logQuery(query: string, params: unknown[]): void {
+    const index = params.findIndex((value) => value instanceof Date);
+    if (index === -1) return;
 
-  throw new TypeError(
-    `A Date reached the driver as bind parameter $${index + 1}. Drizzle maps column ` +
-      "values to strings before they get here, so this came from a raw `sql` template, " +
-      "where the driver has no column type to serialise it against and throws. " +
-      "Use `${value.toISOString()}::timestamptz`.\n\n" +
-      `  ${query.replace(/\s+/g, " ").trim().slice(0, 200)}`
-  );
-}
+    throw new TypeError(
+      `A Date reached the database as bind parameter $${index + 1}. Drizzle maps column ` +
+        "values to strings before this point, so it came from a raw `sql` template, where " +
+        "there is no column type to serialise it against and the driver throws. " +
+        "Use `${value.toISOString()}::timestamptz`.\n\n" +
+        `  ${query.replace(/\s+/g, " ").trim().slice(0, 200)}`
+    );
+  },
+};
 
 export const sql =
   globalThis.__tallySql ??
@@ -91,7 +113,6 @@ export const sql =
       },
     },
     onnotice: env.isProduction ? () => {} : undefined,
-    debug: env.isTest ? refuseDateParameters : undefined,
   });
 
 if (!env.isProduction) globalThis.__tallySql = sql;
@@ -109,7 +130,12 @@ export async function closePool(): Promise<void> {
   globalThis.__tallySql = undefined;
 }
 
-export const db = drizzle(sql, { schema, casing: "snake_case" });
+export const db = drizzle(sql, {
+  schema,
+  casing: "snake_case",
+  // See dateParameterGuard above. Only under test, and only ever throws.
+  logger: env.isTest ? dateParameterGuard : undefined,
+});
 
 export type Database = typeof db;
 

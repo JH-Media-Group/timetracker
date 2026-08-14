@@ -16,7 +16,14 @@ import { db } from "@/server/db/client";
 import * as s from "@/server/db/schema";
 import { verifyPassword } from "@/server/auth/password";
 import { createSession, sessionCookieOptions } from "@/server/auth/session";
-import { enforce, signInEmailKey, signInIpKey } from "@/server/auth/rate-limit";
+import {
+  clearBucket,
+  consume,
+  enforce,
+  enforceAvailable,
+  signInEmailKey,
+  signInIpKey,
+} from "@/server/auth/rate-limit";
 import { AppError, toProblem } from "@/server/errors";
 import { clientIp, parseOrThrow } from "@/server/http";
 import { newId } from "@/server/db/ids";
@@ -47,21 +54,31 @@ export async function POST(req: NextRequest) {
     // A shared bucket is not a weaker limit, it is a different mechanism: it
     // rations the whole company by the behaviour of one stranger. So when the
     // address is unknown the per-address limit is skipped and the per-email
-    // bucket below carries the load alone.
+    // bucket carries the load alone.
     //
-    // Be clear about what that leaves, because it is not nothing and it is not
-    // much: ten attempts per email per fifteen minutes is 40 guesses an hour
-    // against a named account, and about 440 an hour spread across the eleven
-    // addresses somebody could guess from the website. That is far too slow to
-    // break a decent password and far too fast to be comfortable about a weak
-    // one, and it is the whole defence whenever the address is unknown.
+    // The per-email bucket counts FAILURES, not attempts, and a success clears
+    // it. That distinction is the difference between a limiter and a weapon.
+    // Counting attempts meant anybody who knew an address could spend ten
+    // requests on it, right or wrong, and lock the owner out for fifteen
+    // minutes; the owner could not clear it by typing the correct password,
+    // because the correct password also counted. Eleven staff on one guessable
+    // domain, one of whose addresses is committed in this repository, made that
+    // 110 requests to lock out the entire company, repeatable forever.
     //
-    // Which is why `TRUST_PROXY` is now a required answer in production
-    // (`src/instrumentation.ts`) rather than a default: behind Caddy the address
-    // is known, this branch runs, and the per-address limit does its job. The
-    // unknown case is the local one and the misconfigured one.
+    // What this still leaves, stated plainly rather than argued away: ten wrong
+    // guesses against one address still locks that address for fifteen minutes.
+    // That is inherent to per-account limiting and it is the accepted trade. It
+    // is bounded, it is per-account rather than company-wide, and a legitimate
+    // user is never the one who trips it.
+    //
+    // The brute-force ceiling is 40 guesses an hour against a named account.
+    // Too slow for a decent password, too fast to be relaxed about a weak one,
+    // and it is the whole defence whenever the address is unknown. Which is why
+    // TRUST_PROXY is a required answer in production (src/instrumentation.ts)
+    // rather than a default: behind Caddy the address is known, the branch below
+    // runs, and the per-address limit does the real work.
     if (ip) await enforce("auth", signInIpKey(ip));
-    await enforce("auth", signInEmailKey(email));
+    await enforceAvailable("auth", signInEmailKey(email));
 
     const [user] = await db
       .select({
@@ -78,8 +95,14 @@ export async function POST(req: NextRequest) {
     // who works here. verifyPassword burns comparable time either way.
     const ok = user && !user.archivedAt && (await verifyPassword(user.passwordHash, password));
     if (!ok) {
+      // Now, and only now, is a point spent. See the note above the check.
+      await consume("auth", signInEmailKey(email));
       throw new AppError("unauthenticated", "That email and password do not match.");
     }
+
+    // Succeeding clears the failures that came before, so a handful of typos
+    // followed by the right password leaves nothing behind.
+    await clearBucket("auth", signInEmailKey(email));
 
     const session = await createSession(user.id, {
       ip: clientIp(req),

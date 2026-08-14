@@ -100,8 +100,9 @@ const CREDENTIAL_SHAPES: [name: string, pattern: RegExp][] = [
   ["SendGrid API key", /\bSG\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}/],
   ["Google OAuth client secret", /\bGOCSPX-[A-Za-z0-9_-]{20,}/],
   ["AWS or Spaces access key id", /\b(?:AKIA|ASIA|DO00)[A-Z0-9]{16,}/],
-  ["Slack token", /\bxox[baprs]-[A-Za-z0-9-]{10,}/],
-  ["Stripe live key", /\b(?:sk|rk)_live_[A-Za-z0-9]{16,}/],
+  ["Slack token", /\b(?:xox[baprsde]|xapp)-[A-Za-z0-9-]{10,}/],
+  ["Stripe key", /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{16,}/],
+  ["Stripe webhook secret", /\bwhsec_[A-Za-z0-9]{16,}/],
   ["GitHub token", /\bgh[pousr]_[A-Za-z0-9]{30,}/],
   ["private key block", /-----BEGIN (?:[A-Z ]+ )?PRIVATE KEY-----/],
 
@@ -117,7 +118,10 @@ const CREDENTIAL_SHAPES: [name: string, pattern: RegExp][] = [
    * `PLACEHOLDER` and the committed example values are excluded below rather
    * than here, so the pattern stays readable.
    */
-  ["a secret assigned to a known variable", /\b(?:SESSION_SECRET|SPACES_SECRET|SMTP_PASSWORD|GOOGLE_CLIENT_SECRET)\s*[:=]\s*["']?[A-Za-z0-9+/_=-]{16,}/],
+  [
+    "a secret assigned to a known variable",
+    /\b(?:SESSION_SECRET|SPACES_SECRET|SMTP_PASSWORD|GOOGLE_CLIENT_SECRET|AWS_SECRET_ACCESS_KEY|QBO_CLIENT_SECRET|STRIPE_SECRET_KEY|STRIPE_WEBHOOK_SECRET|TALLY_ENCRYPTION_KEY|HARVEST_ACCESS_TOKEN)\s*[:=]\s*["']?[A-Za-z0-9+/_=-]{16,}/,
+  ],
 
 ];
 
@@ -133,7 +137,10 @@ const CREDENTIAL_SHAPES: [name: string, pattern: RegExp][] = [
  * `postgres://tally:…@postgres:5432/tally`, and the SendGrid example with
  * `SG.xxxxxxxx` in it. All three are the docs doing their job.
  */
-const CONNECTION_STRING = /\b[a-z][a-z0-9+.-]*:\/\/([^\s:@/]+):([^\s:@/]+)@([^\s:@/]+)/g;
+// The username may be empty: `redis://:password@host` is the standard Redis
+// form and the first version's `[^\s:@/]+` required a character before the
+// colon, so it could not see one.
+const CONNECTION_STRING = /\b[a-z][a-z0-9+.-]*:\/\/([^\s:@/]*):([^\s:@/]+)@([^\s:@/]+)/g;
 const LOOPBACK_HOSTS = /^(?:localhost|127\.0\.0\.1|\[::1\]|::1)$/i;
 
 function isPlaceholderPassword(password: string): boolean {
@@ -223,6 +230,13 @@ describe("credentials", () => {
       "-----BEGIN RSA PRIVATE KEY-----",
       "ghp_abcdefghijklmnopqrstuvwxyz0123456789",
       "xoxb-1234567890-abcdefghij",
+      "xapp-1-A012BCDEF-1234567890-abcdef",
+      "STRIPE_WEBHOOK_SECRET=whsec_abcdefghijklmnopqrstuvwx",
+      "STRIPE_SECRET_KEY=sk_test_abcdefghijklmnopqrstuvwx",
+      "AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY",
+      "TALLY_ENCRYPTION_KEY=aB3dE5gH7jK9mN1pQ3rS5tU7vW9xY1zA",
+      // The standard Redis form has no username before the colon.
+      "REDIS_URL=redis://:sup3rs3cr3tpassword@cache.jhmediagroup.com:6379",
       // Short passwords count. A short real one is worse than a long one.
       "DATABASE_URL=postgres://tally:hunter2@db.jhmediagroup.com:5432/tally",
       // The two most likely to be pasted here, and the two the first version missed.
@@ -269,9 +283,11 @@ describe("credentials", () => {
 
     expect(
       hits,
-      "a credential appears to be committed. Rotate it first, because removing " +
-        "the line does not remove it from git history, and if this file is in " +
-        "the Confluence docGlobs it may already have been published:\n" + hits.join("\n")
+      "a credential appears to be in a tracked file. Rotate it first: this scan " +
+        "reads the working tree only, so if it was ever committed it is still in " +
+        "git history, and if the file is inside the Confluence docGlobs it may " +
+        "already have been published to a page whose version history keeps it:\n" +
+        hits.join("\n")
     ).toEqual([]);
   });
 

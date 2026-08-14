@@ -52,7 +52,10 @@ describe("dev-only guard", () => {
   it("refuses a remote database even when everything else looks local", () => {
     const reason = whyNotLocal({
       ...LOCAL,
-      databaseUrl: "postgres://tally:realpassword@db.jhmediagroup.com:5432/tally",
+      // Deliberately a two-character password. The host is what this test is
+      // about, and a realistic-looking one here is correctly flagged by
+      // tests/repo-hygiene.test.ts, which is the scanner doing its job.
+      databaseUrl: "postgres://tally:pw@db.jhmediagroup.com:5432/tally",
     });
     expect(reason).toMatch(/DATABASE_URL/);
     expect(reason).toMatch(/db\.jhmediagroup\.com/);

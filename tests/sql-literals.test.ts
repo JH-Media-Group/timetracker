@@ -51,18 +51,24 @@
  *      that never runs; the runtime assertion proves things about code that
  *      does. Neither subsumes the other.
  *
- * WHAT THIS STILL DOES NOT CATCH, STATED PLAINLY
+ * UNPROVEN IS NOT SAFE
  *
- * A value typed `any` or `unknown`, or a generic parameter the checker cannot
- * narrow, is invisible here: the compiler does not know it is a Date either.
- * That is a real hole and it is not closable by this approach, so it is written
- * down rather than implied away. It is the specific reason half 2 exists: the
- * runtime guard does not care what the type system thought.
+ * An earlier version of this header said `any` and `unknown` were an
+ * unclosable hole and left them passing. A reviewer pointed out that this is
+ * the shape the bug most plausibly arrives in, since a value out of
+ * `req.json()` or `JSON.parse` is `any`, and demonstrated `const d: any = new
+ * Date()` reproducing the production failure exactly. Reporting "no Dates
+ * found" when the honest answer was "no idea" is the same flattering drift this
+ * file exists to stop, so `any`, `unknown`, and a generic constrained to `Date`
+ * are now offences. Putting one in a query means giving it a real type first.
  *
- * The residue after both halves is code that is untyped *and* never executed by
- * any test. That is a much smaller target than the original bug had, and the
- * honest way to shrink it further is a test that executes the path, not a
- * cleverer regex.
+ * WHAT IS LEFT, STATED PLAINLY
+ *
+ * A deliberate lie to the compiler (`d as unknown as string`) still passes
+ * here, and so does `sql.raw` string concatenation, which is a different bug
+ * (injection, not serialisation) and belongs to a different check. Both are
+ * caught by half 2 the moment a test executes them, so the residue is code that
+ * lies about its types *and* is never executed by any test.
  */
 
 import { readdirSync, statSync } from "node:fs";
@@ -129,13 +135,41 @@ interface Scan {
   interpolations: number;
 }
 
-/** `Date`, or any union containing one. `Date | null` is just as fatal. */
+/**
+ * `Date`, any union containing one, or a type that could be hiding one.
+ *
+ * `Date | null` is just as fatal as `Date`, so unions are flattened.
+ *
+ * `any` and `unknown` are treated as offences rather than waved through, which
+ * is the change a reviewer's evasion list forced. It demonstrated that
+ * `const d: any = new Date()` in a template reproduces the exact production
+ * failure, and that `any` is how the value most plausibly arrives: out of
+ * `req.json()`, out of `JSON.parse`, out of any untyped helper. Passing those
+ * because the compiler could not prove anything would be reporting "no Dates
+ * found" when the honest answer is "no idea".
+ *
+ * The cost is that an unavoidable `any` has to be given a real type or a cast
+ * before it can go in a query, which is a fair price and usually an improvement
+ * on its own.
+ */
 function mentionsDate(checker: ts.TypeChecker, type: ts.Type): boolean {
   const parts = type.isUnion() ? type.types : [type];
   return parts.some((part) => {
+    if (part.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return true;
+
     const symbol = part.getSymbol() ?? part.aliasSymbol;
     if (symbol?.getName() === "Date") return true;
-    // A Date behind a type alias or a generic still prints as Date.
+
+    // A generic parameter constrained to Date is a Date at every call site.
+    if (part.flags & ts.TypeFlags.TypeParameter) {
+      const constraint = checker.getBaseConstraintOfType(part);
+      if (constraint && mentionsDate(checker, constraint)) return true;
+    }
+
+    // An intersection is a Date if any member is (`Date & { brand }`).
+    if (part.isIntersection()) return part.types.some((m) => mentionsDate(checker, m));
+
+    // A Date behind a type alias still prints as Date.
     return checker.typeToString(part) === "Date";
   });
 }
@@ -218,8 +252,13 @@ describe("raw sql templates", () => {
    */
   it("catches the shapes it claims to, on a known-bad fixture", () => {
     const fixture = `
-      declare const sql: (s: TemplateStringsArray, ...v: unknown[]) => unknown;
-      declare const column: unknown;
+      // The tag returns a concrete fragment type, as drizzle's does. Declaring
+      // it as returning unknown would make every nested fragment an offence
+      // under the any/unknown rule, which is a property of the fixture rather
+      // than of the codebase.
+      interface Fragment { readonly sqlFragment: true }
+      declare const sql: (s: TemplateStringsArray, ...v: unknown[]) => Fragment;
+      declare const column: Fragment;
       interface Range { from: Date }
       export function byParameter(cutoff: Date) { return sql\`\${column} < \${cutoff}\`; }
       export function byProperty(range: Range) { return sql\`\${column} < \${range.from}\`; }
@@ -228,6 +267,9 @@ describe("raw sql templates", () => {
       export function byNesting(d: Date) { return sql\`\${sql\`1 = 1\`} AND \${column} < \${d}\`; }
       export function byMaybe(d: Date | null) { return sql\`\${column} < \${d}\`; }
       export function byAlias(d: Date) { const q = sql; return q\`\${column} < \${d}\`; }
+      export function byAny(d: any) { return sql\`\${column} < \${d}\`; }
+      export function byUnknown(d: unknown) { return sql\`\${column} < \${d}\`; }
+      export function byGeneric<T extends Date>(d: T) { return sql\`\${column} < \${d}\`; }
       export function correct(d: Date) { return sql\`\${column} < \${d.toISOString()}::timestamptz\`; }
       export function alsoCorrect() { const ms = Date.now(); return sql\`\${column} < \${ms}\`; }
     `;
@@ -246,9 +288,14 @@ describe("raw sql templates", () => {
     const caught = scan(fixtureProgram, (fileName) => fileName === name);
     const lines = caught.offences.map((o) => o.expression).sort();
 
-    // Seven bad shapes, and neither of the two correct ones.
+    // Ten bad shapes, and neither of the two correct ones. The last three are
+    // the ones the type checker cannot prove: they are reported because
+    // "unproven" is not "safe".
     expect(lines, "the detector has stopped detecting; every other assertion here is now vacuous").toEqual([
       "cutoff",
+      "d",
+      "d",
+      "d",
       "d",
       "d",
       "d",

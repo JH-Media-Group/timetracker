@@ -47,12 +47,49 @@ interface Bucket {
 
 const buckets = new Map<string, Bucket>();
 
-/** Keeps the map from growing without bound in a long-lived process. */
+/** Above this the map is treated as under attack rather than merely busy. */
+const MAX_BUCKETS = 20_000;
+let lastSweep = 0;
+
+/**
+ * Keeps the map bounded in a long-lived process.
+ *
+ * The first version ran a full scan on every call once the map passed 2,000
+ * entries, and deleted nothing while the entries were still fresh. Sign-in
+ * buckets are keyed by email address, and an anonymous caller can name any
+ * address they like, so a flood creates a fresh key per request: the map grows
+ * without bound and every insertion walks all of it. That is quadratic, and the
+ * event loop stops long before memory does.
+ *
+ * Two changes. The scan is time-based, so its cost is amortised rather than
+ * paid per request. And when the map is still over the ceiling after expiring
+ * everything it can, the oldest entries go, because a limiter that takes the
+ * process down with it has stopped being a defence. Dropping a live bucket
+ * grants somebody extra attempts; the alternative grants everybody an outage.
+ *
+ * This is the fallback path. With Redis, expiry is the server's problem.
+ */
 function sweep(now: number) {
-  if (buckets.size < 2000) return;
+  if (buckets.size < MAX_BUCKETS && now - lastSweep < 60_000) return;
+  lastSweep = now;
+
   for (const [key, bucket] of buckets) {
     if (bucket.resetAt <= now) buckets.delete(key);
   }
+
+  if (buckets.size <= MAX_BUCKETS) return;
+
+  // Map preserves insertion order, so the front is the oldest.
+  const excess = buckets.size - MAX_BUCKETS;
+  let dropped = 0;
+  for (const key of buckets.keys()) {
+    if (dropped++ >= excess) break;
+    buckets.delete(key);
+  }
+  console.warn(
+    `[rate-limit] in-process buckets exceeded ${MAX_BUCKETS}; dropped ${excess} of the oldest. ` +
+      "This is the no-Redis fallback under load, and it means some limits reset early."
+  );
 }
 
 function consumeLocal(key: string, limit: Limit): RateResult {
@@ -80,6 +117,10 @@ type RedisLike = {
   incr(key: string): Promise<number>;
   pexpire(key: string, ms: number): Promise<number>;
   pttl(key: string): Promise<number>;
+  /** Reading without spending, for limits that count failures. */
+  get(key: string): Promise<string | null>;
+  /** Clearing a bucket when the thing it rations succeeded. */
+  del(...keys: string[]): Promise<number>;
 };
 
 let redis: RedisLike | null = null;
@@ -180,6 +221,65 @@ export async function enforce(routeClass: RouteClass, key: string): Promise<void
       meta: { retry_after_seconds: result.retryAfterSeconds },
     });
   }
+}
+
+/**
+ * Refuses when the bucket is empty, without spending a point.
+ *
+ * For limits that should count failures rather than attempts. Sign-in is the
+ * case: counting every attempt means a correct password contributes to the
+ * lockout that a wrong one causes, so somebody who knows an address can lock
+ * the owner out of their own account by typing anything ten times, and the
+ * owner cannot clear it by succeeding.
+ */
+export async function enforceAvailable(routeClass: RouteClass, key: string): Promise<void> {
+  const limit = LIMITS[routeClass];
+  const full = bucketKey(routeClass, key);
+  const now = Date.now();
+
+  let count = 0;
+  let ttlMs = limit.windowMs;
+
+  const client = await getRedis();
+  if (client) {
+    try {
+      count = Number((await client.get(full)) ?? 0);
+      const ttl = await client.pttl(full);
+      if (ttl > 0) ttlMs = ttl;
+    } catch {
+      // Redis is down. Fall through to the local bucket rather than refusing.
+      const local = buckets.get(full);
+      count = local && local.resetAt > now ? local.count : 0;
+    }
+  } else {
+    const local = buckets.get(full);
+    count = local && local.resetAt > now ? local.count : 0;
+    if (local) ttlMs = Math.max(0, local.resetAt - now);
+  }
+
+  if (count < limit.points) return;
+
+  throw new AppError("rate_limited", "Too many requests. Try again shortly.", {
+    meta: { retry_after_seconds: Math.max(1, Math.ceil((ttlMs > 0 ? ttlMs : limit.windowMs) / 1000)) },
+  });
+}
+
+/**
+ * Empties a bucket.
+ *
+ * Used when the thing being rationed succeeded, so the failures that came
+ * before it stop counting. Without this, ten fat-fingered attempts followed by
+ * a correct one still leaves the account locked.
+ */
+export async function clearBucket(routeClass: RouteClass, key: string): Promise<void> {
+  const full = bucketKey(routeClass, key);
+  buckets.delete(full);
+
+  const client = await getRedis();
+  if (!client) return;
+  await client.del(full).catch(() => {
+    // Redis went away mid-request. The bucket expires on its own.
+  });
 }
 
 /** Test seam. */
