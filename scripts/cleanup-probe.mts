@@ -10,5 +10,6 @@ counts.projectMembers = (await db.execute(sql`DELETE FROM project_members WHERE 
 counts.projects = (await db.execute(sql`DELETE FROM projects WHERE name LIKE '%Wiring probe%'`)).length;
 counts.tasks = (await db.execute(sql`DELETE FROM tasks WHERE name LIKE '%Wiring probe%'`)).length;
 counts.clients = (await db.execute(sql`DELETE FROM clients WHERE name LIKE '%Probe%'`)).length;
+counts.categories = (await db.execute(sql`DELETE FROM expense_categories WHERE name LIKE 'Sweep %'`)).length;
 console.log("probe rows removed:", counts);
 process.exit(0);
