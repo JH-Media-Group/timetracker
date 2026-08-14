@@ -252,7 +252,15 @@ export function DataGrid<T extends object>({
                 </div>
               </PopoverContent>
             </Popover>
-            <Button variant="ghost" size="sm" onClick={onExport ?? exportCsv} disabled={!api && !onExport}>
+            {/* Off when there is nothing to write. An enabled button that
+                produces no file reads as broken rather than as empty. */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={onExport ?? exportCsv}
+              disabled={!onExport && (!api || showEmpty)}
+              title={showEmpty ? "Nothing to export yet." : undefined}
+            >
               <Download className="size-3.5" />Export
             </Button>
           </div>
