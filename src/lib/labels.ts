@@ -13,6 +13,7 @@ export const PROFILE_LABEL: Record<PermissionProfile, string> = {
 };
 
 export const TERM_LABEL: Record<Client["paymentTerm"], string> = {
+  custom: "Custom",
   upon_receipt: "Due upon receipt",
   net_15: "Net 15",
   net_30: "Net 30",
@@ -22,6 +23,8 @@ export const TERM_LABEL: Record<Client["paymentTerm"], string> = {
 
 /** Days added to the issue date to get the due date. */
 export const TERM_DAYS: Record<Client["paymentTerm"], number> = {
+  // Overridden by `paymentTermDays` on the client; this is only the fallback.
+  custom: 30,
   upon_receipt: 0, net_15: 15, net_30: 30, net_45: 45, net_60: 60,
 };
 

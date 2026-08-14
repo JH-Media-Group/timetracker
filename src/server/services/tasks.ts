@@ -14,6 +14,7 @@ import { assertCan, withTransaction, type Ctx } from "@/server/ctx";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
 import { AppError, notFound, validationFailed } from "@/server/errors";
+import { canSeeBillable } from "@/server/serialize";
 
 export interface TaskDto {
   id: string;
@@ -24,12 +25,19 @@ export interface TaskDto {
   archivedAt: string | null;
 }
 
-const toDto = (row: s.TaskRow): TaskDto => ({
+/**
+ * A task's default rate is money, like every other rate in the system.
+ *
+ * It is null throughout the seed, so nothing leaked, but `serializeProject` is
+ * careful about exactly this kind of value and this was not. The `ctx` argument
+ * is what makes the omission visible next time somebody adds a field.
+ */
+const toDto = (ctx: Ctx, row: s.TaskRow): TaskDto => ({
   id: row.id,
   name: row.name,
   defaultBillable: row.isDefaultBillable,
   isCommon: row.isCommon,
-  defaultHourlyRateCents: row.defaultHourlyRateCents,
+  defaultHourlyRateCents: canSeeBillable(ctx) ? row.defaultHourlyRateCents : null,
   archivedAt: row.archivedAt ? row.archivedAt.toISOString() : null,
 });
 
@@ -39,7 +47,7 @@ export async function listTasks(ctx: Ctx, opts: { includeArchived?: boolean } = 
     .from(s.tasks)
     .where(opts.includeArchived ? undefined : isNull(s.tasks.archivedAt))
     .orderBy(asc(s.tasks.name));
-  return rows.map(toDto);
+  return rows.map((row) => toDto(ctx, row));
 }
 
 export async function createTask(
@@ -64,7 +72,7 @@ export async function createTask(
   ctx.audit({ action: "task.create", entityType: "task", entityId: id, entityLabel: name, after: input });
 
   const [row] = await ctx.db.select().from(s.tasks).where(eq(s.tasks.id, id)).limit(1);
-  return toDto(row!);
+  return toDto(ctx, row!);
 }
 
 export async function updateTask(
@@ -99,7 +107,7 @@ export async function updateTask(
     after,
   });
 
-  return toDto(after!);
+  return toDto(ctx, after!);
 }
 
 /**

@@ -292,7 +292,10 @@ function fromClient(c: ClientWire): Client {
     name: c.name,
     address: opt(c.address),
     currency: c.currency,
-    paymentTerm: (c.paymentTerm === "custom" ? "net_30" : c.paymentTerm) as Client["paymentTerm"],
+    // Carried through rather than coerced. Rewriting a custom term as net 30
+            // moves the due date on every invoice that client is ever sent.
+    paymentTerm: c.paymentTerm as Client["paymentTerm"],
+    paymentTermDays: opt(c.paymentTermDays),
     taxPercent: opt(c.taxPercent),
     discountPercent: opt(c.discountPercent),
     archivedAt: opt(c.archivedAt),
@@ -996,20 +999,34 @@ export async function togglePin(id: ID, pinned: boolean): Promise<ID[]> {
 
 /* ================================================================= clients */
 
-export async function createClient(input: Partial<Client> & { name: string }): Promise<Client> {
+/**
+ * `null` clears a field; leaving it out changes nothing.
+ *
+ * The distinction has to be expressible or a form cannot empty a box: the API
+ * patch is partial, so an absent key means "as you were", and sending
+ * `undefined` for a cleared input silently kept the old value.
+ */
+export type ClientPatch = Omit<Partial<Client>, "taxPercent" | "discountPercent" | "address"> & {
+  taxPercent?: number | null;
+  discountPercent?: number | null;
+  address?: string | null;
+};
+
+export async function createClient(input: ClientPatch & { name: string }): Promise<Client> {
   return fromClient(await post<ClientWire>("/clients", clientBody(input, true)));
 }
 
-export async function updateClient(id: ID, p: Partial<Client>): Promise<Client> {
+export async function updateClient(id: ID, p: ClientPatch): Promise<Client> {
   return fromClient(await patch<ClientWire>(`/clients/${id}`, clientBody(p, false)));
 }
 
-function clientBody(c: Partial<Client>, creating: boolean): Record<string, unknown> {
+function clientBody(c: ClientPatch, creating: boolean): Record<string, unknown> {
   const body: Record<string, unknown> = {
     name: c.name,
     address: c.address === undefined ? undefined : (c.address || null),
     currency: c.currency ?? (creating ? "USD" : undefined),
     paymentTerm: c.paymentTerm,
+    paymentTermDays: c.paymentTermDays,
     taxPercent: c.taxPercent === undefined ? undefined : (c.taxPercent ?? null),
     discountPercent: c.discountPercent === undefined ? undefined : (c.discountPercent ?? null),
     contacts: c.contacts?.map((k) => ({

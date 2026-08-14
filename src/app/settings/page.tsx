@@ -497,11 +497,12 @@ function SecuritySection() {
       <Card>
         <SectionTitle>Sign in</SectionTitle>
         <p className="text-base text-ink-secondary">
-          Tally signs in with your JH Media Group Google account. There are no Tally passwords to
-          leak, and removing someone from Google Workspace removes their access here.
+          Every account signs in with an email address and a password. Google Workspace is the
+          intended route for staff and is not connected yet, so removing somebody from Workspace
+          does not currently remove their access here: archive them on the People tab as well.
         </p>
         <div className="mt-3 flex items-center gap-2">
-          <Badge variant="success" dot>Google Workspace</Badge>
+          <Badge variant="neutral" dot>Password</Badge>
           <span className="text-base text-ink-secondary">{me.email}</span>
         </div>
       </Card>

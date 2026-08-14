@@ -39,7 +39,9 @@ export interface Client {
   name: string;
   address?: string;
   currency: string;
-  paymentTerm: "upon_receipt" | "net_15" | "net_30" | "net_45" | "net_60";
+  paymentTerm: "upon_receipt" | "net_15" | "net_30" | "net_45" | "net_60" | "custom";
+  /** Only meaningful when `paymentTerm` is "custom". */
+  paymentTermDays?: number;
   taxPercent?: number;
   discountPercent?: number;
   archivedAt?: string;

@@ -90,13 +90,17 @@ function ClientForm({ existing }: { existing?: Client }) {
           isPrimary: i === 0,
         })) as ClientContact[];
 
-      const body: Partial<Client> & { name: string } = {
+      // Null, not undefined. An empty box means "there is no tax rate", and the
+      // patch is partial, so undefined would mean "leave the old one alone".
+      const body: api.ClientPatch & { name: string } = {
         name: form.name.trim(),
-        address: form.address.trim() || undefined,
+        address: form.address.trim() || null,
         currency: form.currency,
-        paymentTerm: form.paymentTerm,
-        taxPercent: form.taxPercent.trim() ? Number(form.taxPercent) : undefined,
-        discountPercent: form.discountPercent.trim() ? Number(form.discountPercent) : undefined,
+        // A term nobody touched is not re-sent, which is what stops a custom
+        // one being flattened into whichever option the select fell back to.
+        paymentTerm: form.paymentTerm === existing?.paymentTerm ? undefined : form.paymentTerm,
+        taxPercent: form.taxPercent.trim() ? Number(form.taxPercent) : null,
+        discountPercent: form.discountPercent.trim() ? Number(form.discountPercent) : null,
         contacts: kept,
       };
       return existing ? api.updateClient(existing.id, body) : api.createClient(body);
@@ -160,6 +164,11 @@ function ClientForm({ existing }: { existing?: Client }) {
               </Field>
               <Field label="Payment terms" help="Sets the due date when an invoice is issued.">
                 <Select value={form.paymentTerm} onChange={(e) => patch("paymentTerm", e.target.value as Client["paymentTerm"])}>
+                  {existing?.paymentTerm === "custom" && (
+                    <option value="custom">
+                      Custom{existing.paymentTermDays ? ` (${existing.paymentTermDays} days)` : ""}
+                    </option>
+                  )}
                   <option value="upon_receipt">Due upon receipt</option>
                   <option value="net_15">Net 15</option>
                   <option value="net_30">Net 30</option>

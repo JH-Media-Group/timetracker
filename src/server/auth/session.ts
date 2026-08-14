@@ -14,7 +14,7 @@
  * Specification: docs/BACKEND_PRD.md section 7.1.
  */
 
-import { createHash } from "node:crypto";
+import { createHmac } from "node:crypto";
 import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { cookies } from "next/headers";
@@ -33,7 +33,20 @@ const ABSOLUTE_DAYS = 90;
 /** Only touch `last_seen_at` and the rolling expiry once an hour. */
 const TOUCH_INTERVAL_MS = 60 * 60 * 1000;
 
-const hashToken = (token: string) => createHash("sha256").update(token).digest("hex");
+/**
+ * Keyed, not plain.
+ *
+ * A plain SHA-256 of a 32-byte random token is already impractical to reverse,
+ * so the key is not there to protect the token. It is there so that write
+ * access to the database is not enough to mint a session: somebody who can
+ * insert a row still cannot produce a hash matching a cookie they chose without
+ * also having SESSION_SECRET, which lives in the environment.
+ *
+ * Rotating the secret invalidates every session, which is the documented
+ * behaviour and occasionally the point.
+ */
+const hashToken = (token: string) =>
+  createHmac("sha256", env.SESSION_SECRET).update(token).digest("hex");
 
 export interface NewSession {
   token: string;
