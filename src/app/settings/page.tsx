@@ -20,7 +20,7 @@ import { formatMoney } from "@/lib/format";
 import type { Settings } from "@/lib/types";
 import {
   Badge, Banner, Button, Card, Checkbox, Dropzone, Field, Input, Segmented, Select,
-  Switch, Textarea,
+  Spinner, Switch, Textarea,
 } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { PageBody, PageHeader, useUrlState } from "@/components/app/page-chrome";
@@ -44,8 +44,26 @@ type SectionKey = (typeof SECTIONS)[number]["key"];
 export default function SettingsPage() {
   const { params, set } = useUrlState();
   const can = useCan();
+  const { ready } = useApp();
   const section = (params.get("s") as SectionKey) || "company";
   const readOnly = !can("settings:manage");
+
+  // Every section below initialises its fields once, from the settings record.
+  // Mounting before it arrives leaves them holding the placeholder, and the
+  // next Save writes those blanks over the account. Same reason ClientEditor
+  // waits for its client.
+  if (!ready) {
+    return (
+      <>
+        <PageHeader title="Settings" />
+        <PageBody className="pt-10">
+          <div className="flex items-center gap-2 text-base text-ink-secondary">
+            <Spinner className="size-4" />Loading your settings…
+          </div>
+        </PageBody>
+      </>
+    );
+  }
 
   return (
     <>
