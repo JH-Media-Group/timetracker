@@ -10,7 +10,9 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
+import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatDateUS, formatMoney, formatPercent, toDate } from "@/lib/format";
 import type { Invoice } from "@/lib/types";
@@ -42,86 +44,79 @@ function bucketFor(daysLate: number): string {
   return BUCKETS[4];
 }
 
-export function InvoicingReport({ invoices, period }: { invoices: Invoice[]; period: Period }) {
+export function InvoicingReport({ period }: { period: Period }) {
   const router = useRouter();
-  const toast = useToast();
   const { params, set } = useUrlState();
-  const { clientById } = useApp();
 
   const view = (params.get("v") as View) || "aging";
-  const today = React.useMemo(() => new Date(), []);
 
-  const inPeriod = React.useMemo(
-    () => invoices.filter((i) => i.issueDate >= period.from && i.issueDate <= period.to),
-    [invoices, period.from, period.to]
-  );
+  // From the endpoint. The client version attributed collections to the month
+  // the invoice was raised rather than the month the money arrived, which is a
+  // different question and the wrong one for a figure labelled "Collected".
+  const { data } = useQuery({
+    queryKey: ["report", "invoicing", period.from, period.to],
+    queryFn: () => api.invoicingReport({ from: period.from, to: period.to }),
+  });
 
-  const open = React.useMemo(
-    () => invoices.filter((i) => i.state === "sent" || i.state === "partial" || i.state === "late"),
-    [invoices]
+  const detailed = React.useMemo<GridRow<Row>[]>(
+    () =>
+      (data?.rows ?? []).map((r) => ({
+        _id: String(r.id), _kind: "data" as const, id: String(r.id),
+        number: String(r.number ?? ""),
+        client: String(r.clientName ?? "Unknown client"),
+        issueDate: String(r.issueDate ?? ""),
+        dueDate: String(r.dueDate ?? ""),
+        state: String(r.displayState ?? r.state) as Invoice["state"],
+        amount: Number(r.totalCents ?? 0),
+        paid: Number(r.paidCents ?? 0),
+        balance: Number(r.balanceCents ?? 0),
+        daysLate: Number(r.daysLate ?? 0),
+        bucket: String(r.bucket ?? "Settled"),
+      })),
+    [data]
   );
 
   const stats = React.useMemo(() => {
-    const issued = inPeriod.reduce((a, i) => a + i.totalCents, 0);
-    const collected = inPeriod.reduce((a, i) => a + i.paidCents, 0);
-    const outstanding = open.reduce((a, i) => a + (i.totalCents - i.paidCents), 0);
-    const overdue = open
-      .filter((i) => toDate(i.dueDate) < today)
-      .reduce((a, i) => a + (i.totalCents - i.paidCents), 0);
-
-    // Average days to pay, over invoices that were actually paid.
-    const paidInvoices = invoices.filter((i) => i.state === "paid" && i.paidAt && i.sentAt);
-    const avgDays = paidInvoices.length
-      ? Math.round(paidInvoices.reduce(
-          (a, i) => a + (new Date(i.paidAt!).getTime() - new Date(i.sentAt!).getTime()) / 86400000, 0
-        ) / paidInvoices.length)
-      : null;
-
-    return { issued, collected, outstanding, overdue, avgDays, count: inPeriod.length };
-  }, [inPeriod, open, invoices, today]);
+    const t = data?.totals ?? {};
+    return {
+      issued: Number(t.issuedCents ?? 0),
+      collected: Number(t.collectedCents ?? 0),
+      outstanding: Number(t.outstandingCents ?? 0),
+      overdue: Number(t.overdueCents ?? 0),
+      avgDays: (data?.meta.averageDaysToPay as number | null) ?? null,
+      count: detailed.filter((r) => r.issueDate >= period.from && r.issueDate <= period.to).length,
+    };
+  }, [data, detailed, period.from, period.to]);
 
   const rows = React.useMemo<GridRow<Row>[]>(() => {
-    const source = view === "aging" ? open : inPeriod;
-    return source
-      .map((i) => {
-        const daysLate = Math.round((today.getTime() - toDate(i.dueDate).getTime()) / 86400000);
-        return {
-          _id: i.id, _kind: "data" as const, id: i.id, number: i.number,
-          client: clientById.get(i.clientId)?.name ?? "Unknown client",
-          issueDate: i.issueDate, dueDate: i.dueDate, state: i.state,
-          amount: i.totalCents, paid: i.paidCents, balance: i.totalCents - i.paidCents,
-          daysLate: Math.max(0, daysLate), bucket: bucketFor(daysLate),
-        };
-      })
-      .sort((a, b) => (view === "aging" ? b.daysLate - a.daysLate : b.issueDate.localeCompare(a.issueDate)));
-  }, [view, open, inPeriod, clientById, today]);
+    const source =
+      view === "aging"
+        ? detailed.filter((r) => r.bucket !== "Settled")
+        : detailed.filter((r) => r.issueDate >= period.from && r.issueDate <= period.to);
+    return [...source].sort((a, b) =>
+      view === "aging" ? b.daysLate - a.daysLate : b.issueDate.localeCompare(a.issueDate)
+    );
+  }, [view, detailed, period.from, period.to]);
 
   const aging = React.useMemo(() => {
+    const server = (data?.meta.aging ?? []) as { bucket: string; amountCents: number }[];
     const m = new Map<string, number>(BUCKETS.map((b) => [b, 0]));
-    for (const r of rows) if (view === "aging") m.set(r.bucket, (m.get(r.bucket) ?? 0) + r.balance);
+    for (const b of server) if (m.has(b.bucket)) m.set(b.bucket, b.amountCents);
     const total = [...m.values()].reduce((a, b) => a + b, 0);
     return { buckets: [...m.entries()], total };
-  }, [rows, view]);
+  }, [data]);
 
-  /** Issued versus collected, by month of issue. */
+  /** Issued against collected, by month: raised then, and cash arriving then. */
   const monthly = React.useMemo(() => {
-    const m = new Map<string, [number, number]>();
-    for (const i of invoices) {
-      const key = i.issueDate.slice(0, 7);
-      const cur = m.get(key) ?? [0, 0];
-      cur[0] += i.totalCents / 100;
-      cur[1] += i.paidCents / 100;
-      m.set(key, cur);
-    }
-    return [...m.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .slice(-12)
-      .map(([key, v]) => ({
-        label: toDate(`${key}-01`).toLocaleDateString(undefined, { month: "short" }),
-        // Stacked as collected plus still-owed, so the bar height is the amount issued.
-        values: [v[1], Math.max(0, v[0] - v[1])],
-      }));
-  }, [invoices]);
+    const server = (data?.meta.monthly ?? []) as {
+      month: string; issuedCents: number; collectedCents: number;
+    }[];
+    return server.slice(-12).map((m) => ({
+      label: toDate(`${m.month}-01`).toLocaleDateString(undefined, { month: "short" }),
+      // Stacked as collected plus still-owed, so the bar height is what was issued.
+      values: [m.collectedCents / 100, Math.max(0, (m.issuedCents - m.collectedCents) / 100)],
+    }));
+  }, [data]);
 
   const columns = React.useMemo<ColDef[]>(() => [
     { colId: "number", field: "number", headerName: "Invoice", width: 170 },

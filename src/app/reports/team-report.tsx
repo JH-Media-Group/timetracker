@@ -10,7 +10,9 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
+import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatDuration, formatMoney, formatPercent } from "@/lib/format";
 import { utilization } from "@/lib/derive";
@@ -34,51 +36,62 @@ interface Row {
   util: number; billableShare: number; cost: number;
 }
 
-export function TeamReport({ entries, period }: { entries: TimeEntry[]; period: Period }) {
+export function TeamReport({ period }: { period: Period }) {
   const router = useRouter();
-  const toast = useToast();
   const { params, set } = useUrlState();
-  const { users } = useApp();
+  const { userById } = useApp();
   const can = useCan();
 
   const scope = (params.get("who") as Scope) || "all";
 
-  const weeks = React.useMemo(() => {
-    const days = (new Date(period.to).getTime() - new Date(period.from).getTime()) / 86400000 + 1;
-    return Math.max(1, Math.round(days / 7));
-  }, [period.from, period.to]);
+  // From the endpoint, which scopes to the people this actor may see. Building
+  // the list from the bootstrap roster showed a project manager everybody in
+  // the account, most of them with zeros, which is a different report from the
+  // one the API would answer.
+  const { data } = useQuery({
+    queryKey: ["report", "team", period.from, period.to, scope],
+    queryFn: () =>
+      api.teamReport({
+        from: period.from,
+        to: period.to,
+        employmentType: scope === "all" ? undefined : scope,
+      }),
+  });
 
-  const rows = React.useMemo<GridRow<Row>[]>(() => {
-    const list = users.filter((u) => {
-      if (u.archivedAt) return false;
-      if (scope !== "all" && u.employmentType !== scope) return false;
-      return true;
-    });
-    return utilization(list, entries, weeks)
-      .map((r) => ({
-        _id: r.user.id, _kind: "data" as const, id: r.user.id,
-        firstName: r.user.firstName, lastName: r.user.lastName, photo: r.user.photo,
-        name: `${r.user.firstName} ${r.user.lastName}`,
-        type: r.user.employmentType === "contractor" ? "Contractor" : "Employee",
-        tracked: r.totalSeconds, billable: r.billableSeconds, capacity: r.capacitySeconds,
-        util: r.utilization,
-        billableShare: r.totalSeconds ? r.billableSeconds / r.totalSeconds : 0,
-        cost: r.costCents,
-      }))
-      .sort((a, b) => b.util - a.util);
-  }, [users, entries, weeks, scope]);
+  const rows = React.useMemo<GridRow<Row>[]>(
+    () =>
+      (data?.rows ?? []).map((r) => {
+        const id = String(r.userId);
+        const person = userById.get(id);
+        return {
+          _id: id, _kind: "data" as const, id,
+          firstName: person?.firstName ?? String(r.name ?? "").split(" ")[0] ?? "",
+          lastName: person?.lastName ?? "",
+          photo: person?.photo,
+          name: String(r.name ?? ""),
+          type: r.employmentType === "contractor" ? "Contractor" : "Employee",
+          tracked: Number(r.trackedSeconds ?? 0),
+          billable: Number(r.billableSeconds ?? 0),
+          capacity: Number(r.capacitySeconds ?? 0),
+          util: Number(r.utilization ?? 0),
+          billableShare: Number(r.billableShare ?? 0),
+          cost: Number(r.costCents ?? 0),
+        };
+      }),
+    [data, userById]
+  );
 
   const totals = React.useMemo(() => {
-    const tracked = rows.reduce((a, r) => a + r.tracked, 0);
-    const billable = rows.reduce((a, r) => a + r.billable, 0);
-    const capacity = rows.reduce((a, r) => a + r.capacity, 0);
-    const cost = rows.reduce((a, r) => a + r.cost, 0);
+    const t = data?.totals ?? {};
     return {
-      tracked, billable, capacity, cost,
-      util: capacity ? tracked / capacity : 0,
-      billableShare: tracked ? billable / tracked : 0,
+      tracked: Number(t.trackedSeconds ?? 0),
+      billable: Number(t.billableSeconds ?? 0),
+      capacity: Number(t.capacitySeconds ?? 0),
+      cost: Number(t.costCents ?? 0),
+      util: Number(t.utilization ?? 0),
+      billableShare: Number(t.billableShare ?? 0),
     };
-  }, [rows]);
+  }, [data]);
 
   const chart = React.useMemo(
     () => rows.map((r) => ({ label: r.firstName, value: r.util * 100 })),

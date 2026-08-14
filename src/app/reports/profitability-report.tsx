@@ -10,18 +10,16 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
+import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatMoney, formatPercent } from "@/lib/format";
-import { profitFor, projectCost, projectRevenue } from "@/lib/derive";
-import type { Expense, Invoice, TimeEntry } from "@/lib/types";
 import { Badge, Card, Segmented, Tooltip } from "@/components/ui/primitives";
-import { useToast } from "@/components/ui/toast";
 import { DataGrid } from "@/components/app/data-grid";
 import { HBarChart } from "@/components/app/charts";
 import { Kpi, KpiRow } from "@/components/app/kpi";
-import { useApp } from "@/components/app/providers";
-import { useUrlState } from "@/components/app/page-chrome";
+import { useUrlState, type Period } from "@/components/app/page-chrome";
 import type { GridRow } from "@/components/ui/grid";
 
 type GroupBy = "project" | "client";
@@ -34,85 +32,42 @@ interface Row {
   missingRate: boolean;
 }
 
-export function ProfitabilityReport({
-  entries, expenses, invoices,
-}: {
-  entries: TimeEntry[]; expenses: Expense[]; invoices: Invoice[];
-}) {
+export function ProfitabilityReport({ period }: { period: Period }) {
   const router = useRouter();
-  const toast = useToast();
   const { params, set } = useUrlState();
-  const { projects, clientById } = useApp();
 
   const groupBy = (params.get("by") as GroupBy) || "project";
 
-  const perProject = React.useMemo(() => {
-    const timeByProject = new Map<string, TimeEntry[]>();
-    for (const e of entries) {
-      const l = timeByProject.get(e.projectId); if (l) l.push(e); else timeByProject.set(e.projectId, [e]);
-    }
-    const expByProject = new Map<string, Expense[]>();
-    for (const x of expenses) {
-      const l = expByProject.get(x.projectId); if (l) l.push(x); else expByProject.set(x.projectId, [x]);
-    }
-
-    return projects
-      .map((p) => {
-        const mine = timeByProject.get(p.id) ?? [];
-        const myExp = expByProject.get(p.id) ?? [];
-        if (!mine.length && !myExp.length) return null;
-        const revenue = projectRevenue(p, mine, myExp);
-        const cost = projectCost(mine, myExp);
-        const billableWithoutRate = mine.some((e) => e.isBillable && e.billableRateCents === 0);
-        return {
-          project: p, revenue, cost,
-          ...profitFor(revenue, cost),
-          missingRate: p.billingType !== "non_billable" && billableWithoutRate,
-        };
-      })
-      .filter((r): r is NonNullable<typeof r> => !!r);
-  }, [projects, entries, expenses]);
+  const { data } = useQuery({
+    queryKey: ["report", "profitability", period.from, period.to, groupBy],
+    queryFn: () => api.profitabilityReport({ from: period.from, to: period.to, groupBy }),
+  });
 
   const totals = React.useMemo(() => {
-    const revenue = perProject.reduce((a, r) => a + r.revenue, 0);
-    const cost = perProject.reduce((a, r) => a + r.cost, 0);
-    const invoiced = invoices
-      .filter((i) => i.state !== "draft")
-      .reduce((a, i) => a + i.totalCents, 0);
-    return { revenue, cost, invoiced, ...profitFor(revenue, cost) };
-  }, [perProject, invoices]);
+    const t = data?.totals ?? {};
+    return {
+      revenue: Number(t.revenueCents ?? 0),
+      cost: Number(t.costCents ?? 0),
+      profitCents: Number(t.profitCents ?? 0),
+      marginPct: t.marginPct == null ? null : Number(t.marginPct),
+      invoiced: Number((data?.meta.invoicedCents as number) ?? 0),
+    };
+  }, [data]);
 
-  const rows = React.useMemo<GridRow<Row>[]>(() => {
-    if (groupBy === "project") {
-      return perProject
-        .map((r) => ({
-          _id: r.project.id, _kind: "data" as const, id: r.project.id,
-          name: r.project.name, sub: clientById.get(r.project.clientId)?.name ?? "",
-          revenue: r.revenue, cost: r.cost, profit: r.profitCents,
-          margin: r.marginPct, roc: r.returnOnCostPct, missingRate: r.missingRate,
-        }))
-        .sort((a, b) => b.profit - a.profit);
-    }
-
-    const byClient = new Map<string, { revenue: number; cost: number; missingRate: boolean }>();
-    for (const r of perProject) {
-      const cur = byClient.get(r.project.clientId) ?? { revenue: 0, cost: 0, missingRate: false };
-      cur.revenue += r.revenue; cur.cost += r.cost;
-      cur.missingRate = cur.missingRate || r.missingRate;
-      byClient.set(r.project.clientId, cur);
-    }
-    return [...byClient.entries()]
-      .map(([id, v]) => ({
-        _id: id, _kind: "data" as const, id,
-        name: clientById.get(id)?.name ?? "Unknown client", sub: "",
-        revenue: v.revenue, cost: v.cost, ...profitFor(v.revenue, v.cost),
-        missingRate: v.missingRate,
-      }))
-      .map((r) => ({
-        ...r, profit: r.profitCents, margin: r.marginPct, roc: r.returnOnCostPct,
-      }))
-      .sort((a, b) => b.profit - a.profit);
-  }, [perProject, groupBy, clientById]);
+  const rows = React.useMemo<GridRow<Row>[]>(
+    () =>
+      (data?.rows ?? []).map((r) => ({
+        _id: String(r.id), _kind: "data" as const, id: String(r.id),
+        name: String(r.name ?? ""), sub: String(r.sub ?? ""),
+        revenue: Number(r.revenueCents ?? 0),
+        cost: Number(r.costCents ?? 0),
+        profit: Number(r.profitCents ?? 0),
+        margin: r.marginPct == null ? null : Number(r.marginPct),
+        roc: r.returnOnCostPct == null ? null : Number(r.returnOnCostPct),
+        missingRate: Boolean(r.missingBillableRate),
+      })),
+    [data]
+  );
 
   /* The ten biggest contributors and the three worst, so a loss-maker cannot
      hide behind nine profitable projects. */

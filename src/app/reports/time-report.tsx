@@ -10,16 +10,15 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
-import { formatDuration, formatMoney, formatPercent, isoDate, startOfWeek, toDate } from "@/lib/format";
-import type { TimeEntry } from "@/lib/types";
-import { ValueAccumulator } from "@/lib/derive";
+import * as api from "@/lib/api";
+import { formatDuration, formatMoney, formatPercent, toDate } from "@/lib/format";
 import { Card, Meter, Segmented } from "@/components/ui/primitives";
-import { useToast } from "@/components/ui/toast";
 import { DataGrid } from "@/components/app/data-grid";
 import { StackedBarChart, Legend } from "@/components/app/charts";
 import { Kpi } from "@/components/app/kpi";
-import { useApp, useCan } from "@/components/app/providers";
+import { useCan } from "@/components/app/providers";
 import { useUrlState, type Period } from "@/components/app/page-chrome";
 import type { GridRow } from "@/components/ui/grid";
 
@@ -32,89 +31,52 @@ interface Row {
   share: number; amount: number;
 }
 
-export function TimeReport({
-  entries, loading, period,
-}: {
-  entries: TimeEntry[]; loading: boolean; period: Period;
-}) {
+export function TimeReport({ period }: { period: Period }) {
   const router = useRouter();
-  const toast = useToast();
   const { params, set } = useUrlState();
-  const { projectById, clientById, taskById, userById } = useApp();
   const can = useCan();
 
   const groupBy = (params.get("by") as GroupBy) || "client";
+  // The server calls the fourth dimension "user"; the button says "person",
+  // because that is the word somebody would use.
+  const dimension = groupBy === "person" ? "user" : groupBy;
+
+  const { data, isLoading: loading } = useQuery({
+    queryKey: ["report", "time", period.from, period.to, dimension],
+    queryFn: () => api.timeReport({ from: period.from, to: period.to, groupBy: dimension }),
+  });
 
   const totals = React.useMemo(() => {
-    let total = 0, billable = 0;
-    const value = new ValueAccumulator();
-    for (const e of entries) {
-      total += e.durationSeconds;
-      if (e.isBillable) {
-        billable += e.durationSeconds;
-        value.add(e.durationSeconds, e.billableRateCents ?? 0);
-      }
-    }
-    return { total, billable, nonBillable: total - billable, amount: value.cents };
-  }, [entries]);
+    const t = data?.totals ?? {};
+    const total = Number(t.totalSeconds ?? 0);
+    const billable = Number(t.billableSeconds ?? 0);
+    return { total, billable, nonBillable: total - billable, amount: Number(t.billableCents ?? 0) };
+  }, [data]);
 
-  const rows = React.useMemo<GridRow<Row>[]>(() => {
-    const buckets = new Map<string, { name: string; sub: string; total: number; billable: number; value: ValueAccumulator }>();
-
-    for (const e of entries) {
-      const project = projectById.get(e.projectId);
-      let key: string, name: string, sub: string;
-
-      if (groupBy === "client") {
-        const client = project ? clientById.get(project.clientId) : undefined;
-        key = client?.id ?? "unknown"; name = client?.name ?? "Unknown client"; sub = "";
-      } else if (groupBy === "project") {
-        key = e.projectId; name = project?.name ?? "Unknown project";
-        sub = project ? clientById.get(project.clientId)?.name ?? "" : "";
-      } else if (groupBy === "task") {
-        key = e.taskId; name = taskById.get(e.taskId)?.name ?? "Unknown task"; sub = "";
-      } else {
-        const u = userById.get(e.userId);
-        key = e.userId; name = u ? `${u.firstName} ${u.lastName}` : "Unknown person";
-        sub = u?.roles.join(", ") ?? "";
-      }
-
-      const cur = buckets.get(key) ?? { name, sub, total: 0, billable: 0, value: new ValueAccumulator() };
-      cur.total += e.durationSeconds;
-      if (e.isBillable) {
-        cur.billable += e.durationSeconds;
-        cur.value.add(e.durationSeconds, e.billableRateCents ?? 0);
-      }
-      buckets.set(key, cur);
-    }
-
-    return [...buckets.entries()]
-      .map(([id, v]) => ({
-        _id: id, _kind: "data" as const, id, name: v.name, sub: v.sub,
-        total: v.total, billable: v.billable, nonBillable: v.total - v.billable,
-        share: totals.total ? v.total / totals.total : 0,
-        amount: v.value.cents,
-      }))
-      .sort((a, b) => b.total - a.total);
-  }, [entries, groupBy, projectById, clientById, taskById, userById, totals.total]);
+  const rows = React.useMemo<GridRow<Row>[]>(
+    () =>
+      (data?.rows ?? []).map((r) => ({
+        _id: String(r.id), _kind: "data" as const, id: String(r.id),
+        name: String(r.name ?? ""), sub: String(r.sub ?? ""),
+        total: Number(r.totalSeconds ?? 0),
+        billable: Number(r.billableSeconds ?? 0),
+        nonBillable: Number(r.nonBillableSeconds ?? 0),
+        share: Number(r.share ?? 0),
+        amount: Number(r.billableCents ?? 0),
+      })),
+    [data]
+  );
 
   /** Hours per week across the period, split billable and non-billable. */
   const series = React.useMemo(() => {
-    const buckets = new Map<string, [number, number]>();
-    for (const e of entries) {
-      const key = isoDate(startOfWeek(toDate(e.spentOn)));
-      const cur = buckets.get(key) ?? [0, 0];
-      if (e.isBillable) cur[0] += e.durationSeconds; else cur[1] += e.durationSeconds;
-      buckets.set(key, cur);
-    }
-    return [...buckets.entries()]
-      .sort((a, b) => a[0].localeCompare(b[0]))
-      .slice(-16)
-      .map(([key, v]) => ({
-        label: toDate(key).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
-        values: [v[0] / 3600, v[1] / 3600],
-      }));
-  }, [entries]);
+    const weekly = (data?.meta.series ?? []) as {
+      weekStart: string; billableSeconds: number; nonBillableSeconds: number;
+    }[];
+    return weekly.slice(-16).map((w) => ({
+      label: toDate(w.weekStart).toLocaleDateString(undefined, { month: "short", day: "numeric" }),
+      values: [w.billableSeconds / 3600, w.nonBillableSeconds / 3600],
+    }));
+  }, [data]);
 
   const columns = React.useMemo<ColDef[]>(() => [
     {
@@ -173,7 +135,10 @@ export function TimeReport({
         <Kpi label="Billable share" value={formatPercent(totals.total ? totals.billable / totals.total : 0)} />
         {can("rates:view_billable")
           ? <Kpi label="If billed hourly" value={formatMoney(totals.amount)} />
-          : <Kpi label="Entries" value={String(entries.length)} />}
+          : <Kpi
+              label={groupBy === "client" ? "Clients" : groupBy === "project" ? "Projects" : groupBy === "task" ? "Tasks" : "People"}
+              value={String(rows.length)}
+            />}
       </div>
 
       {series.length > 1 && (

@@ -7,11 +7,14 @@
  * The chart answers the shape question and the table answers the number
  * question, and they are always built from the same rows so they cannot
  * disagree.
+ *
+ * Each report fetches its own grouped rows from its own endpoint. The page used
+ * to fetch every time entry in the period and hand them down to be aggregated
+ * in the browser, which was a second implementation of the same money questions
+ * and disagreed with the server on three of the four.
  */
 
 import * as React from "react";
-import { useQuery } from "@tanstack/react-query";
-import * as api from "@/lib/api";
 import { Tabs } from "@/components/ui/primitives";
 import { PageBody, PageHeader, PeriodPicker, usePeriod, useUrlState } from "@/components/app/page-chrome";
 import { useCan } from "@/components/app/providers";
@@ -28,31 +31,18 @@ export default function ReportsPage() {
   const can = useCan();
   const { granularity, anchor, period, onChange } = usePeriod("month", ["week", "month", "quarter", "year", "all"]);
 
-  const financial = can("report:view_financial") || can("rates:view_cost");
   const report = (params.get("r") as ReportKey) || "time";
 
+  // Each tab is gated on the capability its endpoint checks, so a tab that is
+  // present is a tab whose request will be answered.
   const tabs = [
     { value: "time", label: "Time" },
-    ...(financial ? [{ value: "profitability", label: "Profitability" }] : []),
-    // Gated on what the endpoint actually requires, not on something adjacent:
-    // a tab that 403s is worse than a tab that is not there.
+    ...(can("report:view_financial") ? [{ value: "profitability", label: "Profitability" }] : []),
     ...(can("report:view_team") || can("report:view_all") ? [{ value: "team", label: "Team" }] : []),
     ...(can("report:view_financial") ? [{ value: "invoicing", label: "Invoicing" }] : []),
   ];
 
   const allowed = tabs.some((t) => t.value === report) ? report : "time";
-
-  // Every report reads the same two collections, so they are fetched once here
-  // and passed down rather than refetched per tab.
-  const { data: entries = [], isLoading: loadingTime } = useQuery({
-    queryKey: ["time", "range", period.from, period.to],
-    queryFn: () => api.listTimeEntries({ from: period.from, to: period.to }),
-  });
-  const { data: expenses = [] } = useQuery({
-    queryKey: ["expenses", period.from, period.to],
-    queryFn: () => api.listExpenses({ from: period.from, to: period.to }),
-  });
-  const { data: invoices = [] } = useQuery({ queryKey: ["invoices"], queryFn: api.listInvoices });
 
   return (
     <>
@@ -78,13 +68,13 @@ export default function ReportsPage() {
         {tabs.length === 0 ? (
           <EmptyState title="No reports available.">Your permissions do not include any reports.</EmptyState>
         ) : allowed === "time" ? (
-          <TimeReport entries={entries} loading={loadingTime} period={period} />
+          <TimeReport period={period} />
         ) : allowed === "profitability" ? (
-          <ProfitabilityReport entries={entries} expenses={expenses} invoices={invoices} />
+          <ProfitabilityReport period={period} />
         ) : allowed === "team" ? (
-          <TeamReport entries={entries} period={period} />
+          <TeamReport period={period} />
         ) : (
-          <InvoicingReport invoices={invoices} period={period} />
+          <InvoicingReport period={period} />
         )}
       </PageBody>
     </>
