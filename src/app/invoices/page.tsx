@@ -18,7 +18,7 @@ import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatDateUS, formatDueIn, formatMoney } from "@/lib/format";
 import type { Invoice, InvoiceState, RecurringInvoice, Retainer } from "@/lib/types";
-import { Badge, Button, Card, EmptyState, Select } from "@/components/ui/primitives";
+import { Badge, Button, Card, EmptyState, Select, Tabs } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { PageBody, PageHeader, useUrlState } from "@/components/app/page-chrome";
 import { DataGrid } from "@/components/app/data-grid";
@@ -26,7 +26,23 @@ import { InvoiceBadge, Kpi } from "@/components/app/kpi";
 import { useApp, useCan } from "@/components/app/providers";
 import type { GridRow } from "@/components/ui/grid";
 
-type View = "outstanding" | "draft" | "paid" | "all" | "recurring" | "retainers";
+/**
+ * A destination and a filter, which used to be one control.
+ *
+ * `?view=` carried both "which screen" (recurring, retainers) and "which subset
+ * of one list" (outstanding, draft, paid, all) in a single dropdown, so opening
+ * the Retainers screen and narrowing the invoice list were the same gesture.
+ * They are now a tab and a filter, decided in TALLY-35 and written up in
+ * FRONTEND_PRD section 12.
+ */
+type Tab = "overview" | "recurring" | "retainers";
+type StatusFilter = "outstanding" | "draft" | "paid" | "all";
+
+const TABS: Tab[] = ["overview", "recurring", "retainers"];
+const STATUSES: StatusFilter[] = ["outstanding", "draft", "paid", "all"];
+
+const isTab = (v: string): v is Tab => (TABS as string[]).includes(v);
+const isStatus = (v: string): v is StatusFilter => (STATUSES as string[]).includes(v);
 
 interface Row {
   _id: string; _kind: "data";
@@ -43,7 +59,19 @@ export default function InvoicesPage() {
   const can = useCan();
   const qc = useQueryClient();
 
-  const view = (params.get("view") as View) || "outstanding";
+  /**
+   * Old links still work.
+   *
+   * `?view=draft` used to mean the drafts subset. It now resolves to the
+   * overview tab with the drafts filter, rather than 404ing a bookmark or
+   * silently showing the wrong screen.
+   */
+  const rawView = params.get("view") ?? "";
+  const tab: Tab = isTab(rawView) ? rawView : "overview";
+  const status: StatusFilter =
+    isStatus(params.get("status") ?? "") ? (params.get("status") as StatusFilter)
+    : isStatus(rawView) ? rawView
+    : "outstanding";
 
   const { data: invoices = [], isLoading } = useQuery({ queryKey: ["invoices"], queryFn: api.listInvoices });
   const refreshInvoices = () => qc.invalidateQueries({ queryKey: ["invoices"] });
@@ -72,9 +100,9 @@ export default function InvoicesPage() {
 
   const rows = React.useMemo<GridRow<Row>[]>(() => {
     const filtered = all.filter((i) =>
-      view === "draft" ? i.state === "draft"
-      : view === "paid" ? i.state === "paid" || i.state === "written_off"
-      : view === "all" ? true
+      status === "draft" ? i.state === "draft"
+      : status === "paid" ? i.state === "paid" || i.state === "written_off"
+      : status === "all" ? true
       : i.state === "sent" || i.state === "partial" || i.state === "late"
     );
     return filtered
@@ -87,7 +115,7 @@ export default function InvoicesPage() {
         amount: i.totalCents, balance: i.totalCents - i.paidCents,
         due: i.state === "paid" || i.state === "written_off" ? "" : formatDueIn(i.dueDate, today),
       }));
-  }, [all, view, clientById, today]);
+  }, [all, status, clientById, today]);
 
   const columns = React.useMemo<ColDef[]>(() => [
     {
@@ -149,15 +177,34 @@ export default function InvoicesPage() {
     />
   );
 
-  if (view === "recurring" || view === "retainers") {
+  /**
+   * The tab strip, on every destination.
+   *
+   * Uninvoiced and Configure are the two Harvest has that we do not, and they
+   * are deliberately absent rather than present and inert: TALLY-34 and
+   * TALLY-27 add them when they exist. A tab that leads nowhere is the thing
+   * the cosmetic sweep was written to find.
+   */
+  const tabs = (
+    <Tabs
+      value={tab}
+      onValueChange={(v) => set({ view: v === "overview" ? null : v, status: null })}
+      tabs={[
+        { value: "overview", label: "Overview", count: counts.all },
+        { value: "recurring", label: "Recurring" },
+        { value: "retainers", label: "Retainers" },
+      ]}
+      className="mb-4"
+    />
+  );
+
+  if (tab === "recurring" || tab === "retainers") {
     return (
       <>
         {header}
         <PageBody className="pt-4">
-          <div className="mb-3">
-            <ViewSelect view={view} set={set} counts={counts} />
-          </div>
-          {view === "recurring" ? <RecurringList /> : <RetainerList />}
+          {tabs}
+          {tab === "recurring" ? <RecurringList /> : <RetainerList />}
         </PageBody>
       </>
     );
@@ -167,6 +214,7 @@ export default function InvoicesPage() {
     <>
       {header}
       <PageBody className="pt-4">
+        {tabs}
         <div className="mb-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           <Kpi label="Outstanding" value={formatMoney(stats.outstanding)}>
             <div className="mt-2 text-base text-ink-secondary">{counts.outstanding} open invoices</div>
@@ -192,7 +240,7 @@ export default function InvoicesPage() {
           height={620}
           selectable={can("invoice:manage")}
           onRowOpen={(r) => router.push(`/invoices/${r.id}`)}
-          filters={<ViewSelect view={view} set={set} counts={counts} />}
+          filters={<StatusFilterSelect status={status} set={set} counts={counts} />}
           bulkActions={[
             {
               key: "send", label: "Mark as sent", input: "immediate",
@@ -242,12 +290,12 @@ export default function InvoicesPage() {
           ]}
           empty={
             <EmptyState
-              title={view === "draft" ? "No drafts." : view === "paid" ? "Nothing paid yet." : "Nothing outstanding."}
+              title={status === "draft" ? "No drafts." : status === "paid" ? "Nothing paid yet." : "Nothing outstanding."}
               action={can("invoice:manage") && <Button variant="primary" onClick={() => router.push("/invoices/new")}>New invoice</Button>}
             >
-              {view === "outstanding"
+              {status === "outstanding"
                 ? "Every invoice has been paid. Uninvoiced time is on the client pages."
-                : "Try a different view."}
+                : "Try a different filter."}
             </EmptyState>
           }
         />
@@ -256,25 +304,31 @@ export default function InvoicesPage() {
   );
 }
 
-function ViewSelect({
-  view, set, counts,
+/**
+ * Which subset of the invoice list, not which screen.
+ *
+ * This used to be both. Recurring schedules and retainers sat in the same
+ * dropdown as the status filters, so they read as two more ways of looking at
+ * the invoice table rather than as separate things, and there was no way to
+ * tell from the control that picking one changed the page entirely.
+ */
+function StatusFilterSelect({
+  status, set, counts,
 }: {
-  view: View; set: (p: Record<string, string | null>) => void;
+  status: StatusFilter; set: (p: Record<string, string | null>) => void;
   counts: { outstanding: number; draft: number; paid: number; all: number };
 }) {
   return (
     <Select
-      value={view}
-      onChange={(e) => set({ view: e.target.value === "outstanding" ? null : e.target.value })}
+      value={status}
+      onChange={(e) => set({ status: e.target.value === "outstanding" ? null : e.target.value })}
       className="w-[230px]"
-      aria-label="Invoice view"
+      aria-label="Filter invoices by status"
     >
       <option value="outstanding">Outstanding ({counts.outstanding})</option>
       <option value="draft">Drafts ({counts.draft})</option>
       <option value="paid">Paid and written off ({counts.paid})</option>
       <option value="all">All invoices ({counts.all})</option>
-      <option value="recurring">Recurring schedules</option>
-      <option value="retainers">Retainers</option>
     </Select>
   );
 }

@@ -1148,6 +1148,26 @@ Bulk selection enables: Set billable, Set rate, Make common, Archive. `Actions �
 
 > **Phase:** 3
 
+### 12.0 How the area navigates
+
+**Decided 2026-08-14 (TALLY-35): tabs for destinations, a separate control for filters.**
+
+The area has more than one screen in it, and for a while they all shared one `<select>`: outstanding, drafts, paid and all invoices sat in the same list as recurring schedules and retainers. The first four are subsets of one table; the last two are different screens. Picking either from the same control gave no way to tell that one narrowed a list and the other replaced the page.
+
+So the destinations are tabs, and the status filter lives in the grid toolbar where the other filters are:
+
+| Tab | Contents | Status |
+|---|---|---|
+| Overview | The invoice table, with a status filter over it | Built |
+| Recurring | Recurring schedules | List built, editing is TALLY-25 |
+| Retainers | Retainers | List built, creation is TALLY-13 |
+| Uninvoiced | Unbilled time and expenses by client | TALLY-34 |
+| Configure | The seven configuration sections of section 15 | TALLY-27 |
+
+**A tab appears when its screen exists.** Uninvoiced and Configure are absent rather than present and disabled, because a tab that leads nowhere is exactly what the cosmetic sweep was written to find.
+
+**Old links keep working.** `?view=draft` used to mean the drafts subset and now resolves to the Overview tab with that filter applied, rather than breaking a bookmark or quietly showing the wrong screen. The tab is `?view=`, the filter is `?status=`.
+
 ### 12.1 Overview
 
 **Route:** `/invoices?tab=open|all&client=…&range=…&status=…`
