@@ -226,7 +226,7 @@ function TopBar() {
           </div>
           <MenuSeparator />
           <MenuItem onSelect={() => router.push(`/team/${me.id}`)}>My profile</MenuItem>
-          <MenuItem onSelect={() => router.push(`/reports?by=person&user=${me.id}`)}>My time report</MenuItem>
+          <MenuItem onSelect={() => router.push(`/reports?user=${me.id}`)}>My time report</MenuItem>
           <MenuSeparator />
           <MenuLabel>Theme</MenuLabel>
           {(["system", "light", "dark"] as const).map((t) => (
