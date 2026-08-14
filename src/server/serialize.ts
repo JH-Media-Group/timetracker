@@ -14,6 +14,7 @@
 
 import type { Ctx } from "./ctx";
 import type * as s from "./db/schema";
+import { resolveAppearance, resolveDefaults, resolveLabels } from "@/domain/invoice-config";
 
 export const canSeeCost = (ctx: Ctx): boolean =>
   ctx.actor.kind === "system" || ctx.actor.capabilities.has("rates:view_cost");
@@ -333,6 +334,7 @@ export function serializeSettings(row: s.SettingsRow) {
   return {
     companyName: row.companyName,
     companyAddress: row.companyAddress,
+    taxId: row.taxId,
     baseCurrency: row.baseCurrency,
     timezone: row.timezone,
     weekStartsOn: row.weekStartsOn,
@@ -348,6 +350,20 @@ export function serializeSettings(row: s.SettingsRow) {
     projectNotesVisibility: row.projectNotesVisibility,
     modules: row.modules as Record<string, boolean>,
     invoiceNumberPattern: row.invoiceNumberPattern,
+
+    /**
+     * The invoice presentation settings, resolved.
+     *
+     * On the bootstrap because the invoice document needs the labels to render
+     * its own column headings, and a second fetch would flash the defaults and
+     * then replace them. Resolved here rather than sent raw so no screen has to
+     * know that storage is partial: `resolveLabels` fills the gaps once.
+     *
+     * Thirty short strings and five booleans. The bootstrap is fetched once.
+     */
+    invoiceLabels: resolveLabels(row.invoiceFieldLabels),
+    invoiceAppearance: resolveAppearance(row.invoiceAppearance),
+    invoiceDefaults: resolveDefaults(row.invoiceDefaults),
   };
 }
 

@@ -27,7 +27,10 @@ import {
   stateAfterPayment, type InvoiceState,
 } from "@/domain/invoices";
 import { dayIn, type IsoDate } from "@/domain/calendar";
-import { getSettings } from "./settings";
+import { roundGroup } from "@/domain/rounding";
+import { getSettings, roundingRule } from "./settings";
+import { resolveDefaults } from "@/domain/invoice-config";
+import { defaultItemTypeId } from "./item-types";
 
 /* -------------------------------------------------------------------- read */
 
@@ -41,6 +44,8 @@ export interface InvoiceDetail extends InvoiceDto {
     unitPriceCents: number;
     amountCents: number;
     isTaxed: boolean;
+    itemType: string | null;
+    isTime: boolean;
   }[];
   payments: {
     id: string;
@@ -121,8 +126,22 @@ export async function getInvoice(ctx: Ctx, id: string): Promise<InvoiceDetail> {
 
   const [lines, payments, messages, links] = await Promise.all([
     ctx.db
-      .select()
+      .select({
+        id: s.invoiceLineItems.id,
+        position: s.invoiceLineItems.position,
+        projectId: s.invoiceLineItems.projectId,
+        description: s.invoiceLineItems.description,
+        quantity: s.invoiceLineItems.quantity,
+        unitPriceCents: s.invoiceLineItems.unitPriceCents,
+        amountCents: s.invoiceLineItems.amountCents,
+        isTaxed: s.invoiceLineItems.isTaxed,
+        // Left join: a line written before item types existed has none, and an
+        // invoice from before this shipped still has to render.
+        itemType: s.invoiceItemTypes.name,
+        isService: s.invoiceItemTypes.isDefaultForServices,
+      })
       .from(s.invoiceLineItems)
+      .leftJoin(s.invoiceItemTypes, eq(s.invoiceItemTypes.id, s.invoiceLineItems.itemTypeId))
       .where(eq(s.invoiceLineItems.invoiceId, id))
       .orderBy(asc(s.invoiceLineItems.position)),
     ctx.db
@@ -200,6 +219,11 @@ export async function getInvoice(ctx: Ctx, id: string): Promise<InvoiceDetail> {
       unitPriceCents: l.unitPriceCents,
       amountCents: l.amountCents,
       isTaxed: l.isTaxed,
+      itemType: l.itemType ?? null,
+      // What "total hours" counts. An expense line's quantity is a count of
+      // receipts, not a number of hours, so adding them together would put a
+      // meaningless figure on the invoice.
+      isTime: l.isService === true,
     })),
     payments: payments.map((p) => ({
       id: p.id,
@@ -284,7 +308,22 @@ export async function previewLines(
   // in one direction across thousands of rows, so the product is accumulated
   // and divided exactly once, at the end.
   const centSeconds = new Map<string, number>();
+  const bucketSeconds = new Map<string, number[]>();
   const buckets = new Map<string, UninvoicedLine>();
+
+  /**
+   * The account rounding rule, applied per line and never per entry.
+   *
+   * BACKEND_PRD section 4.3: ten six-minute entries under fifteen-minute
+   * rounding are 1.0 hours, not 2.5. Rounding each entry and summing inflates
+   * every invoice, and inflates it most for whoever tracks most carefully,
+   * which is the opposite of fair. `roundGroup` takes the whole group for
+   * exactly this reason: calling it per entry is awkward on purpose.
+   *
+   * TALLY-28: before this, the setting existed, the summary reports read it,
+   * and invoices did not.
+   */
+  const rounding = await roundingRule(ctx);
 
   for (const e of entries) {
     const detail =
@@ -304,8 +343,7 @@ export async function previewLines(
       expenseIds: [],
     };
 
-    bucket.quantity += e.seconds / 3600;
-    centSeconds.set(key, (centSeconds.get(key) ?? 0) + e.seconds * e.rate);
+    bucketSeconds.set(key, [...(bucketSeconds.get(key) ?? []), e.seconds]);
     bucket.timeEntryIds.push(e.entryId);
     buckets.set(key, bucket);
   }
@@ -356,7 +394,15 @@ export async function previewLines(
   }
 
   for (const [key, bucket] of buckets) {
-    if (bucket.kind === "time") bucket.amountCents = Math.round((centSeconds.get(key) ?? 0) / 3600);
+    if (bucket.kind === "time") {
+      // Sum the group, round the total once, then value it at the group's rate.
+      // Every entry in a bucket shares a rate by construction, which is what
+      // makes the rounded total a legitimate thing to multiply.
+      const seconds = roundGroup(bucketSeconds.get(key) ?? [], rounding);
+      bucket.quantity = seconds / 3600;
+      centSeconds.set(key, seconds * bucket.unitPriceCents);
+      bucket.amountCents = Math.round((centSeconds.get(key) ?? 0) / 3600);
+    }
     // The unit price is a display of the line, and the line's value is its
     // amount. Deriving the amount back from a rounded price is what put the
     // preview and the invoice a couple of dollars apart.
@@ -416,6 +462,27 @@ export interface UninvoicedClient {
 export async function listUninvoiced(ctx: Ctx): Promise<UninvoicedClient[]> {
   assertCan(ctx, "invoice:view");
 
+  /**
+   * The same rounding `previewLines` applies, in SQL.
+   *
+   * It has to be here too or this screen quotes an unrounded figure and the
+   * invoice raised from it comes to something else, which is the one bug this
+   * screen cannot have. Rounding is per bucket in both places, and a bucket is
+   * one project at one rate, which is one invoice line.
+   *
+   * `mode` is interpolated as a function name rather than a value, so it is
+   * whitelisted rather than passed through: `roundingRule` can only return one
+   * of three modes, and the switch makes that structural.
+   */
+  const rounding = await roundingRule(ctx);
+  const increment = rounding.minutes > 0 ? rounding.minutes * 60 : 0;
+  const roundFn =
+    rounding.mode === "up" ? "CEIL" : rounding.mode === "down" ? "FLOOR" : "ROUND";
+
+  const roundedSeconds = increment
+    ? sql.raw(`${roundFn}(SUM(te.duration_seconds)::numeric / ${increment}) * ${increment}`)
+    : sql.raw("SUM(te.duration_seconds)::numeric");
+
   const timeRows = await ctx.db.execute<{
     client_id: string;
     seconds: string;
@@ -430,8 +497,8 @@ export async function listUninvoiced(ctx: Ctx): Promise<UninvoicedClient[]> {
            MAX(last_day)::text       AS last_day
     FROM (
       SELECT p.client_id,
-             SUM(te.duration_seconds)::bigint AS seconds,
-             ROUND(SUM(te.duration_seconds::bigint * te.billable_rate_cents)::numeric / 3600) AS bucket_cents,
+             ${roundedSeconds}::bigint AS seconds,
+             ROUND(${roundedSeconds} * te.billable_rate_cents / 3600) AS bucket_cents,
              MIN(te.spent_on) AS first_day,
              MAX(te.spent_on) AS last_day
         FROM time_entries te
@@ -536,7 +603,15 @@ export interface InvoiceInput {
      */
     amountCents?: number;
     isTaxed?: boolean;
-    itemType?: string;
+    /**
+     * What the line is, which decides its item type when none is given.
+     *
+     * `previewLines` already knows: it produces time buckets and expense
+     * buckets separately. Passing the kind rather than an id keeps callers out
+     * of the business of looking up which type currently holds a default role.
+     */
+    kind?: "time" | "expense";
+    itemTypeId?: string;
   }[];
   projectIds?: string[];
   timeEntryIds?: string[];
@@ -596,10 +671,18 @@ export async function createInvoice(ctx: Ctx, input: InvoiceInput): Promise<Invo
     const id = newId();
     const number = input.number?.trim() || (await nextNumber(tx, input.clientId, input.issueDate));
 
+    const [serviceTypeId, expenseTypeId] = await Promise.all([
+      defaultItemTypeId(tx, "service"),
+      defaultItemTypeId(tx, "expense"),
+    ]);
+
     const lines = input.lines.map((l, i) => ({
       id: newId(),
       invoiceId: id,
       position: i,
+      // TALLY-30: every line carries a type. Before this they were all null,
+      // pointing at a table with no rows in it.
+      itemTypeId: l.itemTypeId ?? (l.kind === "expense" ? expenseTypeId : serviceTypeId),
       projectId: l.projectId ?? null,
       description: l.description,
       quantity: String(l.quantity),
@@ -619,12 +702,26 @@ export async function createInvoice(ctx: Ctx, input: InvoiceInput): Promise<Invo
       { taxPercent: input.taxPercent, discountPercent: input.discountPercent }
     );
 
+    /**
+     * The configured defaults, applied only where the caller said nothing.
+     *
+     * A default is a fallback, not an override: passing an empty subject
+     * deliberately has to stay empty, so the test is `undefined`, not falsy.
+     * And this reaches new invoices only. Changing the default subject must
+     * never rewrite one on a draft somebody already edited, which is why it is
+     * here in create rather than anywhere near update.
+     *
+     * TALLY-33: this section ships with its consumer. `invoiceDefaults` was
+     * stored and read by nothing before this.
+     */
+    const defaults = resolveDefaults((await getSettings(tx)).invoiceDefaults);
+
     await tx.db.insert(s.invoices).values({
       id,
       clientId: input.clientId,
       number,
-      subject: input.subject?.trim() || null,
-      notes: input.notes?.trim() || null,
+      subject: (input.subject === undefined ? defaults.subject : input.subject)?.trim() || null,
+      notes: (input.notes === undefined ? defaults.notes : input.notes)?.trim() || null,
       poNumber: input.poNumber?.trim() || null,
       currency: client.currency,
       issueDate: input.issueDate,

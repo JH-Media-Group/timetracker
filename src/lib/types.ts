@@ -156,6 +156,8 @@ export interface InvoiceLineItem {
   id: ID; invoiceId: ID; position: number; itemType: string;
   projectId?: ID; description: string; quantity: number;
   unitPriceCents: number; amountCents: number; isTaxed: boolean;
+  /** Whether the quantity is hours. An expense line's quantity counts receipts. */
+  isTime: boolean;
 }
 
 export interface InvoicePayment {
@@ -232,6 +234,12 @@ export interface Retainer {
 export interface Settings {
   companyName: string;
   companyAddress: string;
+  /** Printed under the company block on the invoice. */
+  taxId: string;
+  /** Resolved invoice presentation, so no screen has to know storage is partial. */
+  invoiceLabels: import("@/domain/invoice-config").FieldLabels;
+  invoiceAppearance: import("@/domain/invoice-config").InvoiceAppearance;
+  invoiceDefaults: import("@/domain/invoice-config").InvoiceDefaults;
   baseCurrency: string;
   timezone: string;
   weekStartsOn: 0 | 1;

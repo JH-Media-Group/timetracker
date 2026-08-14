@@ -515,12 +515,20 @@ export const invoices = pgTable(
   () => []
 );
 
+/**
+ * What kind of thing an invoice line is: a service, a product, a direct cost.
+ *
+ * `externalRef` matches the other imported entities. Without it the Harvest
+ * import cannot recognise a type it created on an earlier run, which is what
+ * makes the migration safe to repeat.
+ */
 export const invoiceItemTypes = pgTable("invoice_item_types", {
   id: pk(),
   name: text().notNull().unique(),
   isDefaultForExpenses: boolean().notNull().default(false),
   isDefaultForServices: boolean().notNull().default(false),
   qboIncomeAccountId: text(),
+  externalRef: externalRef(),
   archivedAt: ts(),
 });
 

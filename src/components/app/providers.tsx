@@ -14,6 +14,7 @@ import { usePathname } from "next/navigation";
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "@/lib/api";
 import type { Client, ExpenseCategory, Project, Settings, Task, User, ID } from "@/lib/types";
+import { defaultLabels, INVOICE_APPEARANCE, INVOICE_DEFAULTS } from "@/domain/invoice-config";
 import { ToastProvider } from "@/components/ui/toast";
 import { TooltipProvider } from "@/components/ui/primitives";
 
@@ -152,6 +153,7 @@ function AppDataProvider({ children }: { children: React.ReactNode }) {
 const DEFAULT_SETTINGS: Settings = {
   companyName: "",
   companyAddress: "",
+  taxId: "",
   baseCurrency: "USD",
   timezone: "America/New_York",
   weekStartsOn: 1,
@@ -161,6 +163,12 @@ const DEFAULT_SETTINGS: Settings = {
   requireNotes: "never",
   allowFutureDates: true,
   modules: {},
+
+  // The same resolvers the server uses, so the first render of an invoice shows
+  // the real default headings rather than blanks it then replaces.
+  invoiceLabels: defaultLabels(),
+  invoiceAppearance: INVOICE_APPEARANCE,
+  invoiceDefaults: INVOICE_DEFAULTS,
 };
 
 function BootstrapFailure({ error }: { error: unknown }) {

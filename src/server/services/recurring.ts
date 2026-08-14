@@ -35,6 +35,7 @@ import {
   type Frequency,
 } from "@/domain/recurrence";
 import { createInvoice, type InvoiceInput } from "./invoices";
+import { accountTimezone } from "./settings";
 
 const FREQUENCIES: Frequency[] = ["weekly", "monthly", "quarterly", "yearly"];
 const isFrequency = (v: string): v is Frequency => (FREQUENCIES as string[]).includes(v);
@@ -208,11 +209,6 @@ export interface RunOutcome {
  * thrown. A client whose template lost its lines should not mean the other
  * thirty go unbilled, and the run has to be able to report which one is broken.
  */
-async function accountTimezone(ctx: Ctx): Promise<string> {
-  const [row] = await ctx.db.select({ timezone: s.settings.timezone }).from(s.settings).limit(1);
-  return row?.timezone ?? ctx.actor.timezone;
-}
-
 export async function runDueRecurring(ctx: Ctx, today?: IsoDate): Promise<RunOutcome> {
   assertCan(ctx, "invoice:manage");
 

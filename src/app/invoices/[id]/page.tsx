@@ -32,6 +32,16 @@ export default function InvoiceDetailPage() {
   const qc = useQueryClient();
   const toast = useToast();
   const { clientById, projectById, userById, settings } = useApp();
+
+  /**
+   * The configured labels and columns (TALLY-29, TALLY-31).
+   *
+   * They arrive resolved on the bootstrap, so there is no second fetch and no
+   * flash of default headings that then change. Everything the document prints
+   * as a heading comes from here; nothing is written into the markup.
+   */
+  const labels = settings.invoiceLabels;
+  const appearance = settings.invoiceAppearance;
   const can = useCan();
   const [paying, setPaying] = React.useState(false);
 
@@ -98,6 +108,16 @@ export default function InvoiceDetailPage() {
   const inv = invoice as Invoice;
   const client = clientById.get(inv.clientId);
   const balance = inv.totalCents - inv.paidCents;
+
+  /**
+   * Hours on the invoice, for the Show total hours default (TALLY-28).
+   *
+   * Only time lines. An expense line's quantity counts receipts, so adding it
+   * to a number of hours would print a figure that means nothing. `isTime`
+   * comes from whichever item type holds the services default, which is what
+   * item types are for.
+   */
+  const totalHours = inv.lineItems.reduce((sum, li) => sum + (li.isTime ? li.quantity : 0), 0);
   const editable = inv.state === "draft";
 
   return (
@@ -150,12 +170,15 @@ export default function InvoiceDetailPage() {
           <Card padded={false} className="overflow-hidden">
             <div className="flex flex-wrap items-start justify-between gap-6 border-b border-border p-6">
               <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.06em] text-ink-tertiary">From</div>
+                <div className="text-xs font-semibold uppercase tracking-[0.06em] text-ink-tertiary">{labels.from}</div>
                 <div className="mt-1 font-medium text-ink">{settings.companyName || "JH Media Group"}</div>
                 <div className="whitespace-pre-line text-base text-ink-secondary">{settings.companyAddress}</div>
+                {settings.taxId && (
+                  <div className="text-sm text-ink-tertiary">Tax ID {settings.taxId}</div>
+                )}
               </div>
               <div>
-                <div className="text-xs font-semibold uppercase tracking-[0.06em] text-ink-tertiary">Bill to</div>
+                <div className="text-xs font-semibold uppercase tracking-[0.06em] text-ink-tertiary">{labels.for}</div>
                 <Link href={`/clients/${inv.clientId}`} className="mt-1 block font-medium text-ink hover:underline">
                   {client?.name}
                 </Link>
@@ -166,7 +189,7 @@ export default function InvoiceDetailPage() {
                 <div className="mt-1 text-base text-ink-secondary">
                   {inv.state === "paid" ? `Paid ${inv.paidAt ? formatDateUS(inv.paidAt.slice(0, 10)) : ""}` : `Due ${formatDateUS(inv.dueDate)}`}
                 </div>
-                {inv.poNumber && <div className="text-sm text-ink-tertiary">PO {inv.poNumber}</div>}
+                {inv.poNumber && <div className="text-sm text-ink-tertiary">{labels.poNumber} {inv.poNumber}</div>}
               </div>
             </div>
 
@@ -175,49 +198,59 @@ export default function InvoiceDetailPage() {
             )}
 
             <div className="flex items-center border-b border-border bg-bg-muted px-6 py-2 text-xs font-semibold uppercase tracking-[0.04em] text-ink-tertiary">
-              <span className="flex-1">Description</span>
-              <span className="w-24 text-right">Quantity</span>
-              <span className="w-32 text-right">Unit price</span>
-              <span className="w-32 text-right">Amount</span>
+              <span className="flex-1">{labels.description}</span>
+              {appearance.showQuantity && <span className="w-24 text-right">{labels.quantity}</span>}
+              {appearance.showUnitPrice && <span className="w-32 text-right">{labels.unitPrice}</span>}
+              <span className="w-32 text-right">{labels.amount}</span>
             </div>
             {inv.lineItems.map((li) => (
               <div key={li.id} className="flex items-start border-b border-border px-6 py-3 text-base">
                 <span className="min-w-0 flex-1 pr-4">
                   <span className="block text-ink">{li.description}</span>
                   <span className="block text-sm text-ink-tertiary">
-                    {li.itemType}
+                    {appearance.showItemType ? li.itemType : ""}
                     {(() => {
                       // The project only earns a mention when the description
-                      // does not already lead with it.
+                      // does not already lead with it, and only when the
+                      // Appearance section says to show it at all.
+                      if (!appearance.showProject) return "";
                       const project = li.projectId ? projectById.get(li.projectId) : undefined;
-                      return project && !li.description.startsWith(project.name) ? ` · ${project.name}` : "";
+                      if (!project || li.description.startsWith(project.name)) return "";
+                      return appearance.showItemType && li.itemType ? ` · ${project.name}` : project.name;
                     })()}
                   </span>
                 </span>
-                <span className="w-24 text-right tabular-nums text-ink-secondary">{li.quantity}</span>
-                <span className="w-32 text-right tabular-nums text-ink-secondary">{formatMoney(li.unitPriceCents, inv.currency)}</span>
+                {appearance.showQuantity && (
+                  <span className="w-24 text-right tabular-nums text-ink-secondary">{li.quantity}</span>
+                )}
+                {appearance.showUnitPrice && (
+                  <span className="w-32 text-right tabular-nums text-ink-secondary">{formatMoney(li.unitPriceCents, inv.currency)}</span>
+                )}
                 <span className="w-32 text-right font-medium tabular-nums">{formatMoney(li.amountCents, inv.currency)}</span>
               </div>
             ))}
 
             <div className="flex justify-end px-6 py-4">
               <div className="w-full max-w-[320px]">
-                <SumRow label="Subtotal" value={formatMoney(inv.subtotalCents, inv.currency)} />
+                <SumRow label={labels.subtotal} value={formatMoney(inv.subtotalCents, inv.currency)} />
+                {settings.invoiceDefaults.showTotalHours && totalHours > 0 && (
+                  <SumRow label={labels.totalHours} value={totalHours.toFixed(2)} />
+                )}
                 {inv.discountCents > 0 && (
-                  <SumRow label={`Discount${inv.discountPercent ? ` (${inv.discountPercent}%)` : ""}`} value={`-${formatMoney(inv.discountCents, inv.currency)}`} />
+                  <SumRow label={`${labels.discount}${inv.discountPercent ? ` (${inv.discountPercent}%)` : ""}`} value={`-${formatMoney(inv.discountCents, inv.currency)}`} />
                 )}
                 {inv.taxCents > 0 && (
-                  <SumRow label={`Tax${inv.taxPercent ? ` (${inv.taxPercent}%)` : ""}`} value={formatMoney(inv.taxCents, inv.currency)} />
+                  <SumRow label={`${labels.tax}${inv.taxPercent ? ` (${inv.taxPercent}%)` : ""}`} value={formatMoney(inv.taxCents, inv.currency)} />
                 )}
                 <div className="mt-1 flex items-center justify-between border-t border-border-strong pt-2 text-lg font-semibold">
-                  <span>Total</span>
+                  <span>{labels.amountDue}</span>
                   <span className="tabular-nums">{formatMoney(inv.totalCents, inv.currency)}</span>
                 </div>
                 {inv.paidCents > 0 && (
                   <>
-                    <SumRow label="Paid" value={`-${formatMoney(inv.paidCents, inv.currency)}`} />
+                    <SumRow label={labels.payments} value={`-${formatMoney(inv.paidCents, inv.currency)}`} />
                     <div className="flex items-center justify-between border-t border-border pt-2 font-medium">
-                      <span>Balance due</span>
+                      <span>{labels.amountDue}</span>
                       <span className={cn("tabular-nums", balance > 0 && "text-danger")}>{formatMoney(balance, inv.currency)}</span>
                     </div>
                   </>
@@ -227,7 +260,7 @@ export default function InvoiceDetailPage() {
 
             {inv.notes && (
               <div className="border-t border-border px-6 py-4">
-                <div className="text-xs font-semibold uppercase tracking-[0.06em] text-ink-tertiary">Notes</div>
+                <div className="text-xs font-semibold uppercase tracking-[0.06em] text-ink-tertiary">{labels.notes}</div>
                 <p className="mt-1 whitespace-pre-line text-base text-ink-secondary">{inv.notes}</p>
               </div>
             )}

@@ -3,28 +3,29 @@
 Auto-loaded into every Claude Code session in this repo. Read it before doing anything substantive, and fix it when it drifts.
 
 **Read order for a fresh session:**
+
 1. `~/.claude/projects/c--Users-jason-Documents-GitHub-timetracker/memory/MEMORY.md` (auto-loaded; durable memories).
 2. This file.
-3. [docs/PRD-OVERVIEW.md](docs/PRD-OVERVIEW.md) for what and why, then the PRD covering the area you are touching.
-4. [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) for what to build next, in order.
+3. docs/PRD-OVERVIEW\.md for what and why, then the PRD covering the area you are touching.
+4. docs/IMPLEMENTATION_PLAN.md for what to build next, in order.
 
 ---
 
 ## TL;DR
 
 - **Product:** Tally (working codename). An in-house replacement for JH Media Group's Harvest account: time tracking, project profitability, and invoicing. Internal only, never sold, served from a single DigitalOcean droplet.
-- **Status (2026-08-14):** PRDs v1.1, design system complete, and the **whole thing runs end to end against Postgres**. `pnpm db:setup` then `pnpm dev -p 3200`, sign in as `person01@example.com` / `tally-dev-password`. Clean typecheck, clean `next build` from a clean `.next`, and one moderate transitive dev-only advisory in `pnpm audit` (esbuild, reached through drizzle-kit; nothing ships it). Not built yet: Google SSO, email delivery, receipt and PDF storage, the job queue, CI, and the Harvest import itself. Each of those is waiting on a credential; see [docs/PERMISSIONS-AND-CREDENTIALS.md](docs/PERMISSIONS-AND-CREDENTIALS.md).
+- **Status (2026-08-14):** PRDs v1.1, design system complete, and the **whole thing runs end to end against Postgres**. `pnpm db:setup` then `pnpm dev -p 3200`, sign in as `person01@example.com` / `tally-dev-password`. Clean typecheck, clean `next build` from a clean `.next`, and one moderate transitive dev-only advisory in `pnpm audit` (esbuild, reached through drizzle-kit; nothing ships it). Not built yet: Google SSO, email delivery, receipt and PDF storage, the job queue, CI, and the Harvest import itself. Each of those is waiting on a credential; see docs/PERMISSIONS-AND-CREDENTIALS.md.
 - **Replaces:** the private Harvest account. Migration must reconcile to the cent; see BACKEND_PRD section 16.3.
 - **User:** Jason. PowerShell on Windows. No em dashes in any generated user-facing text, docs included.
 
 ## Canonical docs
 
-| Doc | Authority over |
-|---|---|
-| [docs/PRD-OVERVIEW.md](docs/PRD-OVERVIEW.md) | Scope, principles, permission profiles, tech stack, release phases and the §6.1 phase map, glossary |
-| [docs/FRONTEND_PRD.md](docs/FRONTEND_PRD.md) | Design tokens, every page layout and interaction, component inventory, performance budgets. Section headers carry `Phase:` tags. |
-| [docs/BACKEND_PRD.md](docs/BACKEND_PRD.md) | Schema DDL, domain formulas (§4 is the specification for all money math), API surface, jobs, integrations, migration, deployment |
-| [docs/IMPLEMENTATION_PLAN.md](docs/IMPLEMENTATION_PLAN.md) | Build order. Treat as authoritative for "what's next". |
+| Doc                                         | Authority over                                                                                                                                                                                                                                         |
+| ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| docs/PRD-OVERVIEW\.md                       | Scope, principles, permission profiles, tech stack, release phases and the §6.1 phase map, glossary                                                                                                                                                    |
+| docs/FRONTEND_PRD.md                        | Design tokens, every page layout and interaction, component inventory, performance budgets. Section headers carry `Phase:` tags.                                                                                                                       |
+| docs/BACKEND_PRD.md                         | Schema DDL, domain formulas (§4 is the specification for all money math), API surface, jobs, integrations, migration, deployment                                                                                                                       |
+| docs/IMPLEMENTATION_PLAN.md                 | Build order. Treat as authoritative for "what's next".                                                                                                                                                                                                 |
 | [design system/](design%20system/README.md) | **Canonical for anything visual.** Tokens, Tailwind bridge, base layer, cva recipes. Five files ship verbatim into the app. Open `preview/index.html` in a browser to see the whole system rendered. Supersedes FRONTEND_PRD §2 as the implementation. |
 
 Don't re-derive what is documented; cite back to it. If code and PRD disagree, the PRD wins until it is deliberately amended in the same commit.
@@ -76,9 +77,9 @@ Work is tracked in Jira project **TALLY** and documented in Confluence space **T
 
 **Last updated:** 2026-08-14. Maintain this section manually.
 
-- Backend and wiring complete. E0 through E13 in [docs/BUILD_EPICS.md](docs/BUILD_EPICS.md) are ticked. Handed to Jason for testing.
+- Backend and wiring complete. E0 through E13 in docs/BUILD_EPICS.md are ticked. Handed to Jason for testing.
 - **Jason's first testing pass is TALLY-5 with thirteen children.** The two real gaps are TALLY-6 (a manager cannot edit or remove a person) and TALLY-13 (no way to create a retainer); both are missing screens rather than broken ones. TALLY-14 (a Tasks tab on a person, with start and end times) subsumes TALLY-12 and TALLY-16, so build it first. TALLY-11 (readable slugs instead of UUIDs) touches every route, the seam, the schema, a backfill and the importer, so cost it before starting.
-- Not built, each waiting on a credential rather than on a decision about scope: Google SSO, email delivery, receipt and PDF storage, the deployment, and running the Harvest import against real data. [docs/PERMISSIONS-AND-CREDENTIALS.md](docs/PERMISSIONS-AND-CREDENTIALS.md) says what does not work until each arrives.
+- Not built, each waiting on a credential rather than on a decision about scope: Google SSO, email delivery, receipt and PDF storage, the deployment, and running the Harvest import against real data. docs/PERMISSIONS-AND-CREDENTIALS.md says what does not work until each arrives.
 - Deliberately disabled in the UI rather than faked: the full account export, CSV import, and the integration connect buttons. Per-grid CSV export does work. (The settings page used to undercut this by hardcoding Google Calendar and Slack as "Connected" with a green badge while neither existed. Now every integration reads Not connected, which is true.)
 - Open decisions parked for Jason: final product name ("Tally" is a placeholder), droplet size (4 vCPU/8 GB proposed), whether contractors keep password auth or everyone lands in Workspace, and whether invoice numbering continues Harvest's sequence.
 - **Three adversarial reviews found real defects, and their lesson is the most useful thing in this file:** every one of them was a rule stated in prose at the top of a file and asserted nowhere executable, and the comments had drifted from the code in the flattering direction. The response was to make the rules countable, so **add the check in the same commit as the rule**:

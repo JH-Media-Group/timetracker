@@ -180,19 +180,23 @@ export default function InvoicesPage() {
   /**
    * The tab strip, on every destination.
    *
-   * Configure is the one Harvest has that we do not, and it is deliberately
-   * absent rather than present and inert until TALLY-27 builds it. A tab that
-   * leads nowhere is the thing the cosmetic sweep was written to find.
+   * All five now exist. Configure navigates away rather than rendering in
+   * place: it is a two-pane screen of its own with seven sections, and nesting
+   * it under a tab strip would put two navigations on top of each other.
    */
   const tabs = (
     <Tabs
       value={tab}
-      onValueChange={(v) => set({ view: v === "overview" ? null : v, status: null })}
+      onValueChange={(v) => {
+        if (v === "configure") return router.push("/invoices/configure");
+        set({ view: v === "overview" ? null : v, status: null });
+      }}
       tabs={[
         { value: "overview", label: "Overview", count: counts.all },
         { value: "recurring", label: "Recurring" },
         { value: "retainers", label: "Retainers" },
         { value: "uninvoiced", label: "Uninvoiced" },
+        { value: "configure", label: "Configure" },
       ]}
       className="mb-4"
     />

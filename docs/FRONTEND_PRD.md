@@ -1162,9 +1162,9 @@ So the destinations are tabs, and the status filter lives in the grid toolbar wh
 | Recurring | Recurring schedules | Built |
 | Retainers | Retainers | List built, creation is TALLY-13 |
 | Uninvoiced | Unbilled time and expenses by client | Built |
-| Configure | The seven configuration sections of section 15 | TALLY-27 |
+| Configure | The seven configuration sections of section 15 | Built |
 
-**A tab appears when its screen exists.** Configure is absent rather than present and disabled until TALLY-27 builds it, because a tab that leads nowhere is exactly what the cosmetic sweep was written to find.
+**A tab appears when its screen exists.** All five now do. Configure navigates to `/invoices/configure` rather than rendering inside the tab strip: it is a two-pane screen with a nav of its own, and stacking two navigations reads as a mistake.
 
 **Old links keep working.** `?view=draft` used to mean the drafts subset and now resolves to the Overview tab with that filter applied, rather than breaking a bookmark or quietly showing the wrong screen. The tab is `?view=`, the filter is `?status=`.
 
@@ -1187,6 +1187,34 @@ So the destinations are tabs, and the status filter lives in the grid toolbar wh
 The subtlety is where the rounding happens. An invoice is a sum of rounded lines, so the screen rounds per project and rate exactly as `previewLines` does, and then sums. Rounding once over the whole client is defensible arithmetic and the wrong answer: it lands a cent out, which the test demonstrates.
 
 **Archived clients still appear.** Work that was done and not billed is owed whether or not the client is still active.
+
+### 12.0.2 Configure
+
+**Built 2026-08-14 (TALLY-27, 28, 29, 30, 31, 32, 33).** Route `/invoices/configure?section=...`, two panes, a 280px left nav.
+
+Seven sections, which is Harvest's list without E-invoicing (PRD-OVERVIEW section 4.2 rules it out):
+
+| Section | Edits | Reaches |
+|---|---|---|
+| Company information | Name, address, tax ID | The block at the top of every invoice, existing ones included |
+| Default values | Time rounding, payment terms, total hours, subject, notes | New invoices, and the rounding of every invoice line |
+| Invoice numbering | Pattern, next sequence number | The number the next invoice is drawn with |
+| Appearance | Which line columns the document shows | The invoice document |
+| Messages | Send, reminder and thank-you email bodies | Nothing yet, and the screen says so |
+| Field labels | All 29 labels | Every heading on the invoice document |
+| Item types | Service, Product, Direct Costs, and any others | The type on every invoice line |
+
+**Every section changes an invoice, and that is asserted rather than asserted-to.** Before this, `invoiceDefaults`, `invoiceAppearance`, `invoiceMessages` and `invoiceFieldLabels` were stored, editable, serialized to the browser and read by nothing. `tests/invoice-config.test.ts` changes each setting, exercises the real path, and asserts the output differs; `tests/settings-consumed.test.ts` is the structural version and fails on any setting that nothing outside the settings plumbing reads.
+
+**Messages is the one section that cannot keep its promise,** because nothing sends email until the SendGrid credentials arrive (TALLY-19). It says so in a panel at the top rather than implying the mail goes out, and its exemption in the structural check carries the same reason.
+
+**Saving is per section.** Two people editing different sections cannot overwrite each other, and the audit row names which part of the configuration changed.
+
+**Three rules the screens depend on:**
+
+- **Empty means default, never nothing.** Clearing a field label puts its default text back. A blank column heading on an invoice is never what somebody meant, and only the override is stored, so a later change to a default reaches an account that never overrode it.
+- **A default is a fallback, not an override.** Setting a default subject fills in a new invoice that did not specify one, and never rewrites a draft somebody already edited. A client's own payment terms beat the account default, which the screen states out loud because it is not guessable.
+- **Rounding applies to the total of a line, never to an entry.** BACKEND_PRD section 4.3. Two entries of 7 and 8 minutes under nearest-15 are 15 minutes, not 30, and the error grows with how finely somebody tracks.
 
 ### 12.1 Overview
 

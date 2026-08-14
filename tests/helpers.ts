@@ -10,6 +10,7 @@ import { sql as raw } from "drizzle-orm";
 import { closePool, db, sql } from "@/server/db/client";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
+import { invalidateSettings } from "@/server/services/settings";
 import { BASE_PROFILES } from "@/server/auth/capabilities";
 
 /**
@@ -41,13 +42,17 @@ export async function seedProfiles() {
   return Object.fromEntries(values.map((v) => [v.baseKey!, v.id])) as Record<string, string>;
 }
 
-export async function seedSettings() {
+export async function seedSettings(over: Partial<typeof s.settings.$inferInsert> = {}) {
   await db.insert(s.settings).values({
     id: 1,
     companyName: "JH Media Group",
     companyAddress: "245 N. Highland Ave\nSuite 230-185\nAtlanta GA 30307",
     timezone: "America/New_York",
+    ...over,
   });
+  // The service caches the row for a few seconds, so a test that seeds a
+  // different account would otherwise read the previous one.
+  invalidateSettings();
 }
 
 export async function makeUser(opts: {

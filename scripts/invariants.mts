@@ -132,6 +132,52 @@ const checks: Check[] = [
       GROUP BY number HAVING COUNT(*) > 1
     `,
   },
+  {
+    name: "exactly one item type is the default for billable hours",
+    why:
+      "Without one, a new time line has no type and the invoice cannot say what it is. " +
+      "With two, which one wins depends on row order, which is not a decision anybody made.",
+    query: sql`
+      SELECT COUNT(*) AS n FROM invoice_item_types
+       WHERE is_default_for_services AND archived_at IS NULL
+      HAVING COUNT(*) <> 1
+    `,
+  },
+  {
+    name: "exactly one item type is the default for expenses",
+    why: "Same as above, for the other half of the split.",
+    query: sql`
+      SELECT COUNT(*) AS n FROM invoice_item_types
+       WHERE is_default_for_expenses AND archived_at IS NULL
+      HAVING COUNT(*) <> 1
+    `,
+  },
+  {
+    name: "every invoice line has an item type",
+    why:
+      "A null type renders a blank Item Type column on a document a client is holding. " +
+      "The migration backfilled the existing ones; anything null since then arrived by " +
+      "a path that did not go through createInvoice.",
+    query: sql`
+      SELECT li.id, li.description
+        FROM invoice_line_items li
+        JOIN invoices i ON i.id = li.invoice_id
+       WHERE li.item_type_id IS NULL AND i.deleted_at IS NULL
+    `,
+  },
+  {
+    name: "the invoice sequence is ahead of every number it has issued",
+    why:
+      "If the next sequence number is behind one already used, nothing is wrong until " +
+      "the next invoice is drawn, and then the unique index surfaces it as a 500 in " +
+      "front of a client.",
+    query: sql`
+      SELECT s.invoice_next_seq, i.number
+        FROM settings s
+        JOIN invoices i ON i.number = s.invoice_next_seq::text
+       WHERE i.deleted_at IS NULL
+    `,
+  },
 ];
 
 let broken = 0;

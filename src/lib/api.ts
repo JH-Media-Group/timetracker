@@ -33,6 +33,9 @@ import type {
   PermissionProfile, RecurringInvoice, RecurringInvoiceLine, Retainer, BillingType, BillBy, BudgetBy,
   UninvoicedClient,
 } from "./types";
+import type {
+  FieldLabels, InvoiceAppearance, InvoiceDefaults,
+} from "@/domain/invoice-config";
 import { startOfWeek } from "./format";
 
 const BASE = "/api/v1";
@@ -502,6 +505,7 @@ interface InvoiceWire {
   lineItems?: {
     id: string; position: number; projectId: string | null; description: string;
     quantity: number; unitPriceCents: number; amountCents: number; isTaxed: boolean;
+    itemType: string | null; isTime: boolean;
   }[];
   payments?: {
     id: string; amountCents: number; paidAt: string; method: string | null;
@@ -522,7 +526,11 @@ function fromInvoice(i: InvoiceWire): InvoiceView {
     id: l.id,
     invoiceId: i.id,
     position: l.position,
-    itemType: l.isTaxed ? "Service" : "Expense",
+    // The real column, not a guess. This used to read `isTaxed ? "Service" :
+    // "Expense"`, which was a placeholder from before item types were connected
+    // and told you whether a line was taxed, not what it was.
+    itemType: l.itemType ?? "",
+    isTime: l.isTime ?? false,
     projectId: opt(l.projectId),
     description: l.description,
     quantity: l.quantity,
@@ -586,16 +594,23 @@ function fromInvoice(i: InvoiceWire): InvoiceView {
 }
 
 interface SettingsWire {
-  companyName: string; companyAddress: string | null; baseCurrency: string; timezone: string;
+  companyName: string; companyAddress: string | null; taxId: string | null; baseCurrency: string; timezone: string;
   weekStartsOn: number; fiscalYearStartMonth: number; timerMode: string; timeDisplay: string;
   roundingMinutes: number; roundingMode: string; requireNotes: string; allowFutureDates: boolean;
   flagMissingBelowSeconds: number | null; lockTimesheetsAfterDays: number | null;
   projectNotesVisibility: string; modules: Record<string, boolean>; invoiceNumberPattern: string;
+  invoiceLabels: FieldLabels; invoiceAppearance: InvoiceAppearance; invoiceDefaults: InvoiceDefaults;
 }
 
 const fromSettings = (s: SettingsWire): Settings => ({
+  // Already resolved by the server. Re-resolving here would be a second place
+  // for the defaults to live, which is what `invoice-config.ts` exists to avoid.
+  invoiceLabels: s.invoiceLabels,
+  invoiceAppearance: s.invoiceAppearance,
+  invoiceDefaults: s.invoiceDefaults,
   companyName: s.companyName,
   companyAddress: s.companyAddress ?? "",
+  taxId: s.taxId ?? "",
   baseCurrency: s.baseCurrency,
   timezone: s.timezone,
   weekStartsOn: (s.weekStartsOn === 0 ? 0 : 1) as 0 | 1,
@@ -1356,6 +1371,51 @@ export async function listUninvoicedClients(): Promise<UninvoicedClient[]> {
   }));
 }
 
+export interface InvoiceConfig {
+  company: { name: string; address: string | null; taxId: string | null };
+  defaults: InvoiceDefaults;
+  rounding: { minutes: number; mode: string };
+  appearance: InvoiceAppearance;
+  messages: Record<string, string>;
+  labels: FieldLabels;
+  numbering: { pattern: string; nextSeq: number; example: string };
+}
+
+export type InvoiceConfigPatch =
+  | { section: "company"; value: { name: string; address?: string | null; taxId?: string | null } }
+  | { section: "defaults"; value: Record<string, unknown> }
+  | { section: "appearance"; value: Record<string, unknown> }
+  | { section: "messages"; value: Record<string, string> }
+  | { section: "labels"; value: Record<string, string> }
+  | { section: "numbering"; value: { pattern?: string; nextSeq?: number } };
+
+export const getInvoiceConfig = () => get<InvoiceConfig>("/settings/invoice-config");
+
+export const updateInvoiceConfig = (input: InvoiceConfigPatch) =>
+  patch<InvoiceConfig>("/settings/invoice-config", input);
+
+export interface ItemType {
+  id: ID;
+  name: string;
+  isDefaultForExpenses: boolean;
+  isDefaultForServices: boolean;
+  archivedAt: string | null;
+  usageCount: number;
+}
+
+export const listItemTypes = () => get<ItemType[]>("/settings/item-types");
+
+export const createItemType = (input: { name: string }) =>
+  post<ItemType>("/settings/item-types", input);
+
+export const updateItemType = (
+  id: ID,
+  input: { name?: string; isDefaultForExpenses?: boolean; isDefaultForServices?: boolean }
+) => patch<ItemType>(`/settings/item-types/${id}`, input);
+
+export const removeItemType = (id: ID) =>
+  del<{ archived: boolean }>(`/settings/item-types/${id}`);
+
 export interface CreateInvoiceInput {
   clientId: ID;
   subject?: string;
@@ -1388,7 +1448,9 @@ export async function createInvoice(input: CreateInvoiceInput): Promise<InvoiceV
       // from it is how the preview and the invoice came out dollars apart.
       amountCents: Math.round(l.amountCents),
       isTaxed: l.kind !== "expense",
-      itemType: l.kind === "expense" ? "Expense" : "Service",
+      // The server resolves this to whichever type currently holds the default
+      // role, so the browser never has to know which one that is.
+      kind: l.kind,
     })),
     projectIds: [...new Set(input.lines.map((l) => l.projectId))],
     timeEntryIds: input.lines.flatMap((l) => l.entryIds),

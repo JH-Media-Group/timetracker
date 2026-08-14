@@ -188,7 +188,9 @@ export const invoiceLineSchema = z.object({
    */
   amountCents: z.number().int().optional(),
   isTaxed: z.boolean().default(true),
-  itemType: z.string().max(60).optional(),
+  /** What the line is, which decides its item type when no id is given. */
+  kind: z.enum(["time", "expense"]).optional(),
+  itemTypeId: z.string().uuid().optional(),
 });
 
 export const invoiceSchema = z.object({
@@ -265,5 +267,62 @@ export const submitSchema = z.object({
 export const reviewSchema = z.object({
   note: z.string().max(2000).optional(),
 });
+
+/* -------------------------------------------------- invoice configuration */
+
+/**
+ * One section at a time, so two people editing different sections cannot
+ * overwrite each other and the audit row says which part changed. The values
+ * are re-resolved in the service as well: this stops nonsense at the door, and
+ * `resolveDefaults` stops it reaching an invoice.
+ */
+export const invoiceConfigSchema = z.discriminatedUnion("section", [
+  z.object({
+    section: z.literal("company"),
+    value: z.object({
+      name: z.string().trim().min(1).max(200),
+      address: z.string().max(2000).nullable().optional(),
+      taxId: z.string().max(60).nullable().optional(),
+    }),
+  }),
+  z.object({
+    section: z.literal("defaults"),
+    value: z.object({
+      roundingMinutes: z.number().int().min(0).max(60).optional(),
+      roundingMode: z.enum(["nearest", "up", "down"]).optional(),
+      showTotalHours: z.boolean().optional(),
+      paymentTermDays: z.number().int().min(0).max(365).optional(),
+      subject: z.string().max(200).optional(),
+      notes: z.string().max(5000).optional(),
+    }),
+  }),
+  z.object({
+    section: z.literal("appearance"),
+    value: z.object({
+      showItemType: z.boolean().optional(),
+      showQuantity: z.boolean().optional(),
+      showUnitPrice: z.boolean().optional(),
+      showProject: z.boolean().optional(),
+      accent: z.enum(["brand", "ink", "success", "warning"]).optional(),
+    }),
+  }),
+  z.object({
+    section: z.literal("messages"),
+    value: z.record(z.string(), z.string().max(5000)),
+  }),
+  z.object({
+    section: z.literal("labels"),
+    // An empty string is legal and means "use the default", which is why this
+    // has no `min(1)`. The service turns it back into an absent key.
+    value: z.record(z.string(), z.string().max(200)),
+  }),
+  z.object({
+    section: z.literal("numbering"),
+    value: z.object({
+      pattern: z.string().trim().min(1).max(120).optional(),
+      nextSeq: z.number().int().min(1).max(9_999_999).optional(),
+    }),
+  }),
+]);
 
 export { z };

@@ -7,6 +7,7 @@ import type {
   Client, Expense, ExpenseCategory, Invoice, InvoiceLineItem, Project,
   RecurringInvoice, Retainer, Settings, Task, TimeEntry, TimesheetSubmission, User,
 } from "@/lib/types";
+import { defaultLabels, INVOICE_APPEARANCE, INVOICE_DEFAULTS } from "@/domain/invoice-config";
 
 /* ---------------------------------------------------------------- utilities */
 
@@ -129,36 +130,36 @@ type BillingTypeLite = "time_and_materials" | "fixed_fee" | "non_billable";
 type BillBy2 = "project" | "tasks" | "people" | "none";
 
 const projectSeeds: Seed[] = [
-  { name: "Example Project 01", client: "Example Client 03", billingType: "fixed_fee", billBy: "people", fee: 600000, budgetFees: 600000, members: ["u3", "u5", "u7", "u9", "u10"], managers: ["u1", "u2", "u3"] },
-  { name: "Example Project 02", client: "Example Client 04", billingType: "fixed_fee", billBy: "people", fee: 700000, budgetHours: 20, members: ["u6", "u10", "u9"], managers: ["u1", "u2", "u3"] },
+  { name: "Example Project 01", client: "Example Client 03", billingType: "fixed_fee", billBy: "people", fee: 700000, budgetFees: 700000, members: ["u3", "u5", "u7", "u9", "u10"], managers: ["u1", "u2", "u3"] },
+  { name: "Example Project 02", client: "Example Client 04", billingType: "fixed_fee", billBy: "people", fee: 100000, budgetHours: 20, members: ["u6", "u10", "u9"], managers: ["u1", "u2", "u3"] },
   { name: "Example Project 03", client: "Example Client 05", billingType: "time_and_materials", billBy: "people", budgetHours: 20, monthly: true, members: ["u3", "u7"], managers: ["u2"] },
   { name: "Example Project 04", client: "Example Client 06", billingType: "time_and_materials", billBy: "people", budgetHours: 20, members: ["u2", "u7"], managers: ["u2"] },
   { name: "Example Client 07", client: "Example Client 07", billingType: "non_billable", billBy: "none", members: ["u1", "u3"], managers: ["u1"] },
-  { name: "Example Project 06", client: "Example Client 12", billingType: "time_and_materials", billBy: "people", budgetFees: 400000, members: ["u3", "u7", "u8", "u9"], managers: ["u3"] },
-  { name: "Example Project 07", client: "Example Client 12", billingType: "time_and_materials", billBy: "people", budgetFees: 500000, members: ["u7", "u8"], managers: ["u3"] },
-  { name: "Example Project 08", client: "Example Client 12", billingType: "time_and_materials", billBy: "people", budgetFees: 600000, members: ["u3", "u7", "u8", "u9", "u11"], managers: ["u3"] },
+  { name: "Example Project 06", client: "Example Client 12", billingType: "time_and_materials", billBy: "people", budgetFees: 500000, members: ["u3", "u7", "u8", "u9"], managers: ["u3"] },
+  { name: "Example Project 07", client: "Example Client 12", billingType: "time_and_materials", billBy: "people", budgetFees: 600000, members: ["u7", "u8"], managers: ["u3"] },
+  { name: "Example Project 08", client: "Example Client 12", billingType: "time_and_materials", billBy: "people", budgetFees: 700000, members: ["u3", "u7", "u8", "u9", "u11"], managers: ["u3"] },
   { name: "Example Project 09", client: "Example Client 12", billingType: "time_and_materials", billBy: "people", budgetHours: 20, monthly: true, members: ["u7", "u8"], managers: ["u3"] },
   { name: "Example Project 10", client: "Example Client 14", billingType: "time_and_materials", billBy: "people", members: ["u7", "u3", "u11"], managers: ["u3"] },
   { name: "Example Project 11", client: "Example Client 17", billingType: "time_and_materials", billBy: "people", budgetHours: 20, monthly: true, members: ["u3"], managers: ["u2"] },
-  { name: "Example Project 12", client: "Example Client 18", billingType: "fixed_fee", billBy: "people", fee: 300000, members: ["u3", "u7"], managers: ["u2"] },
+  { name: "Example Project 12", client: "Example Client 18", billingType: "fixed_fee", billBy: "people", fee: 400000, members: ["u3", "u7"], managers: ["u2"] },
   { name: "Example Project 13", client: "Example Client 19", billingType: "time_and_materials", billBy: "people", members: ["u3", "u7"], managers: ["u2"] },
-  { name: "Example Project 14", client: "Example Client 22", billingType: "fixed_fee", billBy: "people", fee: 500000, members: ["u7", "u9"], managers: ["u3"] },
+  { name: "Example Project 14", client: "Example Client 22", billingType: "fixed_fee", billBy: "people", fee: 600000, members: ["u7", "u9"], managers: ["u3"] },
   { name: "Example Project 15", client: "Example Client 25", billingType: "time_and_materials", billBy: "people", members: ["u2", "u3"], managers: ["u2"] },
   { name: "Example Project 16", client: "Example Internal", billingType: "non_billable", billBy: "none", members: ["u1", "u2", "u3"], managers: ["u1"] },
   { name: "Example Project 17", client: "Example Internal", billingType: "non_billable", billBy: "none", members: ["u1", "u2", "u4"], managers: ["u1"] },
   { name: "Operations", client: "Example Internal", billingType: "non_billable", billBy: "none", members: users.map((u) => u.id), managers: ["u1"] },
-  { name: "Example Project 19", client: "Example Client 30", billingType: "fixed_fee", billBy: "people", fee: 300000, members: ["u2", "u6", "u7"], managers: ["u2"] },
+  { name: "Example Project 19", client: "Example Client 30", billingType: "fixed_fee", billBy: "people", fee: 400000, members: ["u2", "u6", "u7"], managers: ["u2"] },
   { name: "Example Project 20", client: "Example Client 32", billingType: "time_and_materials", billBy: "people", budgetHours: 20, monthly: true, members: ["u3"], managers: ["u2"] },
-  { name: "Example Project 21", client: "Example Client 38", billingType: "time_and_materials", billBy: "people", budgetFees: 500000, members: ["u7"], managers: ["u3"] },
+  { name: "Example Project 21", client: "Example Client 38", billingType: "time_and_materials", billBy: "people", budgetFees: 600000, members: ["u7"], managers: ["u3"] },
   { name: "Example Project 22", client: "Example Client 39", billingType: "time_and_materials", billBy: "people", members: ["u7", "u9", "u11"], managers: ["u3"] },
   { name: "Example Project 23", client: "Example Client 39", billingType: "time_and_materials", billBy: "people", members: ["u7", "u9", "u11", "u8"], managers: ["u3"] },
   { name: "Example Project 24", client: "Example Client 41", billingType: "non_billable", billBy: "none", members: ["u1", "u3"], managers: ["u1"] },
   { name: "Example Project 25", client: "Example Client 42", billingType: "time_and_materials", billBy: "people", members: ["u3", "u7"], managers: ["u2"] },
-  { name: "Example Project 26", client: "Example Client 43", billingType: "time_and_materials", billBy: "people", budgetFees: 300000, members: ["u3", "u7"], managers: ["u3"] },
+  { name: "Example Project 26", client: "Example Client 43", billingType: "time_and_materials", billBy: "people", budgetFees: 400000, members: ["u3", "u7"], managers: ["u3"] },
   { name: "Example Client 40", client: "Example Client 40", billingType: "time_and_materials", billBy: "people", members: ["u2", "u3", "u7"], managers: ["u2"] },
   { name: "Example Client 40 plan", client: "Example Learning", billingType: "time_and_materials", billBy: "people", budgetHours: 20, monthly: true, members: ["u2", "u6"], managers: ["u2"] },
-  { name: "Hosting", client: "Example Client 49", billingType: "fixed_fee", billBy: "people", fee: 600000, members: ["u7"], managers: ["u3"] },
-  { name: "Example Project 30", client: "Example Client 50", billingType: "fixed_fee", billBy: "people", fee: 700000, members: ["u1"], managers: ["u1"] },
+  { name: "Hosting", client: "Example Client 49", billingType: "fixed_fee", billBy: "people", fee: 700000, members: ["u7"], managers: ["u3"] },
+  { name: "Example Project 30", client: "Example Client 50", billingType: "fixed_fee", billBy: "people", fee: 100000, members: ["u1"], managers: ["u1"] },
 ];
 
 export const projects: Project[] = projectSeeds.map((s, i) => ({
@@ -332,7 +333,7 @@ export const invoices: Invoice[] = [];
       const qty = Math.round(between(1, 12));
       const unit = Math.round(between(15000, 900000) / 100) * 100;
       return {
-        id: `il${n}-${li}`, invoiceId: `inv${n + 1}`, position: li, itemType: "Service",
+        id: `il${n}-${li}`, invoiceId: `inv${n + 1}`, position: li, itemType: "Service", isTime: true,
         projectId: proj?.id,
         description: pick(["Design Completion", "Development Completion", "Monthly Support Plan",
           "Hosting and Maintenance", "Discovery and Planning", "UX Design Services"]),
@@ -411,7 +412,11 @@ export const retainers: Retainer[] = [
 /* ----------------------------------------------------------------- settings */
 
 export const settings: Settings = {
+  invoiceLabels: defaultLabels(),
+  invoiceAppearance: INVOICE_APPEARANCE,
+  invoiceDefaults: INVOICE_DEFAULTS,
   companyName: "JH Media Group Inc.",
+  taxId: "",
   companyAddress: "245 N. Highland Ave\nSuite 230-185\nAtlanta GA\n30307",
   baseCurrency: "USD",
   timezone: "America/New_York",
