@@ -83,6 +83,12 @@ Being straight about this so you do not waste time reporting it.
 - **Three controls are disabled on purpose,** with the reason on them: the full
   account export, the CSV import, and the integration connect buttons. Per-grid
   Export does work and writes what is on screen to a CSV.
+- **A new invoice will not look like the seeded ones.** Harvest produced
+  `71301-ANN-1`: a running number, a client code, and the same number again.
+  Nothing expresses that exactly, so new invoices come out as
+  `71341-ANN`. The sequence continues rather than restarting, so nothing
+  collides, but which format to keep after the migration is one of the decisions
+  in [PERMISSIONS-AND-CREDENTIALS.md](PERMISSIONS-AND-CREDENTIALS.md).
 
 ---
 
@@ -120,11 +126,16 @@ includes it. Quoting that id finds the exact request in the server log.
 ## Running the checks yourself
 
 ```powershell
-pnpm test           # 235 tests, needs the test database from db:setup
+pnpm test            # 248 tests, needs the test database from db:setup
 pnpm typecheck
 pnpm build
-pnpm authz:sweep    # the profile-by-endpoint permission matrix
-pnpm authz:scope    # proves a Member gets only their own rows and no money
+pnpm authz:sweep     # the profile-by-endpoint permission matrix
+pnpm authz:scope     # proves a Member gets only their own rows and no money
+pnpm db:invariants   # ten invariants checked against the data itself
+pnpm sweep           # the nightly housekeeping, safe to run any time
 ```
 
-The last two create their own accounts and delete them afterwards.
+`authz:sweep` and `authz:scope` create their own accounts and delete them
+afterwards. `db:invariants` is read-only and is the one to run after the Harvest
+import: it says which table a wrong number is in rather than leaving you to
+guess.

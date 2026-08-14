@@ -92,8 +92,13 @@ async function main() {
       requireNotes: "never",
       allowFutureDates: false,
       flagMissingBelowSeconds: 8 * 3600,
-      invoiceNumberPattern: "{seq:5}",
-      invoiceNextSeq: mock.invoices.length + 1,
+      // Harvest's numbers are 71300 + n, a client code, and n again. Nothing
+      // continues that exactly, and which format to keep after the migration is
+      // Jason's decision (see docs/PERMISSIONS-AND-CREDENTIALS.md). What the
+      // seed can do is start the sequence where the sample data ends, so the
+      // first invoice created while testing does not collide with one of them.
+      invoiceNumberPattern: "{seq:5}-{client_code}",
+      invoiceNextSeq: 71300 + mock.invoices.length + 1,
       modules: { time: true, expenses: true, approvals: true, team: true, invoices: true, reports: true },
     })
     // The migration inserts a bare row so services always find one; the seed
@@ -108,7 +113,7 @@ async function main() {
         timerMode: "start_end",
         flagMissingBelowSeconds: 8 * 3600,
         allowFutureDates: false,
-        invoiceNextSeq: mock.invoices.length + 1,
+        invoiceNextSeq: 71300 + mock.invoices.length + 1,
         modules: { time: true, expenses: true, approvals: true, team: true, invoices: true, reports: true },
       },
     });
