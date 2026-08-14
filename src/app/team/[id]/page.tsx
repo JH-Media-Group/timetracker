@@ -10,7 +10,7 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { CalendarClock, Mail } from "lucide-react";
 import * as api from "@/lib/api";
@@ -36,7 +36,17 @@ export default function PersonDetailPage() {
   const person = userById.get(id);
   const { granularity, anchor, period, onChange } = usePeriod("month", ["week", "month", "quarter", "year"]);
 
-  const [tab, setTab] = React.useState("projects");
+  /**
+   * Arriving from a project's Tasks tab (TALLY-12).
+   *
+   * The question being asked at that moment is "what has this person done on
+   * this project", so the link carries the project and lands on Recent time
+   * already filtered, rather than on their whole history for the reader to
+   * narrow again.
+   */
+  const search = useSearchParams();
+  const fromProject = search.get("project") ?? "";
+  const [tab, setTab] = React.useState(fromProject ? "entries" : "projects");
 
   const { data: entries = [] } = useQuery({
     queryKey: ["time", "user", id, period.from, period.to],
@@ -115,7 +125,7 @@ export default function PersonDetailPage() {
    * The projects offered are the ones this person has actually booked to in the
    * period, so the list never contains a choice that yields nothing.
    */
-  const [recentProject, setRecentProject] = React.useState("");
+  const [recentProject, setRecentProject] = React.useState(fromProject);
 
   const recentProjects = React.useMemo(() => {
     const ids = new Set(list.map((e) => e.projectId));

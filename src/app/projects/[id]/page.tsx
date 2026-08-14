@@ -28,6 +28,8 @@ export default function ProjectDetailPage() {
   const router = useRouter();
   const { projectById, clientById, taskById, userById, settings, ready, pinnedProjectIds } = useApp();
   const can = useCan();
+  /** Whether a person's name here should be a link at all (TALLY-12). */
+  const canSeePeople = can("people:view");
   const qc = useQueryClient();
   const toast = useToast();
   const pinned = pinnedProjectIds.includes(id);
@@ -385,12 +387,27 @@ export default function ProjectDetailPage() {
                             */}
                             <span className="flex min-w-0 flex-1 items-center gap-2">
                               {u && <Avatar user={u} size="xs" />}
-                              <Link
-                                href={`/team/${uid}`}
-                                className="truncate text-ink-secondary hover:text-ink hover:underline"
-                              >
-                                {u?.firstName} {u?.lastName}
-                              </Link>
+                              {/*
+                                Carries the project, so the page it opens
+                                answers "what has this person done on THIS
+                                project" rather than showing their whole
+                                history (TALLY-12).
+
+                                A reader who may not see other people gets
+                                plain text rather than a link that would refuse
+                                them: the server decides, and the UI does not
+                                offer what the server would turn down.
+                              */}
+                              {canSeePeople ? (
+                                <Link
+                                  href={`/team/${uid}?project=${project.id}`}
+                                  className="truncate text-ink-secondary hover:text-ink hover:underline"
+                                >
+                                  {u?.firstName} {u?.lastName}
+                                </Link>
+                              ) : (
+                                <span className="truncate text-ink-secondary">{u?.firstName} {u?.lastName}</span>
+                              )}
                             </span>
                             <span className="w-24 text-right tabular-nums text-ink-secondary">{formatDuration(secs, settings.timeDisplay)}</span>
                             <span className="w-36" />
