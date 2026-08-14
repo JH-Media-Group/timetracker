@@ -31,7 +31,7 @@ Don't re-derive what is documented; cite back to it. If code and PRD disagree, t
 
 ## Non-negotiable conventions
 
-- **No em dashes** in user-facing output: UI copy, docs, emails, commit-visible prose. Use commas, parentheses, or hyphens. `grep -cP '\x{2014}'` should return 0 on every doc (the escape keeps this check from flagging itself).
+- **No em dashes** in user-facing output: UI copy, docs, emails, commit-visible prose. Use commas, parentheses, or hyphens. `grep -cP '\x{2014}'` should return 0 on every doc (the escape keeps this check from flagging itself). The one exception is the em dash used as the **no value** glyph in a table cell, of which there are seven: a hyphen there reads as a minus sign, and a money column cannot afford the ambiguity. That is typography, not prose.
 - **PowerShell syntax** for any command shown to Jason to run himself. The Bash tool stays bash.
 - **Money is `bigint` cents, durations are integer seconds.** No floats touch storage. Aggregate first, divide last (BACKEND_PRD §3.6).
 - **All business logic in `src/services/`**, plain functions taking `Ctx`. Route handlers, RSC pages, and job processors are thin callers. No Server Actions.
