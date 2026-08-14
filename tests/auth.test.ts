@@ -165,6 +165,55 @@ describe("sessions", () => {
     ).rejects.toThrow();
   });
 
+  /**
+   * The rolling touch, exercised.
+   *
+   * It runs at most once an hour per session, so every session created during a
+   * test run or a morning of clicking is too fresh to trigger it. That is how a
+   * Date interpolated into a raw sql template survived three rounds of review
+   * and a production build: the code path that broke was not reachable until
+   * somebody had been signed in for an hour, and then every authenticated
+   * request 500ed at once.
+   */
+  it("extends a session that has not been seen for an hour", async () => {
+    const userId = await makeUser({ profileId: profiles.member! });
+    const { token, expiresAt } = await createSession(userId);
+
+    // Old enough to cross the touch interval.
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await db.update(s.sessions).set({ lastSeenAt: twoHoursAgo });
+
+    const actor = await actorForToken(token);
+    expect(actor, "an hour-old session must still resolve").not.toBeNull();
+    expect(actor!.userId).toBe(userId);
+
+    const [row] = await db.select().from(s.sessions).where(eq(s.sessions.userId, userId));
+    expect(row!.expiresAt.getTime()).toBeGreaterThan(expiresAt.getTime());
+    expect(row!.lastSeenAt.getTime()).toBeGreaterThan(twoHoursAgo.getTime());
+
+    // And the response has to be able to send the browser the new expiry, or
+    // the cookie still dies thirty days after sign-in whatever the row says.
+    expect(actor!.renewedUntil).toBeInstanceOf(Date);
+  });
+
+  it("never lets the rolling extension outrun the absolute cap", async () => {
+    const userId = await makeUser({ profileId: profiles.member! });
+    const { token } = await createSession(userId);
+
+    // A session near the end of its ninety days, and stale enough to be touched.
+    const capAt = new Date(Date.now() + 2 * 86_400_000);
+    await db.update(s.sessions).set({
+      lastSeenAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+      expiresAt: capAt,
+      absoluteExpiresAt: capAt,
+    });
+
+    await expect(actorForToken(token)).resolves.not.toBeNull();
+
+    const [row] = await db.select().from(s.sessions).where(eq(s.sessions.userId, userId));
+    expect(row!.expiresAt.getTime()).toBeLessThanOrEqual(row!.absoluteExpiresAt.getTime());
+  });
+
   it("refuses a session past its absolute cap", async () => {
     const userId = await makeUser({ profileId: profiles.member! });
     const { token } = await createSession(userId);

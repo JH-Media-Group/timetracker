@@ -265,10 +265,18 @@ describe("timers", () => {
     const ctx = ctxFor(alice, "administrator");
     const { entry } = await createTimeEntry(ctx, { projectId, taskId: designTaskId, start: true });
 
-    // Backdate the start so there is measurable elapsed time.
+    // Backdate the start relative to the CONTEXT's clock, not the wall clock.
+    //
+    // `ctxFor` injects a fixed 15:00Z so "today" is a constant, and stopping
+    // measures against that. Backdating from `Date.now()` meant this test
+    // passed all morning and failed every afternoon, because after 15:00Z real
+    // time the "backdated" start was in the injected clock's future and the
+    // elapsed time clamped to zero. A test that depends on the hour it runs is
+    // worse than no test: it teaches people to rerun rather than to look.
+    const startedAt = new Date(at(`${TODAY}T15:00:00Z`).getTime() - 90_000);
     await db
       .update(s.timeEntries)
-      .set({ timerStartedAt: new Date(Date.now() - 90_000) })
+      .set({ timerStartedAt: startedAt })
       .where(eq(s.timeEntries.id, entry.id));
 
     const stopped = await stopTimer(ctx);

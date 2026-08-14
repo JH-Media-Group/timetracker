@@ -152,7 +152,14 @@ export async function actorForToken(token: string): Promise<Actor | null> {
     const extended = new Date(now.getTime() + ROLLING_DAYS * 86_400_000);
     const [updated] = await db
       .update(s.sessions)
-      .set({ lastSeenAt: now, expiresAt: sql`LEAST(${extended}, ${s.sessions.absoluteExpiresAt})` })
+      // `${extended}` would hand the driver a Date object, which it cannot
+      // serialise, and every authenticated request would 500 from the moment
+      // the first session crossed the touch interval. Text with an explicit
+      // cast is the only safe way to put a time into a raw sql template.
+      .set({
+        lastSeenAt: now,
+        expiresAt: sql`LEAST(${extended.toISOString()}::timestamptz, ${s.sessions.absoluteExpiresAt})`,
+      })
       .where(eq(s.sessions.id, row.sessionId))
       .returning({ expiresAt: s.sessions.expiresAt });
     await db.update(s.users).set({ lastSeenAt: now }).where(eq(s.users.id, row.userId));
