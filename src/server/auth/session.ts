@@ -208,12 +208,40 @@ export const clearedCookieOptions = () =>
     maxAge: 0,
   });
 
-/** Nightly sweep. Sessions that are expired or revoked have nothing to say. */
+/**
+ * Nightly sweep for the idempotency ledger.
+ *
+ * The rows exist so a request retried within a few minutes returns the first
+ * result instead of doing the work twice. They hold whole response bodies,
+ * including entire invoices, and nothing was removing them: a table that only
+ * grows, full of exactly the data everything else in this system is careful
+ * about. A day is far longer than any client retries over.
+ */
+export async function purgeIdempotencyKeys(olderThanHours = 24): Promise<number> {
+  const cutoff = new Date(Date.now() - olderThanHours * 3_600_000).toISOString();
+  const rows = await db
+    .delete(s.idempotencyKeys)
+    .where(sql`${s.idempotencyKeys.createdAt} < ${cutoff}::timestamptz`)
+    .returning({ key: s.idempotencyKeys.key });
+  return rows.length;
+}
+
+/**
+ * Nightly sweep. Sessions that are expired or revoked have nothing to say.
+ *
+ * The cutoff is interpolated as text with an explicit cast. A JS `Date` handed
+ * to a raw `sql` template reaches the driver as an object it cannot serialise,
+ * and the query throws. Nothing called this function, so nothing found that
+ * until `pnpm sweep` gave it a caller.
+ */
 export async function purgeDeadSessions(olderThanDays = 7): Promise<number> {
-  const cutoff = new Date(Date.now() - olderThanDays * 86_400_000);
+  const cutoff = new Date(Date.now() - olderThanDays * 86_400_000).toISOString();
   const rows = await db
     .delete(s.sessions)
-    .where(sql`(${s.sessions.expiresAt} < ${cutoff}) OR (${s.sessions.revokedAt} IS NOT NULL AND ${s.sessions.revokedAt} < ${cutoff})`)
+    .where(
+      sql`(${s.sessions.expiresAt} < ${cutoff}::timestamptz)
+          OR (${s.sessions.revokedAt} IS NOT NULL AND ${s.sessions.revokedAt} < ${cutoff}::timestamptz)`
+    )
     .returning({ id: s.sessions.id });
   return rows.length;
 }
