@@ -126,7 +126,7 @@ includes it. Quoting that id finds the exact request in the server log.
 ## Running the checks yourself
 
 ```powershell
-pnpm test            # 248 tests, needs the test database from db:setup
+pnpm test            # 255 tests, needs the test database from db:setup
 pnpm typecheck
 pnpm build
 pnpm authz:sweep     # the profile-by-endpoint permission matrix

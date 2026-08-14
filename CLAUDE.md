@@ -13,7 +13,7 @@ Auto-loaded into every Claude Code session in this repo. Read it before doing an
 ## TL;DR
 
 - **Product:** Tally (working codename). An in-house replacement for JH Media Group's Harvest account: time tracking, project profitability, and invoicing. Internal only, never sold, served from a single DigitalOcean droplet.
-- **Status (2026-08-14):** PRDs v1.1, design system complete, and the **whole thing runs end to end against Postgres**. `pnpm db:setup` then `pnpm dev -p 3200`, sign in as `person01@example.com` / `tally-dev-password`. 235 tests, clean typecheck, clean `next build`, clean dependency audit. Not built yet: Google SSO, email delivery, receipt and PDF storage, the job queue, and the Harvest import itself. Each of those is waiting on a credential; see [docs/PERMISSIONS-AND-CREDENTIALS.md](docs/PERMISSIONS-AND-CREDENTIALS.md).
+- **Status (2026-08-14):** PRDs v1.1, design system complete, and the **whole thing runs end to end against Postgres**. `pnpm db:setup` then `pnpm dev -p 3200`, sign in as `person01@example.com` / `tally-dev-password`. 255 tests, clean typecheck, clean `next build`, clean dependency audit. Not built yet: Google SSO, email delivery, receipt and PDF storage, the job queue, and the Harvest import itself. Each of those is waiting on a credential; see [docs/PERMISSIONS-AND-CREDENTIALS.md](docs/PERMISSIONS-AND-CREDENTIALS.md).
 - **Replaces:** the private Harvest account. Migration must reconcile to the cent; see BACKEND_PRD section 16.3.
 - **User:** Jason. PowerShell on Windows. No em dashes in any generated user-facing text, docs included.
 
