@@ -49,7 +49,7 @@ export function PageHeader({
   children?: React.ReactNode;   // the tab band
 }) {
   return (
-    <div className="sticky top-(--topbar-h) z-(--z-sticky) border-b border-border bg-bg/85 backdrop-blur-md backdrop-saturate-150">
+    <div className="sticky top-(--topbar-h) z-(--z-sticky) border-b border-border bg-bg/85 backdrop-blur-md backdrop-saturate-150 print:static print:border-0 print:bg-transparent print:backdrop-blur-none">
       <div className="px-6 pt-5">
         {breadcrumb && breadcrumb.length > 0 && (
           <nav className="mb-1 flex items-center gap-1.5 text-base text-ink-secondary" aria-label="Breadcrumb">
@@ -66,7 +66,9 @@ export function PageHeader({
             <h1 className="truncate text-2xl font-semibold tracking-(--ls-tight) text-ink">{title}</h1>
             {badge}
           </div>
-          {actions && <div className="flex flex-wrap items-center gap-2">{actions}</div>}
+          {/* The buttons are chrome, not document. An invoice printed with an
+              "Actions" menu across the top is not a document you send. */}
+          {actions && <div data-print="hide" className="flex flex-wrap items-center gap-2">{actions}</div>}
         </div>
         {children}
       </div>

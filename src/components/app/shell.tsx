@@ -183,7 +183,7 @@ function TopBar() {
   const router = useRouter();
 
   return (
-    <header className="sticky top-0 z-(--z-sticky) flex h-(--topbar-h) items-center justify-between gap-3 border-b border-border bg-bg/85 px-4 backdrop-blur-md backdrop-saturate-150">
+    <header data-print="hide" className="sticky top-0 z-(--z-sticky) flex h-(--topbar-h) items-center justify-between gap-3 border-b border-border bg-bg/85 px-4 backdrop-blur-md backdrop-saturate-150">
       <div className="flex min-w-0 items-center gap-2">
         <Link href="/timesheet" className="mr-2 hidden shrink-0 items-center md:flex" aria-label="Tally home">
           <Logo height={22} />

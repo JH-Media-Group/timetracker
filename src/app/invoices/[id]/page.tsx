@@ -279,7 +279,9 @@ export default function InvoiceDetailPage() {
               )}
             </Card>
 
-            <Card>
+            {/* Internal. The timeline names who sent what and when, which is
+                our record of the conversation, not the client's copy of it. */}
+            <Card data-print="hide">
               <SectionTitle>Activity</SectionTitle>
               <ol className="flex flex-col gap-3">
                 {inv.events.map((e) => (
