@@ -1,13 +1,23 @@
 /**
  * The HTTP layer.
  *
- * One helper turns a service call into a response, so no route handler ever
- * writes its own try/catch, its own status code, or its own error shape. A
- * route that forgets to handle an error is not possible, because the route
- * never handles errors at all.
+ * One helper turns a service call into a response. It exists so that the things
+ * which must happen on every request happen whether or not the author of a new
+ * route remembers them.
  *
- * Route handlers are thin by construction: resolve the session, parse the
- * input, call the service, return what it returns.
+ * That principle was learned the hard way. An earlier version left the
+ * transaction, the audit flush, the rate limit, and the pagination as *available*
+ * helpers a route could call, and the result was exactly what you would predict:
+ * the audit rows for permission changes were silently dropped because those
+ * services never opened a transaction, and rate limiting existed on precisely
+ * one endpoint. So now:
+ *
+ *   - every mutating request runs inside a transaction, and the audit and event
+ *     buffers flush inside it. A service cannot opt out of being audited.
+ *   - every route declares a rate-limit class, and it is consumed here.
+ *   - a route may declare a capability, checked before the handler runs, in
+ *     addition to the service-level `assertCan`.
+ *   - idempotency claims the key **before** the handler runs, not after.
  *
  * Specification: docs/BACKEND_PRD.md section 6.
  */
@@ -15,13 +25,16 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { createHash } from "node:crypto";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { AppError, fromDatabaseError, toProblem, unauthenticated, validationFailed } from "./errors";
-import { createCtx, type Ctx } from "./ctx";
+import { assertCan, createCtx, flush, type Ctx } from "./ctx";
 import { resolveSession } from "./auth/session";
+import { enforce, type RouteClass } from "./auth/rate-limit";
 import { db } from "./db/client";
 import * as s from "./db/schema";
 import { newId } from "./db/ids";
+import { env } from "./env";
+import type { Capability } from "./auth/capabilities";
 
 export interface Meta {
   total?: number;
@@ -39,31 +52,44 @@ export interface Envelope<T> {
 
 type Handler<T> = (ctx: Ctx, req: NextRequest, params: Record<string, string>) => Promise<T | Envelope<T>>;
 
-interface RouteOptions {
-  /** Skips session resolution. Only for sign-in and health checks. */
+export interface RouteOptions {
+  /** Skips session resolution. Only for sign-in, providers, and health checks. */
   public?: boolean;
-  /** Mutating routes that create money-moving records require a key. */
+  /**
+   * Which bucket this route draws from. Defaults by method: reads are `read`,
+   * writes are `write`. Reports and exports declare their own.
+   */
+  rateLimit?: RouteClass;
+  /** Checked before the handler runs. The service still does its own check. */
+  capability?: Capability;
+  /** Money-moving creates must carry an Idempotency-Key. */
   requireIdempotencyKey?: boolean;
-  /** Cache-Control for the response. Reports set a private max-age; nothing else caches. */
+  /**
+   * Force the transaction on or off. The default is on for any method that can
+   * write, which is what makes the audit flush automatic.
+   */
+  transactional?: boolean;
   cacheControl?: string;
 }
 
-/**
- * Wraps a handler.
- *
- * Everything that is the same for every route lives here: the request id, the
- * session, the error translation, the envelope, and the no-store header. If it
- * belongs on every response, it belongs in this function and nowhere else.
- */
+const MUTATING = new Set(["POST", "PATCH", "PUT", "DELETE"]);
+
 export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
   return async (req: NextRequest, context: { params: Promise<Record<string, string>> }): Promise<NextResponse> => {
     const requestId = newId();
     const params = context?.params ? await context.params : {};
+    const mutating = MUTATING.has(req.method);
 
     try {
       const ctx = options.public ? publicCtx(req, requestId) : await authenticatedCtx(req, requestId);
 
-      // Idempotency: replay the stored response when the same key arrives twice.
+      // Rate limit before anything expensive happens.
+      const bucket = options.rateLimit ?? (mutating ? "write" : "read");
+      const actorKey = ctx.actor.kind === "api" ? `ip:${clientIp(req) ?? "unknown"}` : `user:${ctx.actor.userId}`;
+      await enforce(bucket, actorKey);
+
+      if (options.capability) assertCan(ctx, options.capability);
+
       const idempotencyKey = req.headers.get("idempotency-key");
       if (options.requireIdempotencyKey && !idempotencyKey) {
         throw validationFailed(
@@ -72,13 +98,30 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
         );
       }
 
-      if (idempotencyKey) {
-        const replayed = await replayIfSeen(ctx, req, idempotencyKey);
-        if (replayed) return replayed;
+      let claim: IdempotencyClaim | null = null;
+      if (idempotencyKey && mutating) {
+        claim = await claimIdempotencyKey(ctx, req, idempotencyKey);
+        if (claim.replay) return claim.replay;
       }
 
-      const result = await handler(ctx, req, params);
-      const body = isEnvelope(result) ? result : ({ data: result } as Envelope<T>);
+      const runHandler = async (inner: Ctx) => {
+        const result = await handler(inner, req, params);
+        return (isEnvelope(result) ? result : ({ data: result } as Envelope<T>));
+      };
+
+      // Every mutation runs in a transaction whose commit also writes the audit
+      // rows and outbox events. A service that forgets to open one is still
+      // audited, and nothing it buffered can survive a rollback.
+      const shouldTransact = options.transactional ?? mutating;
+      const body = shouldTransact
+        ? await db.transaction(async (tx) => {
+            const inner: Ctx = { ...ctx, db: tx };
+            const result = await runHandler(inner);
+            await flush(inner);
+            return result;
+          })
+        : await runHandler(ctx);
+
       const response = NextResponse.json(body, {
         headers: {
           "Cache-Control": options.cacheControl ?? "private, no-store",
@@ -86,7 +129,15 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
         },
       });
 
-      if (idempotencyKey) await recordIdempotent(ctx, req, idempotencyKey, 200, body);
+      // Recording the response must never turn a committed mutation into a
+      // failure: the write already happened, and a 500 here would have the
+      // offline client replay it.
+      if (claim) {
+        await completeIdempotencyClaim(claim, 200, body).catch((e) =>
+          console.error(`[${requestId}] could not store idempotent response`, e)
+        );
+      }
+
       return response;
     } catch (error) {
       return problemResponse(error, requestId);
@@ -99,18 +150,19 @@ export function problemResponse(error: unknown, requestId: string): NextResponse
   const problem = toProblem(translated, requestId);
 
   if (problem.status >= 500) {
-    // The detail sent to the client says nothing; the log gets everything.
     console.error(`[${requestId}] unhandled error`, error);
   }
 
-  return NextResponse.json(problem, {
-    status: problem.status,
-    headers: {
-      "Content-Type": "application/problem+json",
-      "Cache-Control": "private, no-store",
-      "X-Request-Id": requestId,
-    },
-  });
+  const headers: Record<string, string> = {
+    "Content-Type": "application/problem+json",
+    "Cache-Control": "private, no-store",
+    "X-Request-Id": requestId,
+  };
+  if (problem.code === "rate_limited") {
+    headers["Retry-After"] = String((problem.meta?.retry_after_seconds as number) ?? 60);
+  }
+
+  return NextResponse.json(problem, { status: problem.status, headers });
 }
 
 const isEnvelope = <T,>(v: unknown): v is Envelope<T> =>
@@ -142,24 +194,67 @@ function publicCtx(req: NextRequest, requestId: string): Ctx {
   });
 }
 
+/**
+ * The client address.
+ *
+ * `X-Forwarded-For` is only believed when the deployment says it is behind a
+ * proxy that sets it. Trusting it unconditionally lets any caller pick their
+ * own address and walk straight through a per-IP rate limit, and puts a value
+ * of their choosing into `sessions.ip` and the audit log.
+ */
 export function clientIp(req: NextRequest): string | null {
-  // Behind Caddy the real address is the first entry in X-Forwarded-For.
-  const forwarded = req.headers.get("x-forwarded-for");
-  if (forwarded) return forwarded.split(",")[0]!.trim();
-  return req.headers.get("x-real-ip");
+  if (env.TRUST_PROXY) {
+    const forwarded = req.headers.get("x-forwarded-for");
+    if (forwarded) return forwarded.split(",")[0]!.trim() || null;
+    const real = req.headers.get("x-real-ip");
+    if (real) return real.trim() || null;
+  }
+  // Next does not expose the socket address in the edge runtime, so without a
+  // trusted proxy header there is nothing honest to report.
+  return null;
 }
 
 /* ---------------------------------------------------------- idempotency */
 
-const hashBody = (route: string, body: string) => createHash("sha256").update(`${route}\n${body}`).digest("hex");
+interface IdempotencyClaim {
+  key: string;
+  actorId: string | null;
+  replay: NextResponse | null;
+}
 
-async function replayIfSeen(ctx: Ctx, req: NextRequest, key: string): Promise<NextResponse | null> {
+const hashBody = (routeKey: string, body: string) =>
+  createHash("sha256").update(`${routeKey}\n${body}`).digest("hex");
+
+/**
+ * Claims the key before the handler runs.
+ *
+ * INSERT first, then act. The reverse (look, run, then record) is a
+ * check-then-act race: two copies of a retried request both find no row, both
+ * execute, and the guarantee that a replayed payment creates one payment is
+ * gone.
+ *
+ * The row is also matched on `(key, actor)`. Matching on the key alone would
+ * hand one actor another actor's stored response body whenever they happened to
+ * send the same key.
+ */
+async function claimIdempotencyKey(ctx: Ctx, req: NextRequest, key: string): Promise<IdempotencyClaim> {
   const routeKey = `${req.method} ${new URL(req.url).pathname}`;
   const raw = await peekBody(req);
   const hash = hashBody(routeKey, raw);
+  const actorId = ctx.actor.kind === "api" ? null : ctx.actor.userId;
 
+  const inserted = await db
+    .insert(s.idempotencyKeys)
+    .values({ key, actorId, route: routeKey, requestHash: hash })
+    .onConflictDoNothing()
+    .returning({ key: s.idempotencyKeys.key });
+
+  if (inserted.length > 0) return { key, actorId, replay: null };
+
+  // Somebody already claimed it. Only the same actor may see the stored result.
   const [existing] = await db
     .select({
+      actorId: s.idempotencyKeys.actorId,
       requestHash: s.idempotencyKeys.requestHash,
       status: s.idempotencyKeys.responseStatus,
       body: s.idempotencyKeys.responseBody,
@@ -168,57 +263,63 @@ async function replayIfSeen(ctx: Ctx, req: NextRequest, key: string): Promise<Ne
     .where(eq(s.idempotencyKeys.key, key))
     .limit(1);
 
-  if (!existing) return null;
+  if (!existing) return { key, actorId, replay: null };
 
-  if (existing.requestHash !== hash) {
+  if (existing.actorId !== actorId || existing.requestHash !== hash) {
     throw new AppError(
       "idempotency_key_reused",
       "That Idempotency-Key was already used for a different request."
     );
   }
 
-  return NextResponse.json(existing.body ?? { data: null }, {
-    status: existing.status ?? 200,
-    headers: {
-      "Idempotency-Replayed": "true",
-      "Cache-Control": "private, no-store",
-      "X-Request-Id": ctx.request.requestId,
-    },
-  });
+  if (existing.status == null) {
+    // The original is still in flight. Replaying half a result is worse than
+    // asking the client to try again in a moment.
+    throw new AppError("conflict", "That request is still being processed. Try again in a moment.");
+  }
+
+  return {
+    key,
+    actorId,
+    replay: NextResponse.json(existing.body ?? { data: null }, {
+      status: existing.status,
+      headers: {
+        "Idempotency-Replayed": "true",
+        "Cache-Control": "private, no-store",
+        "X-Request-Id": ctx.request.requestId,
+      },
+    }),
+  };
 }
 
-async function recordIdempotent(ctx: Ctx, req: NextRequest, key: string, status: number, body: unknown) {
-  const routeKey = `${req.method} ${new URL(req.url).pathname}`;
-  const raw = await peekBody(req);
+async function completeIdempotencyClaim(claim: IdempotencyClaim, status: number, body: unknown) {
   await db
-    .insert(s.idempotencyKeys)
-    .values({
-      key,
-      actorId: ctx.actor.kind === "system" ? null : ctx.actor.userId,
-      route: routeKey,
-      requestHash: hashBody(routeKey, raw),
-      responseStatus: status,
-      responseBody: body as never,
-    })
-    .onConflictDoNothing();
+    .update(s.idempotencyKeys)
+    .set({ responseStatus: status, responseBody: body as never })
+    .where(and(eq(s.idempotencyKeys.key, claim.key)));
 }
 
 /**
  * Reads the body without consuming it for the handler.
  *
- * `req.clone()` is the supported way; caching the text on the request object
- * means the handler's own `json()` call still works.
+ * A clone failure is not swallowed: an empty string would hash the same for two
+ * different bodies, so two genuinely different requests could replay each
+ * other's response.
  */
 const bodyCache = new WeakMap<NextRequest, string>();
 
 async function peekBody(req: NextRequest): Promise<string> {
   const cached = bodyCache.get(req);
   if (cached != null) return cached;
-  let text = "";
+  let text: string;
   try {
     text = await req.clone().text();
-  } catch {
-    text = "";
+  } catch (e) {
+    throw new AppError(
+      "internal_error",
+      "Could not read the request body for idempotency. Retry without the Idempotency-Key header.",
+      { meta: { cause: String(e) } }
+    );
   }
   bodyCache.set(req, text);
   return text;
@@ -226,7 +327,6 @@ async function peekBody(req: NextRequest): Promise<string> {
 
 /* ------------------------------------------------------------ validation */
 
-/** Parses and validates a JSON body, turning Zod issues into field errors. */
 export async function body<T extends z.ZodType>(req: NextRequest, schema: T): Promise<z.infer<T>> {
   let raw: unknown;
   try {
@@ -237,7 +337,6 @@ export async function body<T extends z.ZodType>(req: NextRequest, schema: T): Pr
   return parseOrThrow(schema, raw);
 }
 
-/** Parses and validates query parameters. */
 export function query<T extends z.ZodType>(req: NextRequest, schema: T): z.infer<T> {
   const params: Record<string, string | string[]> = {};
   const url = new URL(req.url);
@@ -271,17 +370,23 @@ export interface Page {
   page: number;
   perPage: number;
   offset: number;
+  limit: number;
 }
 
-export function pagination(req: NextRequest): Page {
-  const { page, per_page } = query(req, paginationSchema.partial().transform((v) => ({
-    page: v.page ?? 1,
-    per_page: v.per_page ?? 50,
-  })));
-  return { page, perPage: per_page, offset: (page - 1) * per_page };
+export function pagination(req: NextRequest, defaultPerPage = 50): Page {
+  const url = new URL(req.url);
+  const parsed = paginationSchema.safeParse({
+    page: url.searchParams.get("page") ?? undefined,
+    per_page: url.searchParams.get("per_page") ?? undefined,
+  });
+  if (!parsed.success) throw validationFailed({ page: ["Invalid pagination."] });
+
+  const page = parsed.data.page;
+  const perPage = url.searchParams.get("per_page") ? parsed.data.per_page : defaultPerPage;
+  return { page, perPage, offset: (page - 1) * perPage, limit: perPage };
 }
 
-/** Builds the collection meta block from a page and a total. */
+/** The collection meta block. `total` always covers the whole set, not the page. */
 export const pageMeta = (p: Page, total: number, extra: Partial<Meta> = {}): Meta => ({
   total,
   page: p.page,
@@ -290,9 +395,12 @@ export const pageMeta = (p: Page, total: number, extra: Partial<Meta> = {}): Met
   ...extra,
 });
 
-/* --------------------------------------------------------------- shared */
+/** Applies a page to an already-materialised list, for endpoints that must
+ *  compute the whole set anyway (grouped reports, permission-filtered rollups). */
+export function paginate<T>(rows: T[], p: Page): { data: T[]; meta: Meta } {
+  return { data: rows.slice(p.offset, p.offset + p.perPage), meta: pageMeta(p, rows.length) };
+}
 
-/** A comma-separated `?include=` list, checked against an allowlist. */
 export function includes(req: NextRequest, allowed: readonly string[]): Set<string> {
   const raw = new URL(req.url).searchParams.get("include");
   if (!raw) return new Set();

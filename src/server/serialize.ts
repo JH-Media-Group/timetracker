@@ -47,9 +47,18 @@ export interface UserDto {
   costRateCents?: number;
 }
 
+/**
+ * A user row with the password hash removed at the type level.
+ *
+ * The serializer must not be *able* to see the hash, not merely choose not to
+ * print it: an argon2id hash reached the audit log once through a `SELECT *`,
+ * and a type that cannot carry it is a better guarantee than a habit.
+ */
+export type SafeUserRow = Omit<s.UserRow, "passwordHash">;
+
 export function serializeUser(
   ctx: Ctx,
-  row: s.UserRow,
+  row: SafeUserRow,
   extra: { roles?: string[]; departments?: string[]; billableRateCents?: number; costRateCents?: number } = {}
 ): UserDto {
   const dto: UserDto = {

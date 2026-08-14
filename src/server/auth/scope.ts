@@ -56,7 +56,7 @@ export function visibleUserIds(ctx: Ctx): SQL {
           )
       )`;
     default:
-      return sql`(SELECT ${sql.raw(`'${me}'::uuid`)})`;
+      return sql`(SELECT ${me}::uuid)`;
   }
 }
 
@@ -104,11 +104,14 @@ export function expenseScope(ctx: Ctx, opts: { requestedUserId?: string | null }
 export function projectScope(ctx: Ctx): SQL {
   if (ctx.actor.kind === "system") return ALWAYS;
 
+  // Deliberately does NOT include people:manage. A People Admin manages people,
+  // and the 7.2 matrix gives them neither project:manage nor report:view_all;
+  // granting project reach here would also disagree with clientScope, which
+  // does not, and an inconsistency reads as a bug from either direction.
   const wide =
     ctx.actor.capabilities.has("project:manage") ||
     ctx.actor.capabilities.has("report:view_all") ||
-    ctx.actor.capabilities.has("invoice:manage") ||
-    ctx.actor.capabilities.has("people:manage");
+    ctx.actor.capabilities.has("invoice:manage");
 
   if (wide) return ALWAYS;
 

@@ -24,7 +24,7 @@ export const GET = route(async (ctx) => {
     billableRateCents: billable ?? undefined,
     costRateCents: cost ?? undefined,
   });
-});
+}, { rateLimit: "read" });
 
 const patchSchema = z.object({
   theme: z.enum(["system", "light", "dark"]).optional(),
@@ -48,4 +48,4 @@ export const PATCH = route(async (ctx, req) => {
 
   if (!updated) throw notFound("Your account");
   return serializeUser(ctx, updated);
-});
+}, { rateLimit: "write" });

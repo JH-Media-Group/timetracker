@@ -56,6 +56,11 @@ export function middleware(req: NextRequest) {
 export const config = {
   matcher: [
     // Everything except Next's own static output and the public files.
-    "/((?!_next/static|_next/image|favicon.ico|.*\.svg|.*\.png).*)",
+    // The backslashes have to survive the TypeScript string as well as the
+    // regex, so each escape is doubled. Written singly, a lone backslash-dot is
+    // not a recognised string escape and collapses to a bare dot, which matches
+    // any character: every path whose last three characters were "png" would
+    // then skip middleware entirely.
+    "/((?!_next/static|_next/image|favicon\.ico|.*\.svg|.*\.png|.*\.ico).*)",
   ],
 };

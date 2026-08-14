@@ -12,6 +12,28 @@
 
 import { z } from "zod";
 
+/**
+ * Load .env.local ourselves rather than depending on the caller.
+ *
+ * ES module imports are hoisted, so a script that calls dotenv's `config()` at
+ * the top of its file still runs every `import` first, and this module reads an
+ * empty environment. The failure is a confusing "DATABASE_URL is required" from
+ * a script whose second line configures it.
+ *
+ * `override: false` keeps Next's own loading and any real process environment
+ * authoritative; this only fills gaps.
+ */
+if (!process.env.DATABASE_URL || !process.env.SESSION_SECRET) {
+  try {
+    // Required lazily so the bundler does not pull dotenv into the client.
+    const dotenv = require("dotenv") as typeof import("dotenv");
+    dotenv.config({ path: ".env.local", quiet: true, override: false });
+    dotenv.config({ path: ".env", quiet: true, override: false });
+  } catch {
+    // dotenv is a dev dependency. In production the environment is real.
+  }
+}
+
 const bool = (v: string | undefined) => v === "1" || v === "true";
 
 /**
@@ -74,6 +96,13 @@ const schema = z.object({
 
   /** Set by the test harness to allow destructive operations. */
   ALLOW_DESTRUCTIVE: z.string().optional(),
+
+  /**
+   * Set only when the app genuinely sits behind a reverse proxy that rewrites
+   * X-Forwarded-For. Believing that header without a proxy in front lets any
+   * caller choose their own address and step around a per-IP rate limit.
+   */
+  TRUST_PROXY: z.string().optional(),
 });
 
 const blank = (v: string | undefined) => (v == null || v.trim() === "" ? undefined : v);
@@ -149,6 +178,7 @@ export const env = {
       : null,
 
   allowDestructive: bool(parsed.ALLOW_DESTRUCTIVE),
+  TRUST_PROXY: bool(parsed.TRUST_PROXY),
 } as const;
 
 export type Env = typeof env;

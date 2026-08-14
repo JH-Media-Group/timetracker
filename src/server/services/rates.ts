@@ -7,7 +7,7 @@
  * Specification: docs/BACKEND_PRD.md section 4.5.
  */
 
-import { and, desc, eq, sql } from "drizzle-orm";
+import { and, desc, eq, inArray, sql } from "drizzle-orm";
 import { assertCan, type Ctx } from "@/server/ctx";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
@@ -67,7 +67,10 @@ export async function ratesForMany(
     .from(s.userRates)
     .where(
       and(
-        sql`${s.userRates.userId} = ANY(${sql.raw(`ARRAY['${userIds.join("','")}']::uuid[]`)})`,
+        // Parameterised. The array-literal-by-concatenation version worked only
+        // for as long as every caller happened to pass uuids from the database
+        // rather than from a query string.
+        inArray(s.userRates.userId, [...userIds]),
         eq(s.userRates.kind, kind),
         sql`(${s.userRates.startsOn} IS NULL OR ${s.userRates.startsOn} <= ${on})`,
         sql`(${s.userRates.endsOn} IS NULL OR ${s.userRates.endsOn} >= ${on})`
@@ -198,10 +201,21 @@ export async function createRate(ctx: Ctx, userId: string, input: RateInput) {
   return { id, ...input };
 }
 
-export async function deleteRate(ctx: Ctx, rateId: string) {
+/**
+ * Deletes a rate belonging to a specific person.
+ *
+ * The user id is part of the lookup, not decoration: matching on the rate id
+ * alone let `DELETE /users/{alice}/rates/{bob-rate}` delete Bob's rate and file
+ * the audit row under a path naming Alice.
+ */
+export async function deleteRate(ctx: Ctx, userId: string, rateId: string) {
   assertCan(ctx, "rates:manage");
 
-  const [existing] = await ctx.db.select().from(s.userRates).where(eq(s.userRates.id, rateId)).limit(1);
+  const [existing] = await ctx.db
+    .select()
+    .from(s.userRates)
+    .where(and(eq(s.userRates.id, rateId), eq(s.userRates.userId, userId)))
+    .limit(1);
   if (!existing) throw notFound("That rate");
 
   await ctx.db.delete(s.userRates).where(eq(s.userRates.id, rateId));

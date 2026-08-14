@@ -63,23 +63,23 @@ The working checklist for the backend build and the frontend wiring. Tick items 
 
 ## E5. Reference and organize API
 
-- [ ] `/settings`
-- [ ] `/users`, rates, roles, departments, permission profiles
-- [ ] `/clients` and contacts
-- [ ] `/projects`, project tasks, members, tags, pin and unpin
-- [ ] `/tasks` library with common-task propagation
-- [ ] `/expense-categories`
-- [ ] `/search` backing the command palette
-- [ ] `/bootstrap` for the app shell
+- [x] `/settings`
+- [x] `/users`, rates, roles, departments, permission profiles
+- [x] `/clients` and contacts
+- [x] `/projects`, project tasks, members, tags, pin and unpin
+- [x] `/tasks` library with common-task propagation
+- [x] `/expense-categories`
+- [x] `/search` backing the command palette
+- [x] `/bootstrap` for the app shell
 
 ## E6. Time API
 
-- [ ] `GET|POST /time-entries`, `GET|PATCH|DELETE /:id`, restore
-- [ ] `/:id/start`, `/:id/stop`, running-entry resolution with the stop-then-insert transaction
-- [ ] `/:id/split`, `/:id/duplicate`
-- [ ] `/timesheet/copy-day`
-- [ ] `PUT /timesheet/week` diffing upsert that skips locked rows
-- [ ] `GET /timesheet/summary`
+- [x] `GET|POST /time-entries`, `GET|PATCH|DELETE /:id`, restore
+- [x] `/:id/start`, `/:id/stop`, running-entry resolution with the stop-then-insert transaction
+- [x] `/:id/split`, `/:id/duplicate`
+- [x] `/timesheet/copy-day`
+- [x] `PUT /timesheet/week` diffing upsert that skips locked rows
+- [x] `GET /timesheet/summary`
 
 ## E7. Expenses and approvals API
 
@@ -104,7 +104,7 @@ The working checklist for the backend build and the frontend wiring. Tick items 
 
 ## E10. Seed
 
-- [ ] Deterministic JHMG-shaped seed writing to Postgres, matching the shape the front end was built against
+- [x] Deterministic JHMG-shaped seed writing to Postgres, matching the shape the front end was built against
 
 ## E11. Frontend wiring
 

@@ -15,4 +15,4 @@ export const GET = route(async (ctx) => ({
   baseKey: ctx.actor.baseKey,
   othersScope: othersScopeFor(ctx.actor.baseKey),
   isOwner: ctx.actor.isOwner,
-}));
+}), { rateLimit: "read" });
