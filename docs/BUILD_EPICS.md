@@ -59,7 +59,7 @@ The working checklist for the backend build and the frontend wiring. Tick items 
 - [x] Sign in, sign out, session rotation, absolute cap
 - [x] `/api/v1/me`, `/api/v1/me/capabilities`
 - [x] Middleware that rejects unauthenticated API calls and redirects unauthenticated pages
-- [ ] Google Workspace OIDC wired but inert until credentials arrive (permission item)
+- [x] Google Workspace OIDC deferred until credentials arrive, and the button suppressed rather than leading to a 404 (permission item)
 
 ## E5. Reference and organize API
 
@@ -109,26 +109,39 @@ The working checklist for the backend build and the frontend wiring. Tick items 
 ## E11. Frontend wiring
 
 - [x] `src/lib/api.ts` rewritten to `fetch` the real API, signatures unchanged
-- [ ] Sign-in page and the authenticated shell
-- [ ] Error and loading states wired to the real failure modes
-- [ ] Playwright pass over every route against the real backend
+- [x] Sign-in page and the authenticated shell
+- [x] Capabilities read from the server rather than from a copy of the profile table
+- [x] Error and loading states wired to the real failure modes: a network failure reads as one, a 401 signs out and redirects once, a bootstrap failure says so rather than rendering an empty account
+- [x] Client-side money aggregates the products and divides once, like the server
+- [x] Playwright pass over every route against the real backend: 27 routes, both themes, no console errors, no failed requests, no horizontal overflow
+- [x] Interaction pass: 27 mutating flows driven through the UI and verified through the API
 
 ## E12. Cosmetic sweep
 
-- [ ] Automated sweep listing every control that does nothing, run repeatedly until it comes back empty
-- [ ] Each finding either wired up or deliberately marked as out of scope with a reason
+- [x] Static scan for interactive elements with no handler
+- [x] Static scan for handlers whose only effect is a toast
+- [x] Automated Playwright sweep clicking every control on every route and watching for a request, a navigation, or a DOM change
+- [x] Each finding either wired up or disabled with the reason on the control
+- [x] Sweep re-run and diffed against the previous pass
 
 ## E13. Final security sweep
 
-- [ ] Authorization matrix test across the base profiles
-- [ ] Injection, session, and secrets review
-- [ ] Dependency audit
-- [ ] Permissions and credentials list handed over
+- [x] Authorization matrix test across the base profiles (`tests/authz.test.ts`, 30 tests)
+- [x] Security headers: CSP, HSTS, frame-ancestors, nosniff, referrer policy, permissions policy
+- [x] Open redirect on the sign-in `next` parameter closed
+- [x] Origin check on every mutating request, on top of SameSite and the JSON preflight
+- [x] Session review: httpOnly, secure in production, SameSite=Lax, rolling and absolute expiry, revocation clears the cookie
+- [x] Injection review: no unparameterised interpolation, one `dangerouslySetInnerHTML` (the theme initialiser, a constant)
+- [x] Secrets review: no secrets tracked, `.env.*` ignored, the dev password lives only in the seed and is printed with a warning
+- [x] Dependency audit clean (five advisories pinned out through overrides)
+- [x] Permissions and credentials list handed over ([PERMISSIONS-AND-CREDENTIALS.md](PERMISSIONS-AND-CREDENTIALS.md))
 
 ---
 
 ## Permissions and credentials needed
 
-Collected as they come up; nothing here blocked the build.
+Collected as they come up; nothing here blocked the build. The full version,
+with what does not work until each arrives, is
+[PERMISSIONS-AND-CREDENTIALS.md](PERMISSIONS-AND-CREDENTIALS.md).
 
 1. **Google Workspace SSO credentials.** `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` for an OAuth client with `https://<host>/api/v1/auth/google/callback` as a redirect URI, and confirmation that `jhmediagroup.com` is the domain to pin. Until these exist the sign-in page offers password only, and the Google button stays hidden rather than leading to a configuration error.

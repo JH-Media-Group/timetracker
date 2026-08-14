@@ -20,7 +20,10 @@
     "db:studio": "drizzle-kit studio",
     "test": "vitest run",
     "test:watch": "vitest",
-    "db:setup": "pnpm db:up && pnpm db:migrate && pnpm db:migrate:test && pnpm db:seed"
+    "db:setup": "pnpm db:up && pnpm db:migrate && pnpm db:migrate:test && pnpm db:seed",
+    "authz:sweep": "tsx scripts/authz-sweep.mts",
+    "authz:scope": "tsx scripts/scope-probe.mts",
+    "db:cleanup-probe": "tsx scripts/cleanup-probe.mts"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.1.0",
