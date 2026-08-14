@@ -31,6 +31,7 @@ import type {
   Client, Expense, ExpenseCategory, Invoice, InvoiceLineItem, InvoicePayment, InvoiceEvent,
   Project, Settings, Task, TimeEntry, TimesheetSubmission, User, ID, InvoiceState,
   PermissionProfile, RecurringInvoice, RecurringInvoiceLine, Retainer, BillingType, BillBy, BudgetBy,
+  UninvoicedClient,
 } from "./types";
 import { startOfWeek } from "./format";
 
@@ -1322,6 +1323,36 @@ export async function getUninvoiced(
     amountCents: l.amountCents,
     entryIds: l.timeEntryIds,
     expenseIds: l.expenseIds,
+  }));
+}
+
+interface UninvoicedClientWire {
+  clientId: string;
+  clientName: string;
+  currency: string;
+  hours: number;
+  timeCents: number;
+  expenseCount: number;
+  expenseCents: number;
+  totalCents: number;
+  from: string | null;
+  to: string | null;
+}
+
+/**
+ * Every client with unbilled work, largest first.
+ *
+ * The server computes the totals. This does not re-derive them, and must not
+ * start to: the screen's figure has to equal the invoice the client's preview
+ * then offers, and the only way to keep that true is for one place to do the
+ * arithmetic. `tests/uninvoiced.test.ts` asserts the equality.
+ */
+export async function listUninvoicedClients(): Promise<UninvoicedClient[]> {
+  const rows = await get<UninvoicedClientWire[]>("/invoices/uninvoiced");
+  return rows.map((r) => ({
+    ...r,
+    from: r.from ?? undefined,
+    to: r.to ?? undefined,
   }));
 }
 

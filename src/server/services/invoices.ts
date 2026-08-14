@@ -371,6 +371,144 @@ export async function previewLines(
     .sort((a, b) => a.label.localeCompare(b.label) || a.sublabel.localeCompare(b.sublabel));
 }
 
+export interface UninvoicedClient {
+  clientId: string;
+  clientName: string;
+  currency: string;
+  /** Billable hours not yet on an invoice, rounded for display only. */
+  hours: number;
+  timeCents: number;
+  expenseCount: number;
+  expenseCents: number;
+  totalCents: number;
+  /** The span the unbilled work covers, which is what a billing run wants to see. */
+  from: IsoDate | null;
+  to: IsoDate | null;
+}
+
+/**
+ * Every client with work that has been done and not billed.
+ *
+ * The screen somebody opens at the start of a billing run. Until this existed
+ * the value was computed in three places and browsable in none: the invoice
+ * creation flow pulled it per client, the client page showed its own, and the
+ * invoicing report knew the total. The one question nobody could ask was "what
+ * have we done that we have not billed for".
+ *
+ * THE ROUNDING, WHICH IS THE ENTIRE DIFFICULTY
+ *
+ * This total must equal what the invoice for that client would come to, or the
+ * screen is worse than not having it. So the grouping here mirrors
+ * `previewLines` exactly: `ROUND` is applied per project and rate, because that
+ * is one invoice line, and the line amounts are then summed.
+ *
+ * Rounding once over the whole client instead would be defensible arithmetic
+ * and the wrong answer: the invoice is a sum of rounded lines, so the rounded
+ * sum can differ from it by up to half a cent per line. `tests/uninvoiced.test.ts`
+ * asserts the equality against `previewLines` directly rather than trusting
+ * that these two queries stay in step, because they are in different languages
+ * and only a test can hold them together.
+ *
+ * (Postgres `ROUND` on a numeric rounds half away from zero and JavaScript
+ * `Math.round` rounds half up. Rates and durations are never negative, so on
+ * this data they are the same function.)
+ */
+export async function listUninvoiced(ctx: Ctx): Promise<UninvoicedClient[]> {
+  assertCan(ctx, "invoice:view");
+
+  const timeRows = await ctx.db.execute<{
+    client_id: string;
+    seconds: string;
+    cents: string;
+    first_day: string | null;
+    last_day: string | null;
+  }>(sql`
+    SELECT client_id,
+           SUM(seconds)::text        AS seconds,
+           SUM(bucket_cents)::text   AS cents,
+           MIN(first_day)::text      AS first_day,
+           MAX(last_day)::text       AS last_day
+    FROM (
+      SELECT p.client_id,
+             SUM(te.duration_seconds)::bigint AS seconds,
+             ROUND(SUM(te.duration_seconds::bigint * te.billable_rate_cents)::numeric / 3600) AS bucket_cents,
+             MIN(te.spent_on) AS first_day,
+             MAX(te.spent_on) AS last_day
+        FROM time_entries te
+        JOIN projects p ON p.id = te.project_id
+       WHERE te.is_billable
+         AND te.invoice_id IS NULL
+         AND NOT te.billed_externally
+         AND te.deleted_at IS NULL
+         AND te.timer_started_at IS NULL
+       -- One bucket is one invoice line: same project, same rate.
+       GROUP BY p.client_id, te.project_id, te.billable_rate_cents
+    ) buckets
+    GROUP BY client_id
+  `);
+
+  const expenseRows = await ctx.db.execute<{
+    client_id: string;
+    count: string;
+    cents: string;
+    first_day: string | null;
+    last_day: string | null;
+  }>(sql`
+    SELECT p.client_id,
+           COUNT(*)::text            AS count,
+           SUM(x.total_cents)::text  AS cents,
+           MIN(x.spent_on)::text     AS first_day,
+           MAX(x.spent_on)::text     AS last_day
+      FROM expenses x
+      JOIN projects p ON p.id = x.project_id
+     WHERE x.is_billable
+       AND x.invoice_id IS NULL
+       AND NOT x.billed_externally
+       AND x.deleted_at IS NULL
+     GROUP BY p.client_id
+  `);
+
+  const clientIds = [
+    ...new Set([...timeRows.map((r) => r.client_id), ...expenseRows.map((r) => r.client_id)]),
+  ];
+  if (!clientIds.length) return [];
+
+  const clients = await ctx.db
+    .select({ id: s.clients.id, name: s.clients.name, currency: s.clients.currency })
+    .from(s.clients)
+    // Archived clients are not filtered out. Work that was done and not billed
+    // is still owed whether or not the client is still active, and `previewLines`
+    // does not filter them either, which is the point: these two must agree.
+    .where(inArray(s.clients.id, clientIds));
+
+  const time = new Map(timeRows.map((r) => [r.client_id, r]));
+  const expense = new Map(expenseRows.map((r) => [r.client_id, r]));
+  const earlier = (a: string | null, b: string | null) => (a && b ? (a < b ? a : b) : (a ?? b));
+  const later = (a: string | null, b: string | null) => (a && b ? (a > b ? a : b) : (a ?? b));
+
+  return clients
+    .map((c) => {
+      const t = time.get(c.id);
+      const x = expense.get(c.id);
+      const timeCents = Number(t?.cents ?? 0);
+      const expenseCents = Number(x?.cents ?? 0);
+      return {
+        clientId: c.id,
+        clientName: c.name,
+        currency: c.currency,
+        hours: Math.round((Number(t?.seconds ?? 0) / 3600) * 100) / 100,
+        timeCents,
+        expenseCount: Number(x?.count ?? 0),
+        expenseCents,
+        totalCents: timeCents + expenseCents,
+        from: (earlier(t?.first_day ?? null, x?.first_day ?? null) as IsoDate | null) ?? null,
+        to: (later(t?.last_day ?? null, x?.last_day ?? null) as IsoDate | null) ?? null,
+      };
+    })
+    .filter((r) => r.totalCents !== 0 || r.hours !== 0 || r.expenseCount !== 0)
+    .sort((a, b) => b.totalCents - a.totalCents || a.clientName.localeCompare(b.clientName));
+}
+
 /* ------------------------------------------------------------------ create */
 
 export interface InvoiceInput {

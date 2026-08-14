@@ -1159,14 +1159,34 @@ So the destinations are tabs, and the status filter lives in the grid toolbar wh
 | Tab | Contents | Status |
 |---|---|---|
 | Overview | The invoice table, with a status filter over it | Built |
-| Recurring | Recurring schedules | List built, editing is TALLY-25 |
+| Recurring | Recurring schedules | Built |
 | Retainers | Retainers | List built, creation is TALLY-13 |
-| Uninvoiced | Unbilled time and expenses by client | TALLY-34 |
+| Uninvoiced | Unbilled time and expenses by client | Built |
 | Configure | The seven configuration sections of section 15 | TALLY-27 |
 
-**A tab appears when its screen exists.** Uninvoiced and Configure are absent rather than present and disabled, because a tab that leads nowhere is exactly what the cosmetic sweep was written to find.
+**A tab appears when its screen exists.** Configure is absent rather than present and disabled until TALLY-27 builds it, because a tab that leads nowhere is exactly what the cosmetic sweep was written to find.
 
 **Old links keep working.** `?view=draft` used to mean the drafts subset and now resolves to the Overview tab with that filter applied, rather than breaking a bookmark or quietly showing the wrong screen. The tab is `?view=`, the filter is `?status=`.
+
+### 12.0.1 Uninvoiced
+
+**Built 2026-08-14 (TALLY-34).** The screen somebody opens at the start of a billing run: every client with work done and not billed, largest first, with a route straight into the draft.
+
+| Column | Contents |
+|---|---|
+| Client | Links to the client |
+| Period | The span the unbilled work covers, or a single date when it is one day |
+| Hours | Billable hours not yet on an invoice |
+| Time | Their value |
+| Expenses | Billable expenses not yet on an invoice |
+| Total | Time plus expenses, and the figure the invoice will come to |
+| Actions | Create invoice, which opens the draft with the work already selected |
+
+**The total on a row equals the invoice raised from it, to the cent.** This is the rule the screen lives or dies by: a billing screen that quotes a figure the next screen contradicts is worse than no screen, because somebody will trust the first one. The server does the arithmetic once and the browser recomputes none of it, and `tests/uninvoiced.test.ts` asserts the equality against the preview on deliberately awkward data (rates that do not divide into an hour, several rates on one project).
+
+The subtlety is where the rounding happens. An invoice is a sum of rounded lines, so the screen rounds per project and rate exactly as `previewLines` does, and then sums. Rounding once over the whole client is defensible arithmetic and the wrong answer: it lands a cent out, which the test demonstrates.
+
+**Archived clients still appear.** Work that was done and not billed is owed whether or not the client is still active.
 
 ### 12.1 Overview
 
@@ -1176,7 +1196,7 @@ So the destinations are tabs, and the status filter lives in the grid toolbar wh
 ┌───────────────────────────────────────────────────────────────────────────────┐
 │ Invoices                        [+ New invoice] [🔍 Search] [Actions ▾]       │
 ├───────────────────────────────────────────────────────────────────────────────┤
-│ Overview │ Recurring │ Retainers │ Configure                                  │
+│ Overview │ Recurring │ Retainers │ Uninvoiced │ Configure                     │
 ├───────────────────────────────────────────────────────────────────────────────┤
 │ ┌───────────────┐ ┌───────────────────────────────────────────────────────┐   │
 │ │ Total open    │ │ [←] Invoices issued in 0000 [→]      ■ Open  ■ Paid   │   │

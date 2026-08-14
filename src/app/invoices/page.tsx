@@ -18,7 +18,7 @@ import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatDateUS, formatDueIn, formatMoney } from "@/lib/format";
 import type { Invoice, InvoiceState, RecurringInvoice, Retainer } from "@/lib/types";
-import { Badge, Button, Card, EmptyState, Select, Tabs } from "@/components/ui/primitives";
+import { Badge, Button, Card, EmptyState, Select, Spinner, Tabs } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { PageBody, PageHeader, useUrlState } from "@/components/app/page-chrome";
 import { DataGrid } from "@/components/app/data-grid";
@@ -35,10 +35,10 @@ import type { GridRow } from "@/components/ui/grid";
  * They are now a tab and a filter, decided in TALLY-35 and written up in
  * FRONTEND_PRD section 12.
  */
-type Tab = "overview" | "recurring" | "retainers";
+type Tab = "overview" | "recurring" | "retainers" | "uninvoiced";
 type StatusFilter = "outstanding" | "draft" | "paid" | "all";
 
-const TABS: Tab[] = ["overview", "recurring", "retainers"];
+const TABS: Tab[] = ["overview", "recurring", "retainers", "uninvoiced"];
 const STATUSES: StatusFilter[] = ["outstanding", "draft", "paid", "all"];
 
 const isTab = (v: string): v is Tab => (TABS as string[]).includes(v);
@@ -180,10 +180,9 @@ export default function InvoicesPage() {
   /**
    * The tab strip, on every destination.
    *
-   * Uninvoiced and Configure are the two Harvest has that we do not, and they
-   * are deliberately absent rather than present and inert: TALLY-34 and
-   * TALLY-27 add them when they exist. A tab that leads nowhere is the thing
-   * the cosmetic sweep was written to find.
+   * Configure is the one Harvest has that we do not, and it is deliberately
+   * absent rather than present and inert until TALLY-27 builds it. A tab that
+   * leads nowhere is the thing the cosmetic sweep was written to find.
    */
   const tabs = (
     <Tabs
@@ -193,18 +192,21 @@ export default function InvoicesPage() {
         { value: "overview", label: "Overview", count: counts.all },
         { value: "recurring", label: "Recurring" },
         { value: "retainers", label: "Retainers" },
+        { value: "uninvoiced", label: "Uninvoiced" },
       ]}
       className="mb-4"
     />
   );
 
-  if (tab === "recurring" || tab === "retainers") {
+  if (tab !== "overview") {
     return (
       <>
         {header}
         <PageBody className="pt-4">
           {tabs}
-          {tab === "recurring" ? <RecurringList /> : <RetainerList />}
+          {tab === "recurring" && <RecurringList />}
+          {tab === "retainers" && <RetainerList />}
+          {tab === "uninvoiced" && <UninvoicedList />}
         </PageBody>
       </>
     );
@@ -294,7 +296,7 @@ export default function InvoicesPage() {
               action={can("invoice:manage") && <Button variant="primary" onClick={() => router.push("/invoices/new")}>New invoice</Button>}
             >
               {status === "outstanding"
-                ? "Every invoice has been paid. Uninvoiced time is on the client pages."
+                ? "Every invoice has been paid. The Uninvoiced tab has what has not been billed yet."
                 : "Try a different filter."}
             </EmptyState>
           }
@@ -505,5 +507,119 @@ function RetainerList() {
         );
       })}
     </div>
+  );
+}
+
+/**
+ * What has been done and not billed, by client.
+ *
+ * The screen somebody opens at the start of a billing run. Until TALLY-34 the
+ * figure was computed in three places and browsable in none, and this list's own
+ * empty state used to send people to the client pages one at a time.
+ *
+ * Every number here comes from the server and none of it is recomputed in the
+ * browser. The total on a row is the total the invoice will come to, and the
+ * only way to keep that true is to have one place do the arithmetic:
+ * `tests/uninvoiced.test.ts` asserts the row equals what the preview then
+ * offers, to the cent.
+ */
+function UninvoicedList() {
+  const router = useRouter();
+  const can = useCan();
+  const { data: rows = [], isLoading } = useQuery({
+    queryKey: ["uninvoiced-clients"],
+    queryFn: api.listUninvoicedClients,
+  });
+
+  const total = rows.reduce((sum, r) => sum + r.totalCents, 0);
+  const manage = can("invoice:manage");
+
+  if (isLoading) {
+    return (
+      <Card>
+        <div className="flex items-center gap-2 py-6 text-base text-ink-secondary">
+          <Spinner className="size-4" />
+          Working out what has not been billed…
+        </div>
+      </Card>
+    );
+  }
+
+  if (!rows.length) {
+    return (
+      <Card>
+        <EmptyState title="Everything billable has been invoiced.">
+          Billable time and expenses appear here as soon as they are logged.
+        </EmptyState>
+      </Card>
+    );
+  }
+
+  return (
+    <Card padded={false}>
+      <div className="flex items-center border-b border-border bg-bg-muted px-4 py-2 text-xs font-semibold uppercase tracking-[0.04em] text-ink-tertiary">
+        <span className="flex-1">Client</span>
+        <span className="w-40">Period</span>
+        <span className="w-24 text-right">Hours</span>
+        <span className="w-32 text-right">Time</span>
+        <span className="w-32 text-right">Expenses</span>
+        <span className="w-32 text-right">Total</span>
+        {manage && <span className="w-[150px] pl-3 text-right">Actions</span>}
+      </div>
+
+      {rows.map((r) => (
+        <div
+          key={r.clientId}
+          className="flex items-center border-b border-border px-4 py-2.5 text-base last:border-b-0"
+        >
+          <span className="min-w-0 flex-1">
+            <Link
+              href={`/clients/${r.clientId}`}
+              className="block truncate font-medium leading-tight text-ink hover:underline"
+            >
+              {r.clientName}
+            </Link>
+          </span>
+          <span className="w-40 text-sm tabular-nums text-ink-tertiary">
+            {r.from && r.to
+              ? r.from === r.to
+                ? formatDateUS(r.from)
+                : `${formatDateUS(r.from)} to ${formatDateUS(r.to)}`
+              : "—"}
+          </span>
+          <span className="w-24 text-right tabular-nums text-ink-secondary">
+            {r.hours ? r.hours.toFixed(2) : "—"}
+          </span>
+          <span className="w-32 text-right tabular-nums text-ink-secondary">
+            {r.timeCents ? formatMoney(r.timeCents, r.currency) : "—"}
+          </span>
+          <span className="w-32 text-right tabular-nums text-ink-secondary">
+            {r.expenseCents ? formatMoney(r.expenseCents, r.currency) : "—"}
+          </span>
+          <span className="w-32 text-right font-semibold tabular-nums text-ink">
+            {formatMoney(r.totalCents, r.currency)}
+          </span>
+          {manage && (
+            <span className="w-[150px] pl-3 text-right">
+              <Button
+                size="sm"
+                variant="secondary"
+                onClick={() => router.push(`/invoices/new?client=${r.clientId}`)}
+              >
+                Create invoice
+              </Button>
+            </span>
+          )}
+        </div>
+      ))}
+
+      <div className="flex items-center bg-bg-muted px-4 py-2.5 text-base font-semibold">
+        <span className="flex-1 text-ink-secondary">
+          {rows.length} client{rows.length === 1 ? "" : "s"} with unbilled work
+        </span>
+        <span className="w-32 text-right tabular-nums text-ink">{formatMoney(total)}</span>
+        {manage && <span className="w-[150px]" />}
+      </div>
+    </Card>
   );
 }

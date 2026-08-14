@@ -246,3 +246,24 @@ export interface Settings {
 
 /** A row in a grouped grid response: either a group header or a data row. */
 export type GridKind = "group" | "data";
+
+/**
+ * A client with work done and not billed, as the Uninvoiced screen shows it.
+ *
+ * `totalCents` is the server's figure, and the invoice raised from it will come
+ * to the same number. Nothing in the UI recomputes it from `hours` and a rate:
+ * that is how a screen and the invoice it leads to end up dollars apart.
+ */
+export interface UninvoicedClient {
+  clientId: ID;
+  clientName: string;
+  currency: string;
+  hours: number;
+  timeCents: number;
+  expenseCount: number;
+  expenseCents: number;
+  totalCents: number;
+  /** The span the unbilled work covers. Absent when there is none. */
+  from?: string;
+  to?: string;
+}
