@@ -1,0 +1,233 @@
+/* =============================================================================
+   Tally - Tailwind v4 bridge
+
+   Maps the design tokens into Tailwind's theme namespaces so every token is
+   reachable as a utility class: `bg-surface`, `text-ink-secondary`,
+   `rounded-lg`, `shadow-md`, `text-2xl`.
+
+   Ships verbatim into the app at `styles/theme.css`, which is the file the app
+   imports. Import order matters: Tailwind first, then tokens, then this bridge.
+
+   WHY `@theme inline`
+   `inline` makes Tailwind emit `background-color: var(--surface)` rather than
+   resolving the value at build time. That is what lets a single utility class
+   respond to a runtime theme change. Without `inline`, `bg-surface` would bake
+   in whichever value existed at build and dark mode would silently break.
+   ============================================================================= */
+
+@import "tailwindcss";
+@import "./tokens.css";
+
+
+/* -----------------------------------------------------------------------------
+   The `dark:` variant
+
+   Almost always unnecessary. `light-dark()` in tokens.css already resolves every
+   COLOUR per theme, so `bg-surface` is correct in both modes with no variant.
+
+   Reach for `dark:` only when a NON-colour property differs between themes, for
+   example a border that exists only in dark mode to separate two surfaces that
+   are identical in light. That is rare and each use should be justified.
+
+   The definition covers both theme states: the explicit attribute, and OS dark
+   when the user has not overridden it. Defining only the attribute case would
+   silently no-op for anyone on system dark, which is the default for most of
+   the team.
+   -------------------------------------------------------------------------- */
+@custom-variant dark {
+  &:where([data-theme="dark"], [data-theme="dark"] *) {
+    @slot;
+  }
+  @media (prefers-color-scheme: dark) {
+    &:where(:root:not([data-theme="light"]), :root:not([data-theme="light"]) *) {
+      @slot;
+    }
+  }
+}
+
+
+@theme inline {
+
+  /* ---- Spacing -------------------------------------------------------------
+     Tailwind v4 derives its whole spacing scale from this one multiplier. At
+     4px, every Tailwind step lines up 1:1 with our --sp-N tokens: p-1 is 4px,
+     p-3 is 12px, p-6 is 24px. One grid, two syntaxes, no conversion table. */
+  --spacing: 4px;
+
+  /* ---- Breakpoints ---------------------------------------------------------
+     Renamed to match the PRD's bands. `sm` is cleared because in our model the
+     small screen is the unprefixed base state, not a min-width. */
+  --breakpoint-sm: initial;
+  --breakpoint-md: 640px;
+  --breakpoint-lg: 1024px;
+  --breakpoint-xl: 1440px;
+  --breakpoint-2xl: initial;
+
+  /* ---- Surfaces ----------------------------------------------------------- */
+  --color-bg:             var(--bg);
+  --color-bg-subtle:      var(--bg-subtle);
+  --color-bg-muted:       var(--bg-muted);
+  --color-bg-strong:      var(--bg-strong);
+  --color-surface:        var(--surface);
+  --color-surface-hover:  var(--surface-hover);
+  --color-surface-active: var(--surface-active);
+  --color-border:         var(--border);
+  --color-border-strong:  var(--border-strong);
+  --color-overlay:        var(--overlay);
+
+  /* ---- Ink ----------------------------------------------------------------
+     Named `ink` rather than `text` so the utility reads `text-ink-secondary`
+     instead of the stuttering `text-text-secondary`. */
+  --color-ink:           var(--text);
+  --color-ink-secondary: var(--text-secondary);
+  --color-ink-tertiary:  var(--text-tertiary);
+  --color-ink-inverse:   var(--text-inverse);
+  --color-link:          var(--text-link);
+
+  /* ---- Accent ------------------------------------------------------------- */
+  --color-accent:        var(--accent);
+  --color-accent-hover:  var(--accent-hover);
+  --color-accent-active: var(--accent-active);
+  --color-accent-ink:    var(--accent-text);
+
+  /* ---- Focus -------------------------------------------------------------- */
+  --color-focus: var(--focus);
+
+  /* ---- Live (running timer) ----------------------------------------------- */
+  --color-live:        var(--live);
+  --color-live-bg:     var(--live-bg);
+  --color-live-border: var(--live-border);
+  --color-live-ink:    var(--live-text);
+
+  /* ---- Status ------------------------------------------------------------- */
+  --color-success:        var(--success);
+  --color-success-bg:     var(--success-bg);
+  --color-success-border: var(--success-border);
+  --color-warning:        var(--warning);
+  --color-warning-bg:     var(--warning-bg);
+  --color-warning-border: var(--warning-border);
+  --color-danger:         var(--danger);
+  --color-danger-bg:      var(--danger-bg);
+  --color-danger-border:  var(--danger-border);
+  --color-info:           var(--info);
+  --color-info-bg:        var(--info-bg);
+  --color-info-border:    var(--info-border);
+
+  /* ---- Domain ------------------------------------------------------------- */
+  --color-billable:     var(--billable);
+  --color-non-billable: var(--non-billable);
+  --color-budget-ok:    var(--budget-ok);
+  --color-budget-near:  var(--budget-near);
+  --color-budget-over:  var(--budget-over);
+
+  /* ---- Data viz -----------------------------------------------------------
+     Exposed as utilities mainly for legend swatches and table row markers.
+     Chart marks themselves read the CSS variables directly through the <Chart>
+     wrapper, because Recharts wants a colour value, not a class. */
+  --color-viz-1: var(--viz-1);
+  --color-viz-2: var(--viz-2);
+  --color-viz-3: var(--viz-3);
+  --color-viz-4: var(--viz-4);
+  --color-viz-5: var(--viz-5);
+  --color-viz-6: var(--viz-6);
+  --color-viz-7: var(--viz-7);
+  --color-viz-8: var(--viz-8);
+  --color-viz-good:     var(--viz-good);
+  --color-viz-warning:  var(--viz-warning);
+  --color-viz-serious:  var(--viz-serious);
+  --color-viz-critical: var(--viz-critical);
+  --color-viz-grid:     var(--viz-grid);
+  --color-viz-axis:     var(--viz-axis);
+
+  /* ---- Typography ----------------------------------------------------------
+     Source tokens are `--typeface-*`, not `--font-*`, because `--font-*` is this
+     namespace: mapping a key to a source token of the same name would be
+     circular and would drop the stack entirely. */
+  --font-sans: var(--typeface-sans);
+  --font-mono: var(--typeface-mono);
+
+  --text-xs:   var(--fs-xs);
+  --text-sm:   var(--fs-sm);
+  --text-base: var(--fs-base);
+  --text-md:   var(--fs-md);
+  --text-lg:   var(--fs-lg);
+  --text-xl:   var(--fs-xl);
+  --text-2xl:  var(--fs-2xl);
+  --text-3xl:  var(--fs-3xl);
+  --text-4xl:  var(--fs-4xl);
+
+  /* Paired line heights, so `text-2xl` carries its own leading. */
+  --text-xs--line-height:   var(--lh-normal);
+  --text-sm--line-height:   var(--lh-normal);
+  --text-base--line-height: var(--lh-normal);
+  --text-md--line-height:   var(--lh-normal);
+  --text-lg--line-height:   var(--lh-tight);
+  --text-xl--line-height:   var(--lh-tight);
+  --text-2xl--line-height:  var(--lh-tight);
+  --text-3xl--line-height:  var(--lh-tight);
+  --text-4xl--line-height:  var(--lh-tight);
+
+  /* Optical tracking for the large sizes. */
+  --text-2xl--letter-spacing: var(--ls-tight);
+  --text-3xl--letter-spacing: var(--ls-tighter);
+  --text-4xl--letter-spacing: var(--ls-tighter);
+
+  /* ---- Radius -------------------------------------------------------------- */
+  --radius-sm:   var(--r-sm);
+  --radius-md:   var(--r-md);
+  --radius-lg:   var(--r-lg);
+  --radius-xl:   var(--r-xl);
+  --radius-2xl:  var(--r-2xl);
+  --radius-full: var(--r-full);
+
+  /* ---- Elevation ----------------------------------------------------------- */
+  --shadow-xs: var(--sh-xs);
+  --shadow-sm: var(--sh-sm);
+  --shadow-md: var(--sh-md);
+  --shadow-lg: var(--sh-lg);
+  --shadow-xl: var(--sh-xl);
+
+  /* ---- Motion -------------------------------------------------------------- */
+  --ease-standard: var(--ease);
+  --ease-entrance: var(--ease-out);
+  --ease-exit:     var(--ease-in);
+
+  --default-transition-duration:        var(--dur-fast);
+  --default-transition-timing-function: var(--ease);
+
+  /* ---- Named animations ----------------------------------------------------
+     Only these three. Anything else is a one-off and belongs in the component. */
+  --animate-pulse-live: pulse-live 2s var(--ease) infinite;
+  --animate-shimmer:    shimmer 1.4s linear infinite;
+  --animate-spin-slow:  spin 900ms linear infinite;
+}
+
+
+/* -----------------------------------------------------------------------------
+   Keyframes
+   Defined outside @theme because they are rules, not values.
+   -------------------------------------------------------------------------- */
+
+/* The running-timer ripple. A 6px dot that breathes, never a moving spinner:
+   a timer is a steady state, not a loading state. */
+@keyframes pulse-live {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--live) 50%, transparent); }
+  70%  { box-shadow: 0 0 0 6px transparent; }
+  100% { box-shadow: 0 0 0 0 transparent; }
+}
+
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to   { background-position:  200% 0; }
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* Reduced motion kills the pulse entirely rather than slowing it. The dot stays
+   solid, which still reads as "running" because it is orange and it is there. */
+@media (prefers-reduced-motion: reduce) {
+  @keyframes pulse-live { 0%, 100% { box-shadow: none; } }
+  @keyframes shimmer    { from, to { background-position: 0 0; } }
+}

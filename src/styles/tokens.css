@@ -1,0 +1,419 @@
+/* =============================================================================
+   Tally - Design tokens
+   The single source of truth for every colour, size, and timing in the product.
+
+   Ships verbatim into the app at `styles/tokens.css`. Nothing in the codebase
+   may hard-code a colour, a radius, a duration, or a font size; everything
+   references a token defined here.
+
+   THEME MECHANICS
+   Three states, one definition per token, via CSS `light-dark()`:
+
+     <html>                       follows the OS (color-scheme: light dark)
+     <html data-theme="light">    forced light
+     <html data-theme="dark">     forced dark
+
+   `light-dark()` resolves against the inherited `color-scheme`, so setting the
+   attribute is the whole implementation. There is no media query and no second
+   dark block to keep in sync, which removes an entire class of drift bug.
+
+   Browser floor: Chrome 123+, Safari 17.5+, Firefox 120+ (all shipped 2024).
+   Evergreen only, which the PRD already assumes for an internal tool.
+   ============================================================================= */
+
+:root {
+  color-scheme: light dark;
+}
+:root[data-theme="light"] { color-scheme: light; }
+:root[data-theme="dark"]  { color-scheme: dark; }
+
+
+/* -----------------------------------------------------------------------------
+   1. SURFACES
+   A five-step neutral ramp. `--bg` is the page, `--surface` is anything that
+   sits on it (cards, popovers, table rows). They are the same value in light
+   mode and deliberately different in dark, where a card must lift off the page.
+   -------------------------------------------------------------------------- */
+:root {
+  --bg:             light-dark(#FFFFFF, #09090B);
+  --bg-subtle:      light-dark(#FAFAFA, #0E0E10);  /* sidebar, page plane, group rows */
+  --bg-muted:       light-dark(#F4F4F5, #17171A);  /* inputs at rest, table header, chips */
+  --bg-strong:      light-dark(#E8E8EA, #27272A);  /* progress tracks, pressed chips */
+
+  --surface:        light-dark(#FFFFFF, #111113);  /* cards, popovers, chart plane */
+  --surface-hover:  light-dark(#F7F7F8, #1A1A1D);
+  --surface-active: light-dark(#F0F0F1, #202024);
+
+  --border:         light-dark(#E4E4E7, #27272A);  /* hairlines, dividers, input rest */
+  --border-strong:  light-dark(#D4D4D8, #3F3F46);  /* input hover, axis lines */
+
+  --overlay:        light-dark(rgba(9, 9, 11, 0.40), rgba(0, 0, 0, 0.65));
+}
+
+
+/* -----------------------------------------------------------------------------
+   2. INK
+   Three weights carry 95% of the product. `--text-tertiary` is the floor:
+   nothing smaller or lighter than this is allowed to carry meaning.
+   -------------------------------------------------------------------------- */
+:root {
+  --text:           light-dark(#09090B, #FAFAFA);
+  --text-secondary: light-dark(#52525B, #A1A1AA);
+  --text-tertiary:  light-dark(#8B8B91, #71717A);
+  --text-inverse:   light-dark(#FFFFFF, #09090B);
+  --text-link:      light-dark(#2563EB, #60A5FA);
+}
+
+
+/* -----------------------------------------------------------------------------
+   3. ACCENT (primary action)
+   Deliberately the inverse of the background rather than a brand hue. This is
+   what keeps orange free to mean exactly one thing: a timer is running.
+   -------------------------------------------------------------------------- */
+:root {
+  --accent:        light-dark(#09090B, #FAFAFA);
+  --accent-hover:  light-dark(#27272A, #E4E4E7);
+  --accent-active: light-dark(#3F3F46, #D4D4D8);
+  --accent-text:   light-dark(#FFFFFF, #09090B);
+}
+
+
+/* -----------------------------------------------------------------------------
+   4. FOCUS
+   One ring, everywhere, never removed without a replacement.
+   -------------------------------------------------------------------------- */
+:root {
+  --focus:      light-dark(#3B82F6, #60A5FA);
+  --focus-ring: 0 0 0 3px color-mix(in srgb, var(--focus) 25%, transparent);
+}
+
+
+/* -----------------------------------------------------------------------------
+   5. LIVE - the running timer
+   The single most important state in a time tracker, so it gets the single
+   most arresting colour and it is used nowhere else. If you are reaching for
+   orange and a timer is not running, you are reaching for the wrong token.
+   -------------------------------------------------------------------------- */
+:root {
+  --live:        light-dark(#EA580C, #FB923C);
+  --live-bg:     light-dark(#FFF7ED, rgba(234, 88, 12, 0.14));
+  --live-border: light-dark(#FED7AA, rgba(234, 88, 12, 0.38));
+  --live-text:   light-dark(#C2410C, #FDBA74);  /* text sitting on --live-bg */
+}
+
+
+/* -----------------------------------------------------------------------------
+   6. SEMANTIC STATUS
+   Four states. Every one of them ships with an icon and a word; colour never
+   carries the meaning alone.
+   -------------------------------------------------------------------------- */
+:root {
+  --success:        light-dark(#059669, #34D399);
+  --success-bg:     light-dark(#ECFDF5, rgba(16, 185, 129, 0.12));
+  --success-border: light-dark(#A7F3D0, rgba(16, 185, 129, 0.35));
+
+  --warning:        light-dark(#B45309, #FBBF24);
+  --warning-bg:     light-dark(#FFFBEB, rgba(245, 158, 11, 0.12));
+  --warning-border: light-dark(#FCD34D, rgba(245, 158, 11, 0.35));
+
+  --danger:         light-dark(#DC2626, #F87171);
+  --danger-bg:      light-dark(#FEF2F2, rgba(239, 68, 68, 0.12));
+  --danger-border:  light-dark(#FCA5A5, rgba(239, 68, 68, 0.35));
+
+  --info:           light-dark(#2563EB, #60A5FA);
+  --info-bg:        light-dark(#EFF6FF, rgba(59, 130, 246, 0.12));
+  --info-border:    light-dark(#BFDBFE, rgba(59, 130, 246, 0.35));
+}
+
+
+/* -----------------------------------------------------------------------------
+   7. DOMAIN ALIASES
+   Named for what they mean in Tally, not for how they look. Reach for these in
+   feature code so a later palette change is a one-line edit here.
+   -------------------------------------------------------------------------- */
+:root {
+  /* Billable split. Non-billable is the same hue at reduced presence, so the
+     pair reads as one measure divided, not as two unrelated categories. */
+  --billable:     var(--info);
+  --non-billable: color-mix(in srgb, var(--info) 45%, var(--bg-strong));
+
+  /* Budget health. Thresholds live in code (§4.6 of the backend PRD); these
+     are only the colours those thresholds resolve to. */
+  --budget-ok:   var(--info);      /* under 80%  */
+  --budget-near: var(--warning);   /* 80 to 100% */
+  --budget-over: var(--danger);    /* over 100%  */
+
+  /* Invoice states. `draft` and `written-off` are intentionally neutral: an
+     unsent or abandoned invoice is not a status worth spending colour on. */
+  --invoice-draft:      var(--text-secondary);
+  --invoice-draft-bg:   var(--bg-muted);
+  --invoice-sent:       var(--info);
+  --invoice-sent-bg:    var(--info-bg);
+  --invoice-partial:    var(--warning);
+  --invoice-partial-bg: var(--warning-bg);
+  --invoice-late:       var(--danger);
+  --invoice-late-bg:    var(--danger-bg);
+  --invoice-paid:       var(--success);
+  --invoice-paid-bg:    var(--success-bg);
+  --invoice-void:       var(--text-tertiary);
+  --invoice-void-bg:    var(--bg-muted);
+
+  /* Approval states. */
+  --approval-pending:  var(--warning);
+  --approval-approved: var(--success);
+  --approval-changes:  var(--danger);
+}
+
+
+/* -----------------------------------------------------------------------------
+   8. DATA VISUALIZATION
+   Categorical slots are assigned in fixed order and never cycled. The dark
+   column is the same eight hues re-stepped for the dark surface, not a
+   different palette. Validated with `scripts/validate-palette.mjs` against
+   both of our surfaces: every adjacent pair clears CVD dE >= 8 and
+   normal-vision dE >= 15 in both modes.
+
+   HARD RULES (enforced by the <Chart> wrapper, not by convention):
+     - Scatter, bubble, and small multiples cap at THREE series. Only the first
+       three slots clear the all-pairs floor. A fourth category folds into
+       "Other" or the chart facets.
+     - Slots 3, 4, and 5 sit below 3:1 contrast on the light surface. Charts
+       using them ship visible direct labels or a table view. Not optional.
+     - Colour follows the entity, never its rank. Filtering must not repaint
+       the survivors.
+     - Never a dual-axis chart.
+   -------------------------------------------------------------------------- */
+:root {
+  --viz-1: light-dark(#2a78d6, #3987e5);  /* blue    */
+  --viz-2: light-dark(#eb6834, #d95926);  /* orange  */
+  --viz-3: light-dark(#1baf7a, #199e70);  /* aqua    */
+  --viz-4: light-dark(#eda100, #c98500);  /* yellow  */
+  --viz-5: light-dark(#e87ba4, #d55181);  /* magenta */
+  --viz-6: light-dark(#008300, #008300);  /* green   */
+  --viz-7: light-dark(#4a3aa7, #9085e9);  /* violet  */
+  --viz-8: light-dark(#e34948, #e66767);  /* red     */
+
+  /* Sequential ramp, one hue, low to high magnitude. The dark column runs the
+     opposite direction along the same blue ramp so "more" always means "more
+     visible" against whichever surface is behind it. */
+  --viz-seq-1: light-dark(#86b6ef, #184f95);
+  --viz-seq-2: light-dark(#5598e7, #256abf);
+  --viz-seq-3: light-dark(#2a78d6, #3987e5);
+  --viz-seq-4: light-dark(#1c5cab, #6da7ec);
+  --viz-seq-5: light-dark(#104281, #9ec5f4);
+
+  /* Diverging: two poles that read as opposite, neutral gray at the midpoint.
+     Never a hue at the midpoint, never a rainbow. */
+  --viz-div-pos: var(--viz-1);
+  --viz-div-mid: light-dark(#f0efec, #383835);
+  --viz-div-neg: var(--viz-8);
+
+  /* Chart status. Fixed, never themed, never reused as a series colour. */
+  --viz-good:     #0ca30c;
+  --viz-warning:  #fab219;
+  --viz-serious:  #ec835a;
+  --viz-critical: #d03b3b;
+
+  /* Chart chrome. Recessive by construction. */
+  --viz-surface: var(--surface);
+  --viz-grid:    var(--border);
+  --viz-axis:    var(--border-strong);
+  --viz-label:   var(--text-tertiary);
+  --viz-gap:     2px;  /* surface-coloured gap between adjacent and stacked marks */
+}
+
+
+/* -----------------------------------------------------------------------------
+   9. PROJECT COLOURS
+   Identity colours for calendar blocks, project dots, and breakdown bars.
+   Fixed hexes, not themed: a project's colour is part of how people recognise
+   it, and it must not change when the theme does. Assigned round-robin from
+   this pool on project creation, overridable per project.
+   Always paired with a text label; never the only identifier.
+   -------------------------------------------------------------------------- */
+:root {
+  --project-1:  #3B82F6;  /* blue   */
+  --project-2:  #06B6D4;  /* cyan   */
+  --project-3:  #14B8A6;  /* teal   */
+  --project-4:  #10B981;  /* green  */
+  --project-5:  #84CC16;  /* lime   */
+  --project-6:  #F59E0B;  /* amber  */
+  --project-7:  #F97316;  /* orange */
+  --project-8:  #EF4444;  /* red    */
+  --project-9:  #EC4899;  /* pink   */
+  --project-10: #A855F7;  /* violet */
+  --project-11: #8B5CF6;  /* purple */
+  --project-12: #6366F1;  /* indigo */
+}
+
+
+/* -----------------------------------------------------------------------------
+   10. TYPOGRAPHY
+   13px base. This is a dense, information-first product; 13px with generous
+   line height reads better here than 14 or 16 and fits a week grid on a laptop.
+   -------------------------------------------------------------------------- */
+:root {
+  /* Named `--typeface-*` rather than `--font-*` on purpose. `--font-*` is a
+     Tailwind theme namespace, so a source token by that name would make the
+     bridge in theme.css self-referential (`--font-sans: var(--font-sans)`) and
+     silently drop the whole font stack. Keep raw tokens out of Tailwind's
+     reserved prefixes: --color-*, --font-*, --text-*, --radius-*, --shadow-*,
+     --ease-*, --animate-*, --breakpoint-*, --spacing. */
+  --typeface-sans: var(--font-inter), 'Inter', ui-sans-serif, system-ui, -apple-system,
+                   'Segoe UI', Roboto, sans-serif;
+  --typeface-mono: var(--font-jetbrains), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  --fs-xs:   11px;   /* chip text, axis labels, keyboard hints */
+  --fs-sm:   12px;   /* help text, table meta */
+  --fs-base: 13px;   /* body default */
+  --fs-md:   14px;   /* emphasis, section labels */
+  --fs-lg:   16px;   /* card titles, row durations */
+  --fs-xl:   20px;   /* page subtitles, entry titles */
+  --fs-2xl:  24px;   /* page h1 */
+  --fs-3xl:  32px;   /* KPI values */
+  --fs-4xl:  40px;   /* hero figures */
+
+  --lh-tight:   1.25;
+  --lh-normal:  1.5;
+  --lh-relaxed: 1.65;
+
+  --fw-regular:  400;
+  --fw-medium:   500;
+  --fw-semibold: 600;
+  --fw-bold:     700;
+
+  /* Optical correction: large text needs negative tracking to avoid looking loose. */
+  --ls-tight:  -0.011em;  /* headings */
+  --ls-tighter: -0.02em;  /* --fs-3xl and above */
+}
+
+
+/* -----------------------------------------------------------------------------
+   11. SPACING
+   A 4px base grid. Every margin, padding, and gap is one of these.
+   -------------------------------------------------------------------------- */
+:root {
+  --sp-1:  4px;
+  --sp-2:  8px;
+  --sp-3:  12px;
+  --sp-4:  16px;
+  --sp-5:  20px;
+  --sp-6:  24px;
+  --sp-8:  32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+  --sp-16: 64px;
+  --sp-20: 80px;
+}
+
+
+/* -----------------------------------------------------------------------------
+   12. RADIUS
+   -------------------------------------------------------------------------- */
+:root {
+  --r-sm:   4px;    /* chips, inline code, small checkboxes */
+  --r-md:   6px;    /* buttons, inputs, menu items */
+  --r-lg:   8px;    /* cards, table containers */
+  --r-xl:   12px;   /* popovers, toasts, menus */
+  --r-2xl:  16px;   /* modals, sheets */
+  --r-full: 9999px; /* pills, avatars, status dots */
+}
+
+
+/* -----------------------------------------------------------------------------
+   13. ELEVATION
+   Five steps. Shadow geometry is identical across themes; only the ink changes,
+   so `light-dark()` sits on each colour inside the shadow rather than on the
+   whole value.
+   -------------------------------------------------------------------------- */
+:root {
+  --sh-xs: 0 1px 2px  light-dark(rgba(9,9,11,0.04), rgba(0,0,0,0.30));
+
+  --sh-sm: 0 1px 3px  light-dark(rgba(9,9,11,0.06), rgba(0,0,0,0.40)),
+           0 1px 2px  light-dark(rgba(9,9,11,0.04), rgba(0,0,0,0.30));
+
+  --sh-md: 0 4px 8px  light-dark(rgba(9,9,11,0.06), rgba(0,0,0,0.40)),
+           0 2px 4px  light-dark(rgba(9,9,11,0.04), rgba(0,0,0,0.30));
+
+  --sh-lg: 0 12px 24px light-dark(rgba(9,9,11,0.08), rgba(0,0,0,0.50)),
+           0 4px 8px   light-dark(rgba(9,9,11,0.06), rgba(0,0,0,0.40));
+
+  --sh-xl: 0 24px 48px light-dark(rgba(9,9,11,0.12), rgba(0,0,0,0.60)),
+           0 8px 16px  light-dark(rgba(9,9,11,0.08), rgba(0,0,0,0.50));
+
+  /* Elevation usage:
+     xs  resting cards in a list
+     sm  hovered card, sticky header separation
+     md  dropdown, tooltip, popover
+     lg  floating bulk-action bar, toast
+     xl  modal, drawer                                                        */
+}
+
+
+/* -----------------------------------------------------------------------------
+   14. MOTION
+   Fast is the default. Only `transform` and `opacity` are ever animated.
+   -------------------------------------------------------------------------- */
+:root {
+  --ease:     cubic-bezier(0.2, 0, 0, 1);      /* standard, decelerating */
+  --ease-in:  cubic-bezier(0.4, 0, 1, 1);      /* exits */
+  --ease-out: cubic-bezier(0, 0, 0.2, 1);      /* entrances */
+
+  --dur-fast: 120ms;  /* hover, focus, colour change */
+  --dur:      180ms;  /* popovers, dropdowns, toasts */
+  --dur-slow: 280ms;  /* modals, drawers, route transitions */
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur-fast: 1ms;
+    --dur:      1ms;
+    --dur-slow: 1ms;
+  }
+}
+
+
+/* -----------------------------------------------------------------------------
+   15. LAYOUT
+   Fixed shell measurements, referenced by the app shell and by any sticky
+   offset that has to clear it.
+   -------------------------------------------------------------------------- */
+:root {
+  --topbar-h:        52px;
+  --sidebar-w:       240px;
+  --sidebar-rail-w:  56px;   /* collapsed */
+  --content-max:     1440px;
+  --settings-nav-w:  280px;  /* two-pane settings and person pages */
+
+  /* Table density. Set `--row-h` on the table root to switch modes. */
+  --row-h-comfortable: 44px;
+  --row-h-compact:     36px;
+  --row-h: var(--row-h-comfortable);
+
+  /* The action row above every grid. It is ALWAYS in the layout at exactly this
+     height, whether it is showing filters, a selection count, or an inline
+     action form. Nothing a user clicks in a table may change this number, which
+     is what guarantees the grid never moves under the pointer. See the no-shift
+     rule in the style guide. */
+  --action-row-h: 48px;
+
+  /* Control heights. Three sizes, no others. */
+  --control-h-sm: 28px;
+  --control-h:    32px;
+  --control-h-lg: 36px;   /* form inputs, which need more room than buttons */
+  --control-h-touch: 44px; /* every control at the sm breakpoint */
+}
+
+
+/* -----------------------------------------------------------------------------
+   16. Z-INDEX
+   A closed scale. Never write a raw z-index in a component.
+   -------------------------------------------------------------------------- */
+:root {
+  --z-base:     0;
+  --z-sticky:   50;   /* top bar, sticky table headers */
+  --z-dropdown: 100;  /* menus, comboboxes, popovers */
+  --z-modal:    200;  /* dialogs, drawers, and their scrim */
+  --z-toast:    300;
+  --z-tooltip:  400;  /* always on top; it explains everything else */
+}

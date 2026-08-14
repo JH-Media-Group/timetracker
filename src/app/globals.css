@@ -1,0 +1,10 @@
+/* App stylesheet. theme.css pulls in tailwindcss + tokens.css. */
+@import "../styles/theme.css";
+@import "../styles/base.css";
+@import "../styles/ag-grid-overrides.css";
+
+/* Utility the shell relies on but Tailwind has no name for. */
+@utility scrollbar-none {
+  scrollbar-width: none;
+  &::-webkit-scrollbar { display: none; }
+}

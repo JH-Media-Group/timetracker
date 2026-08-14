@@ -1,0 +1,280 @@
+/* =============================================================================
+   Tally - AG Grid overrides
+
+   Ships verbatim into the app at `src/styles/ag-grid-overrides.css`, imported
+   after `base.css`.
+
+   The Theming API in `ag-grid-theme.ts` covers almost everything. This file is
+   only for what a theme parameter cannot express: our own cell classes, the row
+   kinds that stand in for Enterprise grouping, and a handful of places where
+   AG Grid's defaults fight a decision made elsewhere in the system.
+
+   KEEP THIS FILE SMALL. Every rule here is a place where the grid is no longer
+   configured the way AG Grid expects, which is a maintenance cost at every
+   upgrade. If a parameter exists for something, use the parameter.
+   ============================================================================= */
+
+/* -----------------------------------------------------------------------------
+   Cell classes applied through `columnTypes` in recipes/grid.ts
+   -------------------------------------------------------------------------- */
+
+.tly-cell {
+  display: flex;
+  align-items: center;
+}
+
+/* Numeric columns are right-aligned with tabular figures so digits stack. This
+   is the single most important table rule in a financial product: without it,
+   comparing a column of amounts by eye is guesswork. */
+.tly-numeric,
+.tly-header-numeric .ag-header-cell-label {
+  justify-content: flex-end;
+  font-variant-numeric: tabular-nums;
+}
+
+.tly-header-numeric .ag-header-cell-label {
+  flex-direction: row-reverse;   /* sort arrow to the left of a right-aligned label */
+}
+
+/* The header is a label, not a headline. */
+.ag-header-cell-text {
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.tly-actions {
+  justify-content: center;
+  padding-inline: 0;
+}
+
+/* AG Grid wraps every cell renderer's output in `.ag-cell-wrapper` >
+   `.ag-cell-value`, and the wrapper ships `flex-grow: 0`. That means a renderer
+   can never fill its cell no matter what it does to its own elements: it stays
+   at content width and the rest of the cell is dead space.
+
+   This defeats three things we rely on, so it is fixed once here rather than
+   worked around per renderer:
+     - inline meters collapse to nothing, leaving a bare percentage
+     - progress bars size to their label instead of the column
+     - `text-overflow: ellipsis` never triggers, because without `min-width: 0`
+       a flex item refuses to shrink below its content and the text overflows
+       the cell instead of truncating
+
+   Verified with Playwright: without this the meter wrapper measures 78px in a
+   150px column. */
+.tly-cell .ag-cell-wrapper,
+.tly-cell .ag-cell-value {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+/* The meter itself then splits the row with its value label, keeping a 32px
+   floor so a narrow column still shows a bar rather than a sliver. */
+.tly-cell .tly-meter-row {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.tly-cell .tly-meter {
+  flex: 1 1 auto;
+  min-width: 32px;
+}
+
+/* -----------------------------------------------------------------------------
+   Row kinds
+
+   These are the full-width rows that replace Enterprise row grouping and
+   master/detail. See the Community boundary note in recipes/grid.ts.
+   -------------------------------------------------------------------------- */
+
+.tly-row-group .ag-full-width-row,
+.tly-row-group {
+  background: var(--bg-subtle);
+  font-weight: var(--fw-medium);
+}
+
+/* A group header is a heading, not a row of data: it does not respond to hover
+   the way a clickable data row does. */
+.tly-row-group:hover,
+.tly-row-detail:hover {
+  background: var(--bg-subtle);
+}
+
+.tly-row-detail {
+  background: var(--bg-subtle);
+}
+
+/* The pinned grand total. Heavier top rule so it reads as a summation line
+   rather than as one more row. */
+.ag-floating-bottom .ag-row,
+.tly-row-total {
+  font-weight: var(--fw-semibold);
+  background: var(--surface);
+  border-top: 1px solid var(--border-strong);
+}
+
+/* -----------------------------------------------------------------------------
+   THE NO-SHIFT RULE
+
+   Clicking anything in a table must never change the table's geometry. A user
+   ticking checkboxes down a column is aiming at a moving target the instant a
+   row height, a border width, or a container height changes. Every rule in this
+   block exists to hold the layout perfectly still.
+
+   The four ways a table normally betrays this, and what we do instead:
+
+     1. Selection adds a border     -> selection is a BACKGROUND only
+     2. Actions appear on hover     -> reserved space, toggled with OPACITY
+     3. Menus expand inline         -> menus are PORTALLED overlays
+     4. A bulk bar appears          -> the action row is ALWAYS in the layout
+
+   Anything that genuinely must add content to the table (a detail panel) is an
+   explicit expand action, never a side effect of selecting or acting.
+   -------------------------------------------------------------------------- */
+
+/* 1. Selected and focused rows change colour, never box geometry. An added
+      border would be 1px of layout and would shift every row below it. */
+.ag-row-selected,
+.ag-row-focus {
+  border-width: 0;
+}
+.ag-row-selected::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  box-shadow: inset 2px 0 0 var(--focus);   /* inset: paints, does not reflow */
+}
+
+/* The header checkbox's indeterminate state must occupy the same box as checked
+   and unchecked, or the header height changes as you partially select. */
+.ag-header-select-all .ag-checkbox-input-wrapper,
+.ag-selection-checkbox .ag-checkbox-input-wrapper {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+
+/* 2. Row actions are always in the layout at full size, revealed with opacity.
+      `display: none` or a width change here would reflow the row on hover,
+      which is the most common version of this bug. Revealed on hover, on
+      keyboard focus, and whenever AG Grid marks the row focused, so a keyboard
+      user (who never generates a hover) can still reach them. */
+.tly-actions button {
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.ag-row:hover .tly-actions button,
+.ag-row-focus .tly-actions button,
+.ag-row-selected .tly-actions button,
+.tly-actions button:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  /* Touch has no hover, so actions are simply always visible. */
+  .tly-actions button { opacity: 1; }
+}
+
+/* 3. Popups are portalled and positioned, so they overlay rather than push.
+      AG Grid does this by default; this pins it so a future default change
+      cannot silently reintroduce inline expansion. */
+.ag-popup,
+.ag-menu {
+  position: absolute;
+  z-index: var(--z-dropdown);
+}
+
+/* 4. Grid body height is owned by the page, not by the row count, so a grid
+      that gains or loses rows does not resize its container and push the page
+      around. The page gives the grid a height; the grid scrolls inside it. */
+.ag-root-wrapper {
+  height: 100%;
+}
+
+/* -----------------------------------------------------------------------------
+   Focus
+
+   AG Grid draws its own focus indicator on the focused cell. We keep it (it is
+   the correct affordance for a grid, where focus is cellwise) but restyle it to
+   our ring so it is recognisably the same focus treatment as the rest of the
+   product. `base.css` sets a global :focus-visible outline; this makes sure the
+   two do not stack into a double ring inside the grid.
+   -------------------------------------------------------------------------- */
+
+.ag-cell:focus-visible,
+.ag-cell-focus:not(.ag-cell-range-selected) {
+  outline: none !important;
+  box-shadow: inset 0 0 0 2px var(--focus);
+  border-radius: var(--r-sm);
+}
+
+/* -----------------------------------------------------------------------------
+   Week grid
+
+   The timesheet week view: cells are editable and centre-aligned on their own
+   value, and an inferred start time is marked with a corner glyph.
+   -------------------------------------------------------------------------- */
+
+.tly-week-cell {
+  justify-content: flex-end;
+  font-variant-numeric: tabular-nums;
+}
+
+.tly-week-cell--empty::after {
+  content: "\2014";              /* em dash: an empty cell is not a zero */
+  color: var(--text-tertiary);
+}
+
+.tly-week-cell--inferred {
+  position: relative;
+}
+.tly-week-cell--inferred::before {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--text-tertiary);
+}
+
+.tly-week-cell--running {
+  background: var(--live-bg);
+  color: var(--live-text);
+}
+
+/* -----------------------------------------------------------------------------
+   Scrollbars
+
+   base.css hides scrollbars until hover, which is wrong inside a grid: a table
+   that scrolls horizontally must advertise it, or a pinned Actions column looks
+   like the end of the data.
+   -------------------------------------------------------------------------- */
+
+.ag-body-horizontal-scroll-viewport,
+.ag-body-vertical-scroll-viewport {
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+/* -----------------------------------------------------------------------------
+   Print
+
+   Reports get printed. Virtualization means only the visible rows exist in the
+   DOM, so a printed grid is a printed screenshot of the viewport. Anything that
+   must print in full renders as a plain server-side table instead; this rule
+   makes the truncation obvious rather than silent.
+   -------------------------------------------------------------------------- */
+
+@media print {
+  .ag-root-wrapper::after {
+    content: "This table is interactive. Use Export for the complete data.";
+    display: block;
+    padding: var(--sp-2);
+    font-size: var(--fs-sm);
+    color: var(--text-tertiary);
+  }
+  .ag-body-vertical-scroll,
+  .ag-body-horizontal-scroll {
+    display: none;
+  }
+}

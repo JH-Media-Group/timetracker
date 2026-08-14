@@ -1,0 +1,2401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tally Design System</title>
+<script>
+  /* Applied before first paint so the guide never flashes the wrong theme.
+     This is the same script the app inlines in <head>, from tokens.ts. */
+  (function(){try{var t=localStorage.getItem('tally-theme');
+  if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);}catch(e){}})();
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="preview.css">
+<!-- AG Grid Community, for the live grid specimen only. The app bundles it
+     through pnpm and lazy-loads it per route; this CDN copy exists so the
+     style guide stays a zero-build, open-in-a-browser document. -->
+<script src="https://cdn.jsdelivr.net/npm/ag-grid-community@34/dist/ag-grid-community.min.js"></script>
+</head>
+<body>
+
+<div class="theme-toggle" role="group" aria-label="Theme">
+  <button data-theme-set="system" aria-pressed="true">System</button>
+  <button data-theme-set="light"  aria-pressed="false">Light</button>
+  <button data-theme-set="dark"   aria-pressed="false">Dark</button>
+</div>
+
+<div class="guide">
+
+<nav class="guide-nav" aria-label="Sections">
+  <div class="guide-brand"><span class="guide-brand-mark">T</span> Tally</div>
+  <div class="guide-version">design system v1.0</div>
+
+  <div class="guide-nav-group">
+    <div class="guide-nav-label">Foundations</div>
+    <a href="#principles">Principles</a>
+    <a href="#theming">Theming</a>
+    <a href="#colour">Colour</a>
+    <a href="#type">Typography</a>
+    <a href="#space">Spacing &amp; layout</a>
+    <a href="#radius">Radius</a>
+    <a href="#elevation">Elevation</a>
+    <a href="#motion">Motion</a>
+    <a href="#icons">Icons</a>
+  </div>
+
+  <div class="guide-nav-group">
+    <div class="guide-nav-label">Components</div>
+    <a href="#buttons">Buttons</a>
+    <a href="#inputs">Inputs &amp; forms</a>
+    <a href="#controls">Controls</a>
+    <a href="#badges">Badges &amp; status</a>
+    <a href="#avatars">Avatars &amp; presence</a>
+    <a href="#cards">Cards &amp; KPIs</a>
+    <a href="#tabs">Tabs &amp; nav</a>
+    <a href="#menus">Menus &amp; tooltips</a>
+    <a href="#feedback">Banners &amp; toasts</a>
+    <a href="#loading">Loading</a>
+    <a href="#empty">Empty states</a>
+    <a href="#tables">Tables &amp; grid</a>
+    <a href="#meters">Meters</a>
+  </div>
+
+  <div class="guide-nav-group">
+    <div class="guide-nav-label">Data</div>
+    <a href="#viz">Charts</a>
+  </div>
+
+  <div class="guide-nav-group">
+    <div class="guide-nav-label">Patterns</div>
+    <a href="#timer">Timer</a>
+    <a href="#entries">Time entries</a>
+    <a href="#calendar">Calendar</a>
+    <a href="#bulk">Bulk actions</a>
+    <a href="#shell">App shell</a>
+  </div>
+
+  <div class="guide-nav-group">
+    <div class="guide-nav-label">Reference</div>
+    <a href="#a11y">Accessibility</a>
+    <a href="#porting">Porting</a>
+  </div>
+</nav>
+
+<main class="guide-main">
+
+<header class="guide-header">
+  <h1>Tally Design System</h1>
+  <p>The visual and interaction system for JH Media Group's time tracking, profitability, and invoicing tool. Every token on this page is live: the guide imports the same <code class="tok">tokens.css</code> that ships in the app, so what you see is what renders in production. Click any swatch or scale row to copy its token.</p>
+</header>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="principles">
+  <h2>Principles</h2>
+  <p>Seven rules. When two designs are both defensible, these break the tie.</p>
+
+  <div class="demo stack">
+    <div><strong>1. Logging time must cost nothing.</strong> <span class="muted">Every second of friction is multiplied by eleven people times two hundred and fifty days. The timer is one keystroke from anywhere.</span></div>
+    <div><strong>2. Never lose a keystroke.</strong> <span class="muted">Autosave, optimistic writes, an offline-tolerant timer, and a visible saved state. The user should never wonder whether something stuck.</span></div>
+    <div><strong>3. Keyboard-first, mouse-complete.</strong> <span class="muted">A command palette and a documented shortcut map. Nothing is keyboard-only, nothing is mouse-only.</span></div>
+    <div><strong>4. Show the number, then the breakdown.</strong> <span class="muted">Lead with the figure that matters and let people drill down. Never the reverse.</span></div>
+    <div><strong>5. Destructive actions are reversible.</strong> <span class="muted">Archive over delete. Undo on anything that removes data. Typed confirmation for the rest.</span></div>
+    <div><strong>6. Money is exact.</strong> <span class="muted">Integer minor units, snapshotted rates, and tabular figures so columns line up and a ticking timer never makes a row jitter.</span></div>
+    <div><strong>7. Colour means something.</strong> <span class="muted">Chrome is neutral. Colour is reserved for state, and every use of it is paired with a word or an icon.</span></div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="theming">
+  <h2>Theming</h2>
+  <p>Three states, one definition per token. The root element carries no attribute by default and follows the OS; an explicit choice stamps <code class="tok">data-theme="light"</code> or <code class="tok">data-theme="dark"</code>.</p>
+
+  <div class="demo stack tight">
+    <pre class="mono" style="font-size:var(--fs-sm); color:var(--text-secondary); white-space:pre-wrap; margin:0;">:root                      { color-scheme: light dark; }   /* follows the OS */
+:root[data-theme="light"]  { color-scheme: light; }
+:root[data-theme="dark"]   { color-scheme: dark;  }
+
+--surface: light-dark(#FFFFFF, #111113);</pre>
+  </div>
+
+  <div class="rule">
+    <span class="rule-mark">Why</span>
+    <div><strong>CSS <code class="tok">light-dark()</code> means each colour is defined exactly once.</strong> There is no media query and no second dark block to keep in sync, which removes the most common theming bug: a token updated in one block and forgotten in the other. Setting the attribute is the entire implementation. Browser floor is Chrome 123, Safari 17.5, Firefox 120, all shipped in 2024.</div>
+  </div>
+
+  <div class="rule warn">
+    <span class="rule-mark">!</span>
+    <div><strong>Never define a colour only inside a <code class="tok">@media</code> or <code class="tok">[data-theme]</code> block.</strong> Every token lives on bare <code class="tok">:root</code>. If you find yourself writing a dark override, you are working against the system.</div>
+  </div>
+
+  <p>Flip the toggle in the top right. Everything below re-renders from the same variables, including the charts.</p>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="colour">
+  <h2>Colour</h2>
+  <p>A neutral chrome plus four reserved meanings. The product is near-monochrome by default so that when colour appears, it is information.</p>
+
+  <h3>Surfaces</h3>
+  <div class="swatch-grid" id="sw-surface"></div>
+
+  <h3>Ink</h3>
+  <p><code class="tok">--text-tertiary</code> is the floor. Nothing lighter or smaller may carry meaning on its own.</p>
+  <div class="swatch-grid" id="sw-ink"></div>
+
+  <h3>Accent</h3>
+  <p>The primary action colour is the inverse of the background, not a brand hue. This is deliberate: it keeps orange free to mean exactly one thing.</p>
+  <div class="swatch-grid" id="sw-accent"></div>
+
+  <h3>Live &mdash; the running timer</h3>
+  <p>The single most important state in a time tracker, so it gets the single most arresting colour, and it appears nowhere else in the product.</p>
+  <div class="swatch-grid" id="sw-live"></div>
+
+  <div class="dodont">
+    <div class="do">
+      <h4>&check; Do</h4>
+      <p>Use <code class="tok">--live</code> for a running timer, the presence dot of someone currently tracking, and the row of the entry being timed.</p>
+    </div>
+    <div class="dont">
+      <h4>&times; Don't</h4>
+      <p>Use orange for a warning, a highlight, a call to action, or a chart series. Warnings have <code class="tok">--warning</code>; series have the viz palette.</p>
+    </div>
+  </div>
+
+  <h3>Status</h3>
+  <p>Four states, each with a foreground, a background, and a border. Always paired with a word or an icon.</p>
+  <div class="swatch-grid" id="sw-status"></div>
+
+  <h3>Domain aliases</h3>
+  <p>Named for meaning rather than appearance. Reach for these in feature code so a palette change stays a one-line edit.</p>
+  <div class="swatch-grid" id="sw-domain"></div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="type">
+  <h2>Typography</h2>
+  <p>Inter for the interface, JetBrains Mono for anything that has to line up or be read as a code. The base size is 13px: this is a dense product, and 13 with generous leading fits a week grid on a laptop where 14 does not.</p>
+
+  <div class="demo stack">
+    <div style="font-size:var(--fs-4xl); font-weight:var(--fw-semibold); letter-spacing:var(--ls-tighter);">40.00 hours</div>
+    <div style="font-size:var(--fs-3xl); font-weight:var(--fw-semibold); letter-spacing:var(--ls-tighter);">$8,000.00</div>
+    <div style="font-size:var(--fs-2xl); font-weight:var(--fw-semibold); letter-spacing:var(--ls-tight);">Example Project 01</div>
+    <div style="font-size:var(--fs-xl); font-weight:var(--fw-semibold);">Project progress</div>
+    <div style="font-size:var(--fs-lg);">Budget remaining (60%)</div>
+    <div style="font-size:var(--fs-md); font-weight:var(--fw-medium);">Meetings and collaboration</div>
+    <div style="font-size:var(--fs-base);">Body text at the default size, which is where most of the product lives.</div>
+    <div style="font-size:var(--fs-sm); color:var(--text-secondary);">Help text and table metadata.</div>
+    <div style="font-size:var(--fs-xs); color:var(--text-tertiary);">Chip labels, axis ticks, keyboard hints.</div>
+  </div>
+
+  <h3>Scale</h3>
+  <div class="demo stack tight" id="type-scale"></div>
+
+  <h3>Numerals</h3>
+  <p>Anything in a column gets tabular figures. Anything standing alone keeps proportional figures, which are better spaced.</p>
+  <div class="demo">
+    <div>
+      <div class="tertiary" style="font-size:var(--fs-xs);">TABULAR &mdash; aligns in a column</div>
+      <div class="mono tabular">1:24:07<br>12:08:33<br>0:41:19</div>
+    </div>
+    <div>
+      <div class="tertiary" style="font-size:var(--fs-xs);">PROPORTIONAL &mdash; better as a hero figure</div>
+      <div style="font-size:var(--fs-3xl); font-weight:var(--fw-semibold);">$120,000.00</div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="space">
+  <h2>Spacing &amp; layout</h2>
+  <p>A 4px base grid. Every margin, padding, and gap is one of these eleven values. In Tailwind the scale is 1:1, so <code class="tok">--sp-3</code> is <code class="tok">p-3</code>.</p>
+  <div class="demo stack tight" id="space-scale"></div>
+
+  <h3>Shell measurements</h3>
+  <div class="demo stack tight" id="layout-scale"></div>
+
+  <h3>Control heights</h3>
+  <p>Three heights, no others. Buttons are 32px, form fields are 36px because they hold content being edited, and everything grows to 44px at the touch breakpoint.</p>
+  <div class="demo">
+    <button class="btn btn-secondary btn-sm">28px small</button>
+    <button class="btn btn-secondary">32px default</button>
+    <button class="btn btn-secondary btn-lg">36px large</button>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="radius">
+  <h2>Radius</h2>
+  <div class="demo" id="radius-demo"></div>
+  <div class="rule">
+    <span class="rule-mark">Use</span>
+    <div><strong>sm</strong> chips and checkboxes &middot; <strong>md</strong> buttons, inputs, menu items &middot; <strong>lg</strong> cards and tables &middot; <strong>xl</strong> popovers, toasts, menus &middot; <strong>2xl</strong> modals and sheets &middot; <strong>full</strong> pills, avatars, status dots.</div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="elevation">
+  <h2>Elevation</h2>
+  <p>Five steps. The geometry is identical in both themes; only the ink darkens, which is why the shadow tokens carry <code class="tok">light-dark()</code> on each colour rather than on the whole value.</p>
+  <div class="demo" style="gap:var(--sp-6); background:var(--bg-subtle);">
+    <div style="text-align:center;"><div style="width:96px;height:64px;border-radius:var(--r-lg);background:var(--surface);box-shadow:var(--sh-xs);"></div><div class="tertiary mono" style="font-size:var(--fs-xs);margin-top:8px;">xs</div></div>
+    <div style="text-align:center;"><div style="width:96px;height:64px;border-radius:var(--r-lg);background:var(--surface);box-shadow:var(--sh-sm);"></div><div class="tertiary mono" style="font-size:var(--fs-xs);margin-top:8px;">sm</div></div>
+    <div style="text-align:center;"><div style="width:96px;height:64px;border-radius:var(--r-lg);background:var(--surface);box-shadow:var(--sh-md);"></div><div class="tertiary mono" style="font-size:var(--fs-xs);margin-top:8px;">md</div></div>
+    <div style="text-align:center;"><div style="width:96px;height:64px;border-radius:var(--r-lg);background:var(--surface);box-shadow:var(--sh-lg);"></div><div class="tertiary mono" style="font-size:var(--fs-xs);margin-top:8px;">lg</div></div>
+    <div style="text-align:center;"><div style="width:96px;height:64px;border-radius:var(--r-lg);background:var(--surface);box-shadow:var(--sh-xl);"></div><div class="tertiary mono" style="font-size:var(--fs-xs);margin-top:8px;">xl</div></div>
+  </div>
+  <div class="rule">
+    <span class="rule-mark">Use</span>
+    <div><strong>xs</strong> resting cards &middot; <strong>sm</strong> hover, sticky header &middot; <strong>md</strong> dropdown, tooltip, popover &middot; <strong>lg</strong> bulk bar, toast &middot; <strong>xl</strong> modal, drawer.</div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="motion">
+  <h2>Motion</h2>
+  <p>Fast is the default. Only <code class="tok">transform</code> and <code class="tok">opacity</code> are ever animated; never height, never top.</p>
+  <div class="demo stack tight" id="motion-scale"></div>
+  <div class="rule warn">
+    <span class="rule-mark">!</span>
+    <div><strong>Reduced motion is honoured at the token layer.</strong> <code class="tok">prefers-reduced-motion</code> collapses all three durations to 1ms and stops the timer pulse, leaving the dot solid. A component that animates outside the token system is a bug.</div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="icons">
+  <h2>Icons</h2>
+  <p>Lucide, 1.5px stroke, <code class="tok">currentColor</code> only. 16px in dense chrome, 20px in navigation. Every icon-only control carries an <code class="tok">aria-label</code> and a tooltip.</p>
+  <div class="demo" id="icon-demo"></div>
+  <div class="rule warn">
+    <span class="rule-mark">!</span>
+    <div><strong>Never a coloured icon</strong> except inside a status badge, where it inherits the badge's foreground. An icon that carries its own colour competes with the four reserved meanings.</div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="buttons">
+  <h2>Buttons</h2>
+  <p>One primary action per screen region. Everything else is secondary or ghost.</p>
+
+  <div class="demo">
+    <button class="btn btn-primary">Save entry</button>
+    <button class="btn btn-secondary">Cancel</button>
+    <button class="btn btn-ghost">Dismiss</button>
+    <button class="btn btn-danger">Delete invoice</button>
+    <button class="btn btn-danger-ghost">Remove</button>
+    <button class="btn btn-secondary" disabled>Disabled</button>
+  </div>
+
+  <div class="demo">
+    <span class="demo-label">Sizes</span>
+    <button class="btn btn-secondary btn-sm">Small</button>
+    <button class="btn btn-secondary">Default</button>
+    <button class="btn btn-secondary btn-lg">Large</button>
+    <button class="btn btn-secondary btn-icon" aria-label="More"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg></button>
+    <button class="btn btn-secondary btn-icon btn-sm" aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M18 6 6 18M6 6l12 12"/></svg></button>
+  </div>
+
+  <div class="demo">
+    <span class="demo-label">With icons</span>
+    <button class="btn btn-primary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M12 5v14M5 12h14"/></svg> New project</button>
+    <button class="btn btn-secondary"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg> Export</button>
+  </div>
+
+  <div class="dodont">
+    <div class="do"><h4>&check; Do</h4><p>Give a screen one filled primary button. Use secondary for everything alongside it, and put the rest behind an Actions menu.</p></div>
+    <div class="dont"><h4>&times; Don't</h4><p>Disable the submit button because a form is invalid. Let it submit, then focus and announce the first error.</p></div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="inputs">
+  <h2>Inputs &amp; forms</h2>
+  <p>Label above, help below, error below that. Validation runs on blur for format and on submit for everything else, never on every keystroke.</p>
+
+  <div class="demo stack">
+    <div class="field">
+      <label class="field-label" for="p1">Project name</label>
+      <input class="input" id="p1" value="Example Project 01">
+    </div>
+    <div class="field">
+      <label class="field-label" for="p2">Project code</label>
+      <input class="input" id="p2" placeholder="Optional">
+      <div class="field-help">A code can help identify your project. Numbers or letters.</div>
+    </div>
+    <div class="field">
+      <label class="field-label" for="p3">Default billable rate</label>
+      <input class="input is-invalid" id="p3" value="-25.00" aria-invalid="true">
+      <div class="field-error">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+        A rate cannot be negative.
+      </div>
+    </div>
+    <div class="field">
+      <label class="field-label" for="p4">Notes</label>
+      <textarea class="textarea" id="p4" placeholder="Optional"></textarea>
+    </div>
+  </div>
+
+  <h3>Domain inputs</h3>
+  <p>Duration and money fields are numeric columns: right-aligned, monospace, tabular. Both parse generously and normalise on blur.</p>
+  <div class="demo">
+    <div class="field" style="width:180px;">
+      <label class="field-label">Duration</label>
+      <input class="input numeric" value="1:30">
+      <div class="field-help">1.5 &middot; 90m &middot; 1h30 &middot; 1:30</div>
+    </div>
+    <div class="field" style="width:180px;">
+      <label class="field-label">Amount</label>
+      <input class="input numeric" value="10,000.00">
+      <div class="field-help">1200 &middot; $1,200 &middot; 1200.00</div>
+    </div>
+    <div class="field" style="width:260px;">
+      <label class="field-label">Time range</label>
+      <input class="input numeric" value="9:00am - 10:30am">
+      <div class="field-help">9-10:30 &middot; 09:00 to 10:30</div>
+    </div>
+  </div>
+
+  <div class="rule">
+    <span class="rule-mark">Rule</span>
+    <div><strong>In-page editors autosave per field group on blur</strong> with a quiet "Saved" flash. Creation forms use an explicit submit. Any form with unsaved changes intercepts navigation.</div>
+  </div>
+
+  <h3>Selects and pickers</h3>
+  <div class="demo">
+    <div class="field" style="width:220px">
+      <label class="field-label">Payment term</label>
+      <select class="select">
+        <option>Net 15</option><option>Net 30</option><option>Net 45</option>
+        <option>Due on receipt</option><option>Custom</option>
+      </select>
+    </div>
+    <div class="field" style="width:260px">
+      <label class="field-label">Project / Task</label>
+      <button class="select" style="text-align:left;display:flex;flex-direction:column;justify-content:center;height:auto;padding:6px 10px">
+        <span class="tertiary" style="font-size:var(--fs-sm);line-height:1.2">Example Client 04</span>
+        <span style="font-weight:var(--fw-medium)">PRODUCT OWNER &amp; UX DESIGN</span>
+      </button>
+      <div class="field-help">Two-line combobox: client above project, both readable unopened.</div>
+    </div>
+    <div class="field" style="width:220px">
+      <label class="field-label">Capacity</label>
+      <div class="affix">
+        <input class="input numeric" value="40">
+        <span>hours / week</span>
+      </div>
+    </div>
+  </div>
+
+  <h3>Multi-select</h3>
+  <div class="demo stack">
+    <div class="field">
+      <label class="field-label">Roles</label>
+      <div class="tokens">
+        <span class="token">Designer <button aria-label="Remove Designer">&times;</button></span>
+        <span class="token">Project Manager <button aria-label="Remove Project Manager">&times;</button></span>
+        <input placeholder="Add a role...">
+      </div>
+      <div class="field-help">Creatable: typing a new value offers "Create <em>name</em>". Backspace on an empty input removes the last token.</div>
+    </div>
+  </div>
+
+  <h3>Dates</h3>
+  <div class="demo" style="align-items:flex-start">
+    <div class="field" style="width:200px">
+      <label class="field-label">Issue date</label>
+      <input class="input" value="08/13/2026">
+    </div>
+    <div class="datepicker" id="dp-demo">
+      <div class="dp-head">
+        <button class="btn btn-ghost btn-icon btn-sm" aria-label="Previous month">&#8592;</button>
+        <span>August 2026</span>
+        <button class="btn btn-ghost btn-icon btn-sm" aria-label="Next month">&#8594;</button>
+      </div>
+      <div class="dp-grid" id="dp-grid"></div>
+    </div>
+  </div>
+  <div class="rule">
+    <span class="rule-mark">Rule</span>
+    <div><strong>Today is outlined, the selection is filled.</strong> Two different questions ("where am I" and "what did I pick") need two different affordances, or a user who selected a past date cannot find today again.</div>
+  </div>
+
+  <h3>Choice cards</h3>
+  <p>For a small set of mutually exclusive options where each needs a sentence of explanation. Used for project type, where picking wrong has real billing consequences.</p>
+  <div class="demo">
+    <div class="radio-cards">
+      <div class="radio-card selected"><strong>Time &amp; Materials</strong><span>Bill by the hour, with billable rates</span></div>
+      <div class="radio-card"><strong>Fixed Fee</strong><span>Bill a set price regardless of time tracked</span></div>
+      <div class="radio-card disabled"><strong>Non-Billable</strong><span>Not billed to a client</span></div>
+    </div>
+  </div>
+
+  <h3>Toggle group</h3>
+  <div class="demo">
+    <div class="field" style="width:100%">
+      <label class="field-label">Send me a reminder on</label>
+      <div class="row">
+        <select class="select" style="width:110px"><option>9:00am</option></select>
+        <span class="muted">on</span>
+        <div class="day-toggle">
+          <button aria-pressed="true">Mon</button><button aria-pressed="true">Tue</button>
+          <button aria-pressed="true">Wed</button><button aria-pressed="true">Thu</button>
+          <button aria-pressed="true">Fri</button><button aria-pressed="false">Sat</button>
+          <button aria-pressed="false">Sun</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>Files and colour</h3>
+  <div class="demo" style="align-items:flex-start">
+    <div class="col" style="max-width:360px">
+      <label class="field-label">Receipt</label>
+      <div class="dropzone">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5-5 5 5M12 5v12"/></svg>
+        <div><strong>Drop a receipt, paste, or <span class="link-ish">choose a file</span></strong></div>
+        <div class="tertiary" style="font-size:var(--fs-sm)">Image or PDF. 10MB max.</div>
+      </div>
+    </div>
+    <div class="field" style="width:200px">
+      <label class="field-label">Brand colour</label>
+      <div class="color-input">
+        <span class="swatch-btn" style="background:#1D1E1C"></span>
+        <input class="input" value="#1D1E1C">
+      </div>
+    </div>
+    <div class="field" style="width:150px">
+      <label class="field-label">Tax<span class="req">*</span></label>
+      <div class="affix">
+        <input class="input numeric" value="8.50">
+        <span>%</span>
+      </div>
+    </div>
+  </div>
+
+  <h3>States</h3>
+  <div class="demo">
+    <div class="field" style="width:190px"><label class="field-label">Default</label><input class="input" placeholder="Placeholder"></div>
+    <div class="field" style="width:190px"><label class="field-label">Disabled</label><input class="input" value="Cannot edit" disabled style="background:var(--bg-muted);color:var(--text-tertiary)"></div>
+    <div class="field" style="width:190px"><label class="field-label">Read only</label><input class="input" value="person01@example.com" readonly style="background:var(--bg-subtle)"><div class="field-help">Managed by Google Workspace.</div></div>
+    <div class="field" style="width:190px"><label class="field-label">Invalid</label><input class="input is-invalid" value="-25.00"><div class="field-error"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>Cannot be negative.</div></div>
+  </div>
+
+  <div class="rule">
+    <span class="rule-mark">Rule</span>
+    <div><strong>Read-only and disabled are different things and must look different.</strong> Disabled means "you cannot change this right now"; read-only means "this value comes from somewhere else" and always says where. An SSO-managed email that looks merely disabled sends people hunting for a button that does not exist.</div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="controls">
+  <h2>Controls</h2>
+  <div class="demo">
+    <label class="row" style="gap:8px;"><input type="checkbox" checked> Billable by default</label>
+    <label class="row" style="gap:8px;"><input type="checkbox"> Budget resets every month</label>
+    <label class="row" style="gap:8px;"><input type="radio" name="pt" checked> Time &amp; Materials</label>
+    <label class="row" style="gap:8px;"><input type="radio" name="pt"> Fixed Fee</label>
+    <span class="row" style="gap:8px;"><span class="switch" role="switch" aria-checked="true" tabindex="0"></span> Send email alerts</span>
+  </div>
+
+  <h3>Segmented control</h3>
+  <p>For exclusive choices of two to four, where all options should stay visible. More than four becomes a select.</p>
+  <div class="demo">
+    <div class="segmented" role="group" aria-label="View">
+      <button aria-pressed="true">Day</button>
+      <button aria-pressed="false">Week</button>
+      <button aria-pressed="false">Calendar</button>
+    </div>
+    <div class="segmented" role="group" aria-label="Density">
+      <button aria-pressed="true">Comfortable</button>
+      <button aria-pressed="false">Compact</button>
+    </div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="badges">
+  <h2>Badges &amp; status</h2>
+  <p>A <strong>badge</strong> labels an entity. A <strong>status pill</strong> reports a state and always carries a word. A <strong>chip</strong> is a removable filter token.</p>
+
+  <div class="demo">
+    <span class="demo-label">Badges</span>
+    <span class="badge">Time &amp; Materials</span>
+    <span class="badge">Fixed Fee</span>
+    <span class="badge badge-outline">Non-billable</span>
+    <span class="badge badge-outline">Archived</span>
+    <span class="badge badge-solid">Owner</span>
+    <span class="badge badge-info">Billable</span>
+  </div>
+
+  <div class="demo">
+    <span class="demo-label">Invoice status</span>
+    <span class="badge">Draft</span>
+    <span class="badge badge-info"><span class="dot"></span>Sent</span>
+    <span class="badge badge-warning"><span class="dot"></span>Partially paid</span>
+    <span class="badge badge-danger"><span class="dot"></span>Late</span>
+    <span class="badge badge-success"><span class="dot"></span>Paid</span>
+    <span class="badge badge-outline">Written off</span>
+  </div>
+
+  <div class="demo">
+    <span class="demo-label">Approval status</span>
+    <span class="badge">Not submitted</span>
+    <span class="badge badge-warning">Awaiting review</span>
+    <span class="badge badge-success">Approved</span>
+    <span class="badge badge-danger">Changes requested</span>
+  </div>
+
+  <div class="demo">
+    <span class="demo-label">Live</span>
+    <span class="badge badge-live"><span class="presence tracking"></span>Tracking now</span>
+  </div>
+
+  <div class="demo">
+    <span class="demo-label">Chips &amp; keys</span>
+    <span class="chip">Example Client 04 <button aria-label="Remove">&times;</button></span>
+    <span class="chip">Billable only <button aria-label="Remove">&times;</button></span>
+    <span class="kbd">&#8984;K</span><span class="kbd">T</span><span class="kbd">Esc</span>
+  </div>
+
+  <div class="rule warn">
+    <span class="rule-mark">!</span>
+    <div><strong>Colour is never the only channel.</strong> Every status pill carries its word. Late is not "the red one", it is the one that says Late.</div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="avatars">
+  <h2>Avatars &amp; presence</h2>
+  <p>Initials on a deterministic gradient derived from the user ID. System and integration actors get a squircle rather than a circle so a bot is never mistaken for a person at a glance.</p>
+
+  <div class="demo">
+    <span class="demo-label">Sizes, initials fallback</span>
+    <span class="avatar xs">JL</span>
+    <span class="avatar sm blue">BK</span>
+    <span class="avatar">SI</span>
+    <span class="avatar lg pink">MC</span>
+    <span class="avatar xl green">JO</span>
+    <span class="avatar bot" title="System">QB</span>
+  </div>
+
+  <h3>Photos</h3>
+  <p>Most people upload one. The photo is the primary treatment; initials are the fallback, not the default.</p>
+
+  <div class="demo">
+    <span class="demo-label">The fallback chain</span>
+    <span class="avatar has-photo lg" data-photo="1" aria-label="Sample Person01"></span>
+    <span class="avatar has-photo lg" data-photo="2" aria-label="Sample Person06"></span>
+    <span class="avatar has-photo lg" data-photo="3" aria-label="Sample Person03"></span>
+    <span class="avatar lg pink">MC</span>
+    <span class="avatar lg" style="background:var(--bg-strong);color:var(--text-tertiary)">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+    </span>
+    <span class="muted" style="margin-left:var(--sp-3)">photo &rarr; initials on a deterministic gradient &rarr; generic glyph</span>
+  </div>
+
+  <div class="rule">
+    <span class="rule-mark">Rule</span>
+    <div><strong>The initials gradient is derived from the user ID, not chosen at random.</strong> The same person is the same colour on every device and after every reload, which is what makes an avatar recognisable at 18px in a dense table. Never assign it from list position: the colour would change when the list re-sorts.</div>
+  </div>
+
+  <h3>Photo upload</h3>
+  <p>Appears in Person settings. Square crop, centre-weighted, with the circular mask previewed live so nobody uploads a photo that loses its subject to the crop.</p>
+
+  <div class="demo">
+    <div class="row" style="gap:var(--sp-4);align-items:flex-start;">
+      <div class="col" style="width:auto;align-items:center;gap:var(--sp-2)">
+        <span class="avatar has-photo xl" data-photo="1" aria-label="Current photo"></span>
+        <span class="tertiary" style="font-size:var(--fs-xs)">Preview</span>
+      </div>
+      <div class="col" style="max-width:420px">
+        <div class="dropzone">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5-5 5 5M12 5v12"/></svg>
+          <div><strong>Drop an image, or <span class="link-ish">choose a file</span></strong></div>
+          <div class="tertiary" style="font-size:var(--fs-sm)">JPG, PNG, or WebP. 5MB max. Square works best.</div>
+        </div>
+        <div class="row">
+          <button class="btn btn-secondary btn-sm">Change photo</button>
+          <button class="btn btn-danger-ghost btn-sm">Remove</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rule">
+    <span class="rule-mark">Rule</span>
+    <div><strong>Uploads are re-encoded server-side.</strong> EXIF is stripped (a phone photo carries GPS coordinates), the image is resized to a 256px square, and a 64px thumbnail is generated for table rows. The original is never served back to another user's browser as-is.</div>
+  </div>
+
+  <div class="demo">
+    <span class="demo-label">Presence</span>
+    <span class="row" style="gap:8px;"><span class="presence tracking"></span> Tracking now</span>
+    <span class="row" style="gap:8px;margin-left:var(--sp-4)"><span class="presence idle"></span> Idle</span>
+  </div>
+
+  <h3>Stacks</h3>
+  <p>Who holds a role, who is on a project, who is assigned to a client. Overlapped so a group reads as one object at a glance rather than as a row of separate people.</p>
+
+  <div class="demo tight">
+    <table class="tbl compact">
+      <thead><tr><th>Role</th><th>People</th><th style="width:120px"></th></tr></thead>
+      <tbody>
+        <tr><td style="font-weight:var(--fw-medium)">Developer</td>
+            <td><span class="avatar-stack">
+              <span class="avatar sm has-photo" data-photo="1"></span><span class="avatar sm blue">MD</span>
+              <span class="avatar sm has-photo" data-photo="3"></span><span class="avatar sm orange">Y</span>
+              <span class="avatar sm" style="background:var(--project-10)">AD</span><span class="avatar sm" style="background:var(--project-1)">B</span>
+              <span class="avatar sm green">BK</span>
+              <span class="avatar sm more">+13</span></span></td>
+            <td><button class="btn btn-ghost btn-sm">Edit</button></td></tr>
+        <tr><td style="font-weight:var(--fw-medium)">Designer</td>
+            <td><span class="avatar-stack">
+              <span class="avatar sm has-photo" data-photo="2"></span><span class="avatar sm pink">BK</span>
+              <span class="avatar sm">F</span><span class="avatar sm blue">SI</span>
+              <span class="avatar sm more">+5</span></span></td>
+            <td><button class="btn btn-ghost btn-sm">Edit</button></td></tr>
+        <tr><td style="font-weight:var(--fw-medium)">QA</td>
+            <td><span class="avatar-stack">
+              <span class="avatar sm green">C</span><span class="avatar sm" style="background:var(--project-4)">KQ</span>
+              <span class="avatar sm" style="background:var(--project-3)">KQ</span></span></td>
+            <td><button class="btn btn-ghost btn-sm">Edit</button></td></tr>
+        <tr><td style="font-weight:var(--fw-medium)">Social Media</td>
+            <td><span class="avatar-stack"><span class="avatar sm" style="background:var(--project-11)">IS</span></span></td>
+            <td><button class="btn btn-ghost btn-sm">Edit</button></td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="rule">
+    <span class="rule-mark">Spec</span>
+    <div>22px avatars, <code class="tok">-6px</code> overlap, each with a 2px ring in <code class="tok">--surface</code> so the edges stay separated against any row background. <strong>Caps at seven, then a neutral <code class="tok">+N</code> chip</strong> that is the same size and shape as an avatar, so the row height cannot change with the count. The stack carries a single accessible name listing everyone; the individual avatars are <code class="tok">aria-hidden</code>, because a screen reader announcing nineteen initials one at a time is worse than useless.</div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="cards">
+  <h2>Cards &amp; KPIs</h2>
+  <p>The KPI row leads every detail page: the figure that matters, then its supporting breakdown.</p>
+
+  <div class="demo">
+    <div class="kpi-grid">
+      <div class="kpi">
+        <div class="kpi-label">Total hours</div>
+        <div class="kpi-value">40.00</div>
+        <div class="kpi-row"><span>Billable</span><span class="tabular">40.00</span></div>
+        <div class="kpi-row"><span>Non-billable</span><span class="tabular">0.00</span></div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Budget remaining (60%)</div>
+        <div class="kpi-value">$8,000.00</div>
+        <div class="kpi-row"><span>Total budget</span><span class="tabular">$12,000.00</span></div>
+        <div class="meter" style="margin-top:6px;"><span class="ok" style="width:40%"></span></div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Budget remaining (-4804%)</div>
+        <div class="kpi-value danger">-$1,000.00</div>
+        <div class="kpi-row"><span>Total budget</span><span class="tabular">26.67</span></div>
+        <div class="meter" style="margin-top:6px;"><span class="near" style="width:20%"></span><span class="gap"></span><span class="over" style="width:80%"></span></div>
+      </div>
+      <div class="kpi">
+        <div class="kpi-label">Uninvoiced amount</div>
+        <div class="kpi-value">$4,000.00</div>
+        <div class="kpi-row"><span>Total project fees</span><span class="tabular">$12,000.00</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="demo">
+    <div class="card card-interactive" style="width:280px;">
+      <div style="font-weight:var(--fw-medium);">PRODUCT OWNER &amp; UX DESIGN SERVICES</div>
+      <div class="tertiary" style="font-size:var(--fs-sm);margin-top:2px;">Example Client 04</div>
+      <div class="row" style="margin-top:var(--sp-3);justify-content:space-between;">
+        <span class="badge">Fixed Fee</span>
+        <span class="tabular tertiary" style="font-size:var(--fs-sm);">1,307.97 h</span>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="tabs">
+  <h2>Tabs &amp; navigation</h2>
+  <div class="demo stack">
+    <div class="tabs">
+      <span class="tab" aria-selected="true">Tasks</span>
+      <span class="tab">Team</span>
+      <span class="tab">Invoices <span class="count">3</span></span>
+      <span class="tab">Expenses</span>
+    </div>
+  </div>
+  <div class="rule">
+    <span class="rule-mark">Rule</span>
+    <div><strong>The active indicator is a 2px underline in <code class="tok">--text</code>, not a colour.</strong> Tabs are chrome; they do not get to spend one of the four reserved meanings.</div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="menus">
+  <h2>Menus &amp; tooltips</h2>
+  <div class="demo" style="align-items:flex-start;gap:var(--sp-6);">
+    <div class="menu">
+      <div class="menu-item">Edit project</div>
+      <div class="menu-item">Duplicate</div>
+      <div class="menu-item">Pin <span class="kbd">P</span></div>
+      <div class="menu-sep"></div>
+      <div class="menu-item">New invoice</div>
+      <div class="menu-item">Export time</div>
+      <div class="menu-sep"></div>
+      <div class="menu-item">Archive</div>
+      <div class="menu-item danger">Delete</div>
+    </div>
+    <div class="col" style="width:auto;">
+      <span class="tooltip">Tracking Design on Example Travel for 1:24</span>
+      <span class="tooltip">Resets monthly</span>
+    </div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="feedback">
+  <h2>Banners &amp; toasts</h2>
+  <p>Banners explain a persistent condition in place. Toasts confirm a completed action and carry Undo where the action removed something.</p>
+
+  <div class="demo stack">
+    <div class="banner">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:2px;"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg>
+      <div><strong>Uninvoiced is now in Reports.</strong><span>New views including Receivables live there too.</span></div>
+    </div>
+    <div class="banner warning">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:2px;"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4M12 17h.01"/></svg>
+      <div><strong>Some data cannot be calculated accurately.</strong><span>Three people are missing cost rates for this period. <a href="#" style="text-decoration:underline;">Add missing rates</a></span></div>
+    </div>
+    <div class="banner danger">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:2px;"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>
+      <div><strong>Changes requested on your timesheet.</strong><span>Person03 asked for notes on four entries.</span></div>
+    </div>
+    <div class="banner" style="border-color:var(--warning-border);background:var(--warning-bg);color:var(--warning);">
+      <span class="avatar sm" style="flex-shrink:0;">BK</span>
+      <div><strong>Editing Sample Person06's timesheet.</strong><span>Changes save to Person06's timesheet. <a href="#" style="text-decoration:underline;">Return to mine</a></span></div>
+    </div>
+  </div>
+
+  <div class="demo">
+    <div class="toast">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="var(--success)" stroke-width="2" style="flex-shrink:0;margin-top:2px;"><path d="M20 6 9 17l-5-5"/></svg>
+      <div class="toast-body">Entry deleted.</div>
+      <button class="btn btn-ghost btn-sm">Undo</button>
+    </div>
+    <div class="toast">
+      <span class="presence tracking" style="margin-top:6px;"></span>
+      <div class="toast-body">Stopped <em>Design</em> at 1:24. Started <em>Programming</em>.</div>
+      <button class="btn btn-ghost btn-sm">Undo</button>
+    </div>
+  </div>
+
+  <div class="rule">
+    <span class="rule-mark">Rule</span>
+    <div><strong>Form errors never appear in a toast.</strong> They appear where the failure happened. A toast is for something that already succeeded, or for a background failure with no obvious home.</div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="loading">
+  <h2>Loading</h2>
+  <p>Skeletons that match the geometry of what they replace, so nothing shifts when the data lands. Never a full-page spinner.</p>
+  <div class="demo stack">
+    <div class="row" style="gap:var(--sp-3);">
+      <div class="skeleton" style="width:28px;height:28px;border-radius:50%;"></div>
+      <div class="col" style="gap:6px;">
+        <div class="skeleton" style="width:220px;height:12px;"></div>
+        <div class="skeleton" style="width:140px;height:10px;"></div>
+      </div>
+      <div class="skeleton grow" style="height:8px;max-width:180px;"></div>
+      <div class="skeleton" style="width:56px;height:12px;"></div>
+    </div>
+    <div class="row" style="gap:var(--sp-3);">
+      <div class="skeleton" style="width:28px;height:28px;border-radius:50%;"></div>
+      <div class="col" style="gap:6px;">
+        <div class="skeleton" style="width:180px;height:12px;"></div>
+        <div class="skeleton" style="width:120px;height:10px;"></div>
+      </div>
+      <div class="skeleton grow" style="height:8px;max-width:180px;"></div>
+      <div class="skeleton" style="width:56px;height:12px;"></div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="empty">
+  <h2>Empty states</h2>
+  <p>Three parts and nothing else: what would appear here, the action that would fill it, and no illustration. The Timesheet is the one exception.</p>
+
+  <div class="demo">
+    <div class="empty">
+      <div style="font-weight:var(--fw-medium);">No time tracked on this project yet.</div>
+      <p>Time tracked by anyone on the team will appear here, broken down by task and person.</p>
+      <div class="row">
+        <button class="btn btn-primary">Start a timer</button>
+        <button class="btn btn-secondary">Assign people</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="demo">
+    <div class="quote">
+      &ldquo;It is the time you have wasted for your rose that makes your rose so important.&rdquo;<br>
+      &ndash; Antoine de Saint-Exup&eacute;ry
+    </div>
+  </div>
+  <div class="rule">
+    <span class="rule-mark">Why</span>
+    <div><strong>The empty day keeps a rotating quotation.</strong> It is the one place in the product where charm beats density: you see it every morning before you have logged anything, and a bare grid is a worse greeting than a good sentence.</div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="tables">
+  <h2>Tables &amp; grid</h2>
+  <p>Every table in Tally is an <strong>AG Grid Community</strong> instance wrapped in <code class="tok">&lt;DataGrid&gt;</code>. One grid engine means one keyboard model, one selection model, one export path, and one place to fix a bug. Virtualization is the reason: 463 archived projects and 197 open invoices render in constant time.</p>
+
+  <p>The grid below is live. Sort a column, drag a header to reorder, drag an edge to resize, and flip the theme toggle. It is themed entirely from our tokens, with no dark-mode code of its own.</p>
+
+  <p><strong>Tick some checkboxes and watch the row above the grid.</strong> It changes what it shows, never how tall it is, so the first row of the table stays on exactly the same pixel throughout. Then click <em>Set rate</em> to see an action collect its input in that same row.</p>
+
+  <!-- The table frame: what <DataGrid> renders. A block-level card containing the
+       action row and the grid, flush, with the card's radius clipping both. -->
+  <div class="table-frame">
+    <!-- The action row. Always present, always 48px, whatever state it is in. -->
+    <div class="action-row" id="action-row">
+      <div class="action-layer is-active" data-layer="browse">
+        <button class="btn btn-secondary btn-sm">All clients <span class="tertiary">&#9662;</span></button>
+        <button class="btn btn-secondary btn-sm">Manager <span class="tertiary">&#9662;</span></button>
+        <button class="btn btn-secondary btn-sm">Tags <span class="tertiary">&#9662;</span></button>
+        <span style="margin-left:auto"></span>
+        <button class="btn btn-ghost btn-sm">Columns <span class="tertiary">&#9662;</span></button>
+        <button class="btn btn-ghost btn-sm">Export</button>
+      </div>
+      <div class="action-layer" data-layer="select">
+        <span class="selection-count"><span id="sel-count">0</span> selected</span>
+        <button class="btn btn-ghost btn-sm" id="sel-clear">Clear</button>
+        <span class="action-sep"></span>
+        <button class="btn btn-secondary btn-sm" data-act="tags">Add tags</button>
+        <button class="btn btn-secondary btn-sm" data-act="rate">Set rate</button>
+        <button class="btn btn-secondary btn-sm" data-act="billable">Set tasks billable</button>
+        <button class="btn btn-secondary btn-sm action-end">Archive</button>
+        <span class="action-sep"></span>
+        <button class="btn btn-danger-ghost btn-sm" data-act="delete">Delete</button>
+      </div>
+      <div class="action-layer" data-layer="act">
+        <button class="btn btn-ghost btn-sm" id="act-back" aria-label="Back to selection">&#8592;</button>
+        <span class="tertiary" id="act-label">Set rate</span>
+        <span class="mono">$</span>
+        <input class="input numeric" style="width:110px;height:28px" value="150.00" aria-label="Rate">
+        <span class="tertiary">per hour</span>
+        <button class="btn btn-primary btn-sm" id="act-apply">Apply to <span id="act-count">0</span></button>
+        <button class="btn btn-ghost btn-sm" id="act-cancel">Cancel</button>
+      </div>
+    </div>
+    <div id="grid-demo" style="width:100%;height:340px;"></div>
+    <div id="grid-fallback" style="display:none;padding:var(--sp-4);">
+      <div class="banner warning" style="margin-bottom:var(--sp-3);">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="flex-shrink:0;margin-top:2px;"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4M12 17h.01"/></svg>
+        <div><strong>Live grid unavailable.</strong><span>The CDN did not load, or the installed AG Grid exposes a different API. The static specimen below shows the same visual result.</span></div>
+      </div>
+      <table class="tbl">
+        <thead><tr><th>Project</th><th class="num">Hours</th><th class="num">If billed hourly</th><th class="num">Costs</th></tr></thead>
+        <tbody>
+          <tr class="group"><td colspan="4">Ann &amp; Robert H Example Client 29 of Chicago</td></tr>
+          <tr><td>Meetings and collaboration</td><td class="num">20.00</td><td class="num">$2,000.00</td><td class="num">$1,000.00</td></tr>
+          <tr><td>Design</td><td class="num">20.00</td><td class="num">$2,000.00</td><td class="num">$1,000.00</td></tr>
+          <tr class="total"><td>Total</td><td class="num">40.00</td><td class="num">$4,000.00</td><td class="num">$2,000.00</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <h3>The no-shift rule</h3>
+  <p><strong>Clicking anything in a table must never move the table.</strong> A user ticking checkboxes down a column is aiming at a target. If the first tick pushes the grid down by one row, the second tick lands on the wrong record, and on a forty-row bulk edit that is not a risk, it is a certainty.</p>
+
+  <div class="demo stack tight">
+    <table class="tbl compact">
+      <thead><tr><th>How a table normally shifts</th><th>What we do instead</th></tr></thead>
+      <tbody>
+        <tr><td>Selection adds a border to the row</td><td>Selection is a background plus an <em>inset</em> shadow. Inset paints; it does not reflow.</td></tr>
+        <tr><td>Row actions appear on hover</td><td>Actions always occupy their space and toggle <code class="tok">opacity</code>. Never <code class="tok">display</code>, never a width change.</td></tr>
+        <tr><td>A menu expands inline and pushes rows down</td><td>Menus are portalled overlays, positioned above the grid.</td></tr>
+        <tr><td>A bulk action bar appears when you select</td><td>The action row is <em>always</em> in the layout at <code class="tok">--action-row-h</code>. Only its contents change.</td></tr>
+        <tr><td>An action form grows the toolbar</td><td>Actions that fit one row render inline; anything larger opens a modal, which is an overlay.</td></tr>
+        <tr><td>The grid resizes as rows load</td><td>The page owns the grid's height. The grid scrolls inside it.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <p>The action row has three states layered on top of each other and cross-faded. Because all three are absolutely positioned inside a fixed-height container, the height cannot change even mid-transition.</p>
+
+  <div class="demo stack tight">
+    <pre class="mono" style="font-size:var(--fs-sm);color:var(--text-secondary);white-space:pre-wrap;margin:0;">browse   filters, column picker, export          nothing selected
+select   "N selected", bulk actions, clear       rows ticked
+act      the chosen action's inline form         action chosen
+
+Escape returns act -> select.  Clear returns select -> browse.</pre>
+  </div>
+
+  <div class="dodont">
+    <div class="do">
+      <h4>&check; Do</h4>
+      <p>Reserve the space up front. An empty 48px row that never moves costs less than a bar that appears and displaces everything the user was aiming at.</p>
+    </div>
+    <div class="dont">
+      <h4>&times; Don't</h4>
+      <p>Float the bar over the bottom of the viewport. It shifts nothing, but it covers the last rows of the table, which are exactly the rows someone scrolled down to select.</p>
+    </div>
+  </div>
+
+  <div class="rule warn">
+    <span class="rule-mark">!</span>
+    <div><strong>This applies to every table in the product, not just grids.</strong> Any list with a checkbox, an Actions menu, or a hover-revealed control follows the same rule. The test is mechanical: screenshot the table, interact with it, screenshot again, and diff. Any vertical movement outside the action row's own contents is a bug.</div>
+  </div>
+
+  <h3>The Community boundary</h3>
+  <p>We are on the MIT Community edition. Three things the product needs are Enterprise-only, so each has a Community pattern.</p>
+
+  <div class="demo stack tight">
+    <table class="tbl compact">
+      <thead><tr><th>Enterprise feature</th><th>What we do instead</th></tr></thead>
+      <tbody>
+        <tr><td>Row grouping</td><td>Group headers are full-width rows injected into the flat row array, in server order</td></tr>
+        <tr><td>Aggregation</td><td>Group and grand totals are computed server-side and carried on the row</td></tr>
+        <tr><td>Master / detail</td><td>Detail panels are full-width rows injected on expand</td></tr>
+        <tr><td>Columns tool panel</td><td>Our own Columns popover, which the PRD already specified</td></tr>
+        <tr><td>Set filter</td><td>Filter chips in the page toolbar, which read better than in-header filters</td></tr>
+        <tr><td>Context menu</td><td>The row Actions menu</td></tr>
+        <tr><td>Excel export</td><td>CSV client-side; XLSX from the server export job</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="rule">
+    <span class="rule-mark">Why</span>
+    <div><strong>Server-computed totals are the better design regardless of licensing.</strong> Client-side aggregation would re-derive figures in the browser using different rounding than the server applies, and would happily sum a column the current user is not permitted to see. Totals that come from the same SQL as the reports cannot drift from them.</div>
+  </div>
+
+  <h3>Rules</h3>
+  <div class="demo stack">
+    <div><strong>Numeric columns are right-aligned with tabular figures.</strong> <span class="muted">Without this, comparing a column of amounts by eye is guesswork.</span></div>
+    <div><strong>Hairline row separators, no vertical rules.</strong> <span class="muted">Verticals turn a table into a spreadsheet and make scanning a row harder. The week grid is the deliberate exception.</span></div>
+    <div><strong>No zebra striping.</strong> <span class="muted">Alternating fills fight the hover state, and hover is how a row reveals its actions.</span></div>
+    <div><strong>There is no centred column.</strong> <span class="muted">Text left, numbers right.</span></div>
+    <div><strong>A row click opens the record; only the checkbox selects.</strong> <span class="muted">Nothing gets selected by accident on the way to a detail page.</span></div>
+    <div><strong>The grand total is a pinned bottom row</strong> <span class="muted">that never scrolls away and is never sorted into the body.</span></div>
+    <div><strong>A paginated total is labelled "Total for all pages"</strong> <span class="muted">and reflects the full result set. A total that silently means something narrower than it says is a reporting bug.</span></div>
+    <div><strong>Empty and loading states are ours, not the grid's.</strong> <span class="muted">AG Grid's built-in overlay is a bare centred string with nowhere to go; ours carries the action that would fill the table.</span></div>
+  </div>
+
+  <div class="rule warn">
+    <span class="rule-mark">!</span>
+    <div><strong>The grid is route-level lazy loaded and never enters the initial bundle.</strong> AG Grid is roughly 300KB gzipped against a 180KB initial-JS budget. Timesheet Day view, the invoice document, and every printed surface use plain HTML tables instead: virtualization means only visible rows exist in the DOM, which would silently truncate a printed report and would break the requirement that the invoice render identically in the app, the PDF, and the pay page.</div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="meters">
+  <h2>Meters</h2>
+  <p>One component for utilization, the billable split, and budget consumption. Over budget is a separate segment in danger, separated by a 2px surface gap so the boundary is unmistakable.</p>
+
+  <div class="demo stack">
+    <div class="meter-row"><span style="width:150px;">Billable split</span><div class="meter"><span class="billable" style="width:62%"></span><span class="nonbillable" style="width:8%"></span></div><span class="meter-val">85.51</span></div>
+    <div class="meter-row"><span style="width:150px;">Budget, healthy</span><div class="meter"><span class="ok" style="width:48%"></span></div><span class="meter-val">48%</span></div>
+    <div class="meter-row"><span style="width:150px;">Budget, near</span><div class="meter"><span class="near" style="width:92%"></span></div><span class="meter-val">92%</span></div>
+    <div class="meter-row"><span style="width:150px;">Budget, over</span><div class="meter"><span class="near" style="width:70%"></span><span class="gap"></span><span class="over" style="width:30%"></span></div><span class="meter-val">137%</span></div>
+  </div>
+  <div class="legend">
+    <span><i style="background:var(--billable)"></i> Billable</span>
+    <span><i style="background:var(--non-billable)"></i> Non-billable</span>
+    <span><i style="background:var(--budget-ok)"></i> Under 80%</span>
+    <span><i style="background:var(--budget-near)"></i> 80 to 100%</span>
+    <span><i style="background:var(--budget-over)"></i> Over budget</span>
+  </div>
+
+  <h3>Scaled meter</h3>
+  <p>The summary meter at the top of the Team page. Same component as above, plus an axis: once a bar is wide enough to read a value off, it should carry the ticks that let you.</p>
+
+  <div class="demo stack">
+    <div class="row" style="gap:var(--sp-8);align-items:flex-start;width:100%">
+      <div class="col" style="width:auto;gap:2px">
+        <span class="tertiary" style="font-size:var(--fs-sm)">Total hours</span>
+        <span style="font-size:var(--fs-2xl);font-weight:var(--fw-semibold)">93.90</span>
+      </div>
+      <div class="col" style="width:auto;gap:2px">
+        <span class="tertiary" style="font-size:var(--fs-sm)">Team capacity</span>
+        <span style="font-size:var(--fs-2xl);font-weight:var(--fw-semibold)">435.00</span>
+      </div>
+      <div class="col" style="width:auto;gap:2px;min-width:150px">
+        <span class="row" style="gap:6px;font-size:var(--fs-sm)"><i style="width:10px;height:10px;border-radius:3px;background:var(--billable);display:inline-block"></i> Billable <strong class="tabular" style="margin-left:auto">85.51</strong></span>
+        <span class="row" style="gap:6px;font-size:var(--fs-sm)"><i style="width:10px;height:10px;border-radius:3px;background:var(--non-billable);display:inline-block"></i> Non-billable <strong class="tabular" style="margin-left:auto">8.39</strong></span>
+      </div>
+      <div class="grow" style="min-width:260px">
+        <div class="meter scaled">
+          <span class="billable" style="width:19.7%"></span>
+          <span class="nonbillable" style="width:1.9%"></span>
+        </div>
+        <div class="meter-axis">
+          <span>20%</span><span>40%</span><span>60%</span><span>80%</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <h3>In a table row</h3>
+  <p>The same meter at row scale. The track is <em>outlined</em> rather than filled here: at 8px tall in a dense table a filled grey track reads as data, and a row at 0% would look like a row at 10%.</p>
+
+  <div class="demo tight">
+    <table class="tbl">
+      <thead><tr><th>Person</th><th class="num">Hours</th><th style="width:200px">Utilization</th><th class="num">Capacity</th><th class="num">Billable</th></tr></thead>
+      <tbody>
+        <tr><td><span class="row" style="gap:8px"><span class="avatar sm has-photo" data-photo="3"></span> Sample Person03 <span class="badge badge-outline">Administrator</span></span></td>
+            <td class="num">15.44</td>
+            <td><div class="meter outlined"><span class="billable" style="width:34%"></span><span class="nonbillable" style="width:10%"></span></div></td>
+            <td class="num">35.00</td><td class="num">11.85</td></tr>
+        <tr><td><span class="row" style="gap:8px"><span class="avatar sm has-photo" data-photo="2"></span> Sample Person06 <span class="badge badge-outline">Member</span></span></td>
+            <td class="num">17.10</td>
+            <td><div class="meter outlined"><span class="billable" style="width:43%"></span></div></td>
+            <td class="num">40.00</td><td class="num">17.10</td></tr>
+        <tr><td><span class="row" style="gap:8px"><span class="avatar sm green">SI</span> Sample Person10 <span class="badge badge-outline">Member</span></span></td>
+            <td class="num">24.95</td>
+            <td><div class="meter outlined"><span class="billable" style="width:62%"></span></div></td>
+            <td class="num">40.00</td><td class="num">24.95</td></tr>
+        <tr><td><span class="row" style="gap:8px"><span class="avatar sm" style="background:var(--bg-strong);color:var(--text-tertiary)">MD</span> Sample Person08 <span class="badge badge-outline">Manager</span></span></td>
+            <td class="num">0.00</td>
+            <td><div class="meter outlined"></div></td>
+            <td class="num">40.00</td><td class="num">0.00</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="viz">
+  <h2>Charts</h2>
+  <p>Categorical slots are assigned in fixed order and never cycled. The dark column is the same eight hues re-stepped for the dark surface, not a different palette. Validated against both of our surfaces with <code class="tok">scripts/validate-palette.mjs</code>.</p>
+
+  <h3>Categorical palette</h3>
+  <div class="swatch-grid" id="sw-viz"></div>
+
+  <h3>Sequential &amp; status</h3>
+  <div class="demo stack">
+    <div>
+      <div class="demo-label">Sequential, low to high magnitude</div>
+      <div class="row" style="gap:2px;margin-top:8px;">
+        <div style="flex:1;height:32px;border-radius:var(--r-sm);background:var(--viz-seq-1)"></div>
+        <div style="flex:1;height:32px;border-radius:var(--r-sm);background:var(--viz-seq-2)"></div>
+        <div style="flex:1;height:32px;border-radius:var(--r-sm);background:var(--viz-seq-3)"></div>
+        <div style="flex:1;height:32px;border-radius:var(--r-sm);background:var(--viz-seq-4)"></div>
+        <div style="flex:1;height:32px;border-radius:var(--r-sm);background:var(--viz-seq-5)"></div>
+      </div>
+    </div>
+    <div>
+      <div class="demo-label">Status, fixed and never themed</div>
+      <div class="row" style="margin-top:8px;">
+        <span class="row" style="gap:6px;"><i style="width:14px;height:14px;border-radius:4px;background:var(--viz-good);display:inline-block;"></i> good</span>
+        <span class="row" style="gap:6px;"><i style="width:14px;height:14px;border-radius:4px;background:var(--viz-warning);display:inline-block;"></i> warning</span>
+        <span class="row" style="gap:6px;"><i style="width:14px;height:14px;border-radius:4px;background:var(--viz-serious);display:inline-block;"></i> serious</span>
+        <span class="row" style="gap:6px;"><i style="width:14px;height:14px;border-radius:4px;background:var(--viz-critical);display:inline-block;"></i> critical</span>
+      </div>
+    </div>
+  </div>
+
+  <h3>Donut</h3>
+  <p>The one circular chart in the product. It answers a single part-to-whole question with two segments and puts the answer in the middle, so it reads as a stat tile that happens to show its own proportion.</p>
+
+  <div class="demo">
+    <div class="row" style="gap:var(--sp-8);align-items:center;">
+      <svg width="150" height="150" viewBox="0 0 150 150" role="img" aria-label="79% of tracked hours are billable: 3,001.25 billable of 3,822.71 total.">
+        <circle cx="75" cy="75" r="54" fill="none" stroke="var(--bg-strong)" stroke-width="18"/>
+        <circle cx="75" cy="75" r="54" fill="none" stroke="var(--billable)" stroke-width="18"
+                stroke-dasharray="268 71" stroke-dashoffset="0" stroke-linecap="butt"
+                transform="rotate(-90 75 75)"/>
+        <text x="75" y="70" text-anchor="middle" style="font-size:30px;font-weight:600;fill:var(--text);letter-spacing:-0.02em">79%</text>
+        <text x="75" y="90" text-anchor="middle" style="font-size:11px;fill:var(--text-tertiary)">billable</text>
+      </svg>
+      <div class="col" style="width:auto;gap:var(--sp-2);">
+        <div><span class="tertiary" style="font-size:var(--fs-sm)">Total hours</span><div style="font-size:var(--fs-3xl);font-weight:var(--fw-semibold);letter-spacing:var(--ls-tighter)">3,822.71</div></div>
+        <div class="legend" style="margin:0;flex-direction:column;gap:var(--sp-2);">
+          <span><i style="background:var(--billable)"></i> Billable <strong class="tabular" style="margin-left:auto">3,001.25</strong></span>
+          <span><i style="background:var(--non-billable)"></i> Non-billable <strong class="tabular" style="margin-left:auto">821.46</strong></span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rule warn">
+    <span class="rule-mark">!</span>
+    <div><strong>Two segments is the limit, and this is the only place a ring is correct.</strong> A pie is only readable when there are very few slices and the question is genuinely "what share of the whole". The breakdowns that look like pie candidates are not: a projects breakdown has eight or more categories, and people cannot compare eight angles. Those use a stacked proportional bar with a ranked legend, which answers "which is biggest" and "by how much" at a glance. If you are reaching for a third slice, you want a bar chart.</div>
+  </div>
+
+  <h3>Hover and tooltips</h3>
+  <p><strong>Every chart below is interactive. Roll over it.</strong> A chart that only shows shape is half a chart; the numbers behind the shape have to be reachable without leaving the page for a table.</p>
+
+  <div class="demo stack">
+    <div><strong>The hit target is the whole column, not the mark.</strong> <span class="muted">Chasing an 8px dot with a pointer is miserable and impossible on a trackpad at speed. Each slot gets a full-height transparent hit rectangle, so anywhere in the vertical band works.</span></div>
+    <div><strong>Snap to the nearest point, never interpolate.</strong> <span class="muted">A tooltip reading 6.4 hours for a week that recorded 6 or 7 is a fabricated number.</span></div>
+    <div><strong>One tooltip per column, not per segment.</strong> <span class="muted">A stacked bar answers "what made up this month", so the tooltip shows every segment plus the total. The exception is the donut, where two segments are two distinct answers rather than points in a series.</span></div>
+    <div><strong>Arrow keys drive the same tooltip.</strong> <span class="muted">The chart is one tab stop; left and right walk the series, Home and End jump to the ends, Escape dismisses. Data behind a hover only is data a keyboard user cannot reach.</span></div>
+    <div><strong>The tooltip is inert.</strong> <span class="muted"><code class="tok">pointer-events: none</code>, so it can never sit between the cursor and the mark it describes and cause a flicker loop.</span></div>
+    <div><strong>It flips and clamps.</strong> <span class="muted">Renders above the mark by default, flips below when it would leave the viewport, and clamps horizontally so it is never cut off at an edge.</span></div>
+    <div><strong>The hovered mark responds.</strong> <span class="muted">A column band tints, a bar shifts colour, a line gets its crosshair and an enlarged point. Something must confirm what the tooltip is describing.</span></div>
+  </div>
+
+  <div class="rule">
+    <span class="rule-mark">Content</span>
+    <div>Title is the period, then one row per series with a colour swatch, the label, and a right-aligned tabular value. A footer carries the derived figure that is the actual reason someone hovered: the <strong>total</strong> on a stack, the <strong>margin</strong> on profit, <strong>over or under budget</strong> on project progress, <strong>vs average</strong> on hours. Never just repeat the axis value; the axis already said that.</div>
+  </div>
+
+  <div class="rule warn">
+    <span class="rule-mark">!</span>
+    <div><strong>The tooltip is in addition to the accessible name, not instead of it.</strong> Every chart keeps its <code class="tok">role="img"</code> and an <code class="tok">aria-label</code> carrying the headline, plus a table view in its overflow menu. A screen reader user gets the summary immediately and the full data on demand; neither depends on a pointer.</div>
+  </div>
+
+  <h3>The current period band</h3>
+  <p>Every time-series chart tints the period you are currently in, or the one selected in the period picker, and labels it. Without it a reader cannot tell whether the last bar is a real decline or simply a week that is only two days old, which is the single most common misreading of a tracking chart.</p>
+
+  <div class="rule">
+    <span class="rule-mark">Spec</span>
+    <div>A full-height <code class="tok">--info-bg</code> band behind the period, drawn <strong>under</strong> the grid and marks so it never dims the data, with a small <code class="tok">--fs-xs</code> label at the top. A partial period also renders its bar or line segment at 60% opacity, so incomplete is visible even in a printed chart with no colour.</div>
+  </div>
+
+  <h3>Line</h3>
+  <p>Cumulative value over time. Used for project progress, where the question is "are we going to blow the budget" rather than "what happened last week".</p>
+
+  <div class="demo stack">
+    <div class="chart-demo">
+      <div class="demo-label">Project progress, over budget</div>
+      <svg id="c-line" viewBox="0 0 720 220" width="100%" height="220" role="img"
+           aria-label="Cumulative billable value against a 26.67 hour budget. The budget was crossed in April and the project is now at 1,307 hours, 4,804 percent over."></svg>
+      <div class="legend">
+        <span><i style="background:var(--viz-1)"></i> Tracked</span>
+        <span><i style="background:var(--danger)"></i> Over budget</span>
+        <span><i style="background:var(--info-bg);border:1px solid var(--info-border)"></i> This week</span>
+      </div>
+    </div>
+  </div>
+  <div class="rule">
+    <span class="rule-mark">Spec</span>
+    <div>2px line, 8px markers. A budget threshold is a 1px dashed <code class="tok">--danger</code> rule with an inline label chip at its left. <strong>The line changes colour at the crossing point</strong>, so the moment a project went over is visible without reading the axis.</div>
+  </div>
+
+  <h3>Bar</h3>
+  <p>Discrete quantity per period. Used for hours per week, where each bar is an independent fact rather than a running total.</p>
+
+  <div class="demo stack">
+    <div class="chart-demo">
+      <div class="demo-label">Hours per week</div>
+      <svg id="c-bar" viewBox="0 0 720 200" width="100%" height="200" role="img"
+           aria-label="Hours tracked per week. Peak of 14.2 hours in the week of 4 August. The current week is partial."></svg>
+    </div>
+  </div>
+  <div class="rule">
+    <span class="rule-mark">Spec</span>
+    <div>4px rounded data-ends, square on the baseline, with a 2px surface gap between neighbours. Bars are thin: the gap should read as wider than the bar at typical densities, which is what lets the eye follow the shape rather than counting rectangles.</div>
+  </div>
+
+  <h3>Stacked bar</h3>
+  <p>Part-to-whole across a series. Used for invoices issued per month, split paid against open.</p>
+
+  <div class="demo stack">
+    <div class="chart-demo">
+      <div class="row" style="justify-content:space-between;align-items:flex-start">
+        <div class="demo-label" style="width:auto">Invoices issued in 2026</div>
+        <div class="legend" style="margin:0">
+          <span><i style="background:var(--viz-6)"></i> Paid</span>
+          <span><i style="background:color-mix(in srgb, var(--viz-6) 45%, var(--surface))"></i> Open</span>
+        </div>
+      </div>
+      <svg id="c-stack" viewBox="0 0 720 200" width="100%" height="200" role="img"
+           aria-label="Invoices issued per month in 2026, split paid and open. July was the largest month at 108,000 dollars."></svg>
+    </div>
+  </div>
+  <div class="rule warn">
+    <span class="rule-mark">!</span>
+    <div><strong>Stacks cap at three segments and the order never changes between periods.</strong> Only the bottom segment sits on a common baseline, so only it is genuinely comparable across bars; segments above it are read by length alone. Beyond three, the upper bands become noise. A 2px surface gap separates segments so the boundary is a real edge rather than a colour change.</div>
+  </div>
+
+  <h3>Combination</h3>
+  <p>Two measures of the same unit, one as bars and one as a line. Legal only because revenue, cost, and profit are all currency and share one axis.</p>
+
+  <div class="demo stack">
+    <div class="chart-demo">
+      <div class="demo-label">Company profit over the quarter</div>
+      <svg viewBox="0 0 720 220" width="100%" height="220" role="img" aria-label="Revenue, cost and profit by week. Profit peaked at $2,760 in mid July.">
+        <g id="chart-grid"></g>
+        <g id="chart-bars"></g>
+        <polyline id="chart-line" fill="none" stroke="var(--viz-1)" stroke-width="2"/>
+        <g id="chart-dots"></g>
+        <line x1="40" y1="180" x2="700" y2="180" stroke="var(--viz-axis)" stroke-width="1"/>
+      </svg>
+      <div class="legend">
+        <span><i style="background:var(--viz-6)"></i> Revenue</span>
+        <span><i style="background:var(--viz-8)"></i> Costs</span>
+        <span><i style="background:var(--viz-1)"></i> Profit</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="rule warn">
+    <span class="rule-mark">!</span>
+    <div>
+      <strong>Four hard rules, enforced by the Chart wrapper rather than by convention.</strong>
+      Scatter, bubble, and small multiples cap at <strong>three series</strong>, because only the first three slots clear the all-pairs separation floor.
+      Slots 3, 4, and 5 sit below 3:1 contrast on the light surface, so charts using them ship direct labels or a table view.
+      Colour follows the entity, never its rank, so filtering never repaints the survivors.
+      And never a dual-axis chart: two measures of different scale become two charts.
+    </div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="timer">
+  <h2>Timer</h2>
+  <p>The most important control in the product. Idle it is the accent; running it turns live, pulses, and ticks in tabular mono so the width never shifts.</p>
+
+  <div class="demo">
+    <button class="timer-pill idle">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></svg>
+      Start timer
+    </button>
+    <span class="timer-pill running">
+      <span class="presence tracking"></span>
+      <span class="timer-readout">1:24:07</span>
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+    </span>
+    <span class="muted">Design &middot; Example Client 04</span>
+  </div>
+
+  <div class="rule">
+    <span class="rule-mark">Why</span>
+    <div><strong>Elapsed time is computed from the server's <code class="tok">timer_started_at</code>, never from a client counter.</strong> A sleeping laptop, a stale tab, and a clock-skewed device are all correct as a result. The document title and favicon also change while running, so a background tab still shows the state.</div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="entries">
+  <h2>Time entries</h2>
+  <div class="demo stack tight">
+    <div class="entry">
+      <div class="entry-time">11:50am<br>2:56pm</div>
+      <div class="entry-body">
+        <div><span class="entry-client">Example Client 04</span> <span class="entry-project">PRODUCT OWNER &amp; UX DESIGN SERVICES</span></div>
+        <div class="entry-task">Design &middot; <span class="muted">Calendar sync options and empty screen changes</span></div>
+      </div>
+      <div class="entry-dur">3:11</div>
+      <button class="btn btn-secondary btn-icon btn-sm" aria-label="Start"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
+    </div>
+    <div class="entry running">
+      <div class="entry-time">4:45pm<br><span class="tertiary">running</span></div>
+      <div class="entry-body">
+        <div><span class="entry-client">Example Client 04</span> <span class="entry-project">PRODUCT OWNER &amp; UX DESIGN SERVICES</span></div>
+        <div class="entry-task">Meetings and collaboration</div>
+      </div>
+      <div class="entry-dur timer-readout">0:24</div>
+      <button class="btn btn-danger btn-icon btn-sm" aria-label="Stop"><svg viewBox="0 0 24 24" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="2"/></svg></button>
+    </div>
+    <div class="entry locked">
+      <div class="entry-time">9:00am<br>2:00pm</div>
+      <div class="entry-body">
+        <div><span class="entry-client">Example Client 14</span> <span class="entry-project">Example Project 10</span></div>
+        <div class="entry-task">Programming</div>
+      </div>
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      <div class="entry-dur">5:00</div>
+      <button class="btn btn-ghost btn-sm">View invoice</button>
+    </div>
+  </div>
+
+  <h3>Week grid cell</h3>
+  <p>Cells look like plain text until focused. Tab moves right, Enter moves down, typing a digit replaces.</p>
+  <div class="demo">
+    <input class="week-cell" value="5:00">
+    <input class="week-cell" value="6:08">
+    <input class="week-cell" value="">
+    <input class="week-cell" value="3:11">
+    <span class="muted">Empty cells show a dash, never a zero.</span>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="calendar">
+  <h2>Calendar</h2>
+  <p>Blocks carry the project's identity colour. Imported calendar events render as dashed ghosts until tracked.</p>
+  <div class="demo" style="align-items:flex-start;">
+    <div style="width:190px;">
+      <div class="cal-block" style="background:var(--project-7);height:88px;">
+        <div style="font-weight:var(--fw-medium);">PRODUCT OWNER &amp; UX</div>
+        <div>Design</div>
+        <div style="opacity:.85;">Example Client 04</div>
+      </div>
+    </div>
+    <div style="width:190px;">
+      <div class="cal-block" style="background:var(--project-1);height:56px;">
+        <div style="font-weight:var(--fw-medium);">Example Project 10</div>
+        <div>Programming</div>
+      </div>
+    </div>
+    <div style="width:190px;">
+      <div class="cal-ghost" style="height:56px;">
+        <div style="font-weight:var(--fw-medium);">Weekly standup</div>
+        <div>From Google Calendar</div>
+        <button class="btn btn-secondary btn-sm" style="margin-top:6px;height:22px;">Track this</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="bulk">
+  <h2>Bulk actions</h2>
+  <p>Bulk actions surface in the action row above the grid, never in a bar that appears. See <a href="#tables">Tables &amp; grid</a> for the live demo and the no-shift rule behind it.</p>
+
+  <p>Each action declares how it collects input, and that choice is a layout decision rather than a preference.</p>
+
+  <div class="demo stack tight">
+    <table class="tbl compact">
+      <thead><tr><th>Input</th><th>Behaviour</th><th>Examples</th></tr></thead>
+      <tbody>
+        <tr><td><code class="tok">immediate</code></td><td>Runs on click, with an Undo toast</td><td>Archive, Reactivate, Mark as sent</td></tr>
+        <tr><td><code class="tok">inline</code></td><td>One-row form in the action row: a single control, confirm, cancel</td><td>Set rate, Set tasks billable, Update due date</td></tr>
+        <tr><td><code class="tok">modal</code></td><td>Anything larger, and anything needing typed confirmation</td><td>Add tags, Assign to projects, Record payment, Delete</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="rule warn">
+    <span class="rule-mark">!</span>
+    <div><strong>There is no fourth option that grows the action row.</strong> Its height is fixed so the grid below never moves. An action needing more space gets a modal, which is an overlay and shifts nothing.</div>
+  </div>
+
+  <div class="rule">
+    <span class="rule-mark">Rule</span>
+    <div><strong>The review step names what will be skipped and why</strong> before anything runs, for example "3 projects have running timers and will be flagged". A bulk action that silently drops rows is worse than one that refuses.</div>
+  </div>
+
+  <div class="rule">
+    <span class="rule-mark">Rule</span>
+    <div><strong>Selection survives a refetch.</strong> Stable row IDs mean a live update, a background refresh, or a sort does not clear what the user had ticked. Losing a forty-row selection to a websocket event is its own kind of layout betrayal.</div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="shell">
+  <h2>App shell</h2>
+  <div class="demo tight" style="padding:0;">
+    <div class="shell">
+      <div class="shell-top">
+        <div class="row">
+          <span class="timer-pill running"><span class="presence tracking"></span><span class="timer-readout">1:24:07</span></span>
+          <button class="btn btn-secondary btn-icon btn-sm" aria-label="New">+</button>
+        </div>
+        <div class="searchbar"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></svg> Search projects, people, invoices&hellip; <span class="kbd" style="margin-left:auto;">&#8984;K</span></div>
+        <div class="row"><span class="avatar sm">JL</span></div>
+      </div>
+      <div class="shell-body">
+        <div class="shell-side">
+          <div class="guide-nav-label" style="padding-left:8px;">Track</div>
+          <div class="shell-nav-item active">Timesheet</div>
+          <div class="shell-nav-item">Expenses</div>
+          <div class="shell-nav-item">Approvals <span class="badge badge-warning" style="margin-left:auto;height:16px;">4</span></div>
+          <div class="guide-nav-label" style="padding-left:8px;margin-top:12px;">Organize</div>
+          <div class="shell-nav-item">Team</div>
+          <div class="shell-nav-item">Projects</div>
+        </div>
+        <div class="shell-main">
+          <div class="row" style="justify-content:space-between;margin-bottom:var(--sp-4);">
+            <h3 style="font-size:var(--fs-2xl);margin:0;">Timesheet</h3>
+            <div class="segmented"><button aria-pressed="true">Day</button><button aria-pressed="false">Week</button><button aria-pressed="false">Calendar</button></div>
+          </div>
+          <div class="skeleton" style="height:12px;width:60%;margin-bottom:10px;"></div>
+          <div class="skeleton" style="height:12px;width:40%;"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="a11y">
+  <h2>Accessibility</h2>
+  <p>WCAG 2.2 AA on all text and UI boundaries. These are the checks that fail a build, not aspirations.</p>
+
+  <h3>Focus ring</h3>
+  <p>One ring for the whole product: <strong>2px <code class="tok">--focus</code>, offset 2px</strong>. It uses <code class="tok">:focus-visible</code>, so clicking a button with a mouse leaves no ring behind, but every keyboard path shows one. <strong>Press Tab through the controls below</strong> to see the real thing; the second row shows the same states forced on so they can be compared side by side.</p>
+
+  <div class="demo">
+    <span class="demo-label">Live &mdash; press Tab</span>
+    <button class="btn btn-primary">Primary</button>
+    <button class="btn btn-secondary">Secondary</button>
+    <button class="btn btn-ghost">Ghost</button>
+    <input class="input" style="width:170px" placeholder="Text input">
+    <label class="row" style="gap:8px"><input type="checkbox"> Checkbox</label>
+    <a href="#a11y" class="link-ish">A link</a>
+  </div>
+
+  <div class="demo focus-demo">
+    <span class="demo-label">Forced, for comparison</span>
+    <button class="btn btn-primary">Primary</button>
+    <button class="btn btn-secondary">Secondary</button>
+    <button class="btn btn-ghost">Ghost</button>
+    <input class="input" style="width:170px" placeholder="Text input">
+    <span class="row" style="gap:8px"><span class="fake-check"></span> Checkbox</span>
+  </div>
+
+  <div class="rule">
+    <span class="rule-mark">Why two</span>
+    <div><strong>Buttons take an <code class="tok">outline</code>; inputs take a border swap plus a soft ring.</strong> An outline sits outside the box and does not affect layout, which is what a button needs. An input already has a visible border, so a second ring outside it reads as a double edge; swapping the border colour and adding a 3px 25%-alpha shadow keeps the ring on the control's own radius. Both are the same colour and the same weight, so they read as one system.</div>
+  </div>
+
+  <div class="rule warn">
+    <span class="rule-mark">!</span>
+    <div><strong><code class="tok">outline: none</code> without a replacement is a bug, not a style choice.</strong> Inside the grid, AG Grid draws its own cell focus indicator; we restyle it to an inset 2px ring in the same colour rather than removing it, because focus in a grid is cellwise and the browser default would be wrong there too.</div>
+  </div>
+
+  <h3>Everything else</h3>
+  <div class="demo stack">
+    <div><strong>Focus is always visible.</strong> <span class="muted">2px ring in <code class="tok">--focus</code>, offset 2px. <code class="tok">outline: none</code> without a replacement is a bug.</span></div>
+    <div><strong>Colour is never the only channel.</strong> <span class="muted">Status carries a word, budget health carries an icon, billable carries a label.</span></div>
+    <div><strong>Every icon-only control has an accessible name</strong> <span class="muted">and a tooltip that says the same thing.</span></div>
+    <div><strong>Modals trap focus, restore it on close, and close on Escape.</strong></div>
+    <div><strong>Tables are real tables</strong> <span class="muted">with a caption, header scopes, and <code class="tok">aria-sort</code> on sortable columns.</span></div>
+    <div><strong>Charts announce their headline</strong> <span class="muted">through <code class="tok">role="img"</code> and an <code class="tok">aria-label</code> carrying the figure, plus a table view.</span></div>
+    <div><strong>Hit targets are 32px minimum in dense chrome, 44px on touch.</strong></div>
+    <div><strong>Reduced motion removes all non-essential motion,</strong> <span class="muted">including the timer pulse. The dot stays solid.</span></div>
+    <div><strong>Axe reports zero violations</strong> <span class="muted">on Timesheet, Projects, Project detail, Invoices, and every report.</span></div>
+  </div>
+</section>
+
+
+<!-- ===================================================================== -->
+<section class="section" id="porting">
+  <h2>Porting into the app</h2>
+  <p>Four files ship verbatim. Nothing in this guide needs to be rewritten to be used.</p>
+  <div class="demo stack tight">
+    <pre class="mono" style="font-size:var(--fs-sm);color:var(--text-secondary);white-space:pre-wrap;margin:0;">design system/tokens/tokens.css   ->  src/styles/tokens.css
+design system/tokens/theme.css    ->  src/styles/theme.css      (imported by app/layout.tsx)
+design system/tokens/base.css     ->  src/styles/base.css
+design system/tokens/tokens.ts    ->  src/styles/tokens.ts
+design system/recipes/recipes.ts  ->  src/components/ui/recipes.ts
+design system/recipes/cn.ts       ->  src/lib/cn.ts
+
+pnpm add class-variance-authority clsx tailwind-merge</pre>
+  </div>
+  <div class="rule">
+    <span class="rule-mark">Note</span>
+    <div><strong>This guide's CSS does not ship.</strong> It expresses the same tokens as plain classes so the page can render with no build step. In the app, the identical values arrive as Tailwind utilities generated from <code class="tok">theme.css</code>. <code class="tok">recipes.ts</code> is the source of truth for what a component actually renders. See the README for the full guide.</div>
+  </div>
+</section>
+
+</main>
+</div>
+
+<div class="copied" id="copied">Copied</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ---- Theme toggle ---- */
+  var toggle = document.querySelector('.theme-toggle');
+  function syncToggle() {
+    var current = document.documentElement.getAttribute('data-theme') || 'system';
+    toggle.querySelectorAll('button').forEach(function (b) {
+      b.setAttribute('aria-pressed', String(b.dataset.themeSet === current));
+    });
+  }
+  toggle.addEventListener('click', function (e) {
+    var btn = e.target.closest('button');
+    if (!btn) return;
+    var pref = btn.dataset.themeSet;
+    if (pref === 'system') document.documentElement.removeAttribute('data-theme');
+    else document.documentElement.setAttribute('data-theme', pref);
+    try { localStorage.setItem('tally-theme', pref); } catch (err) {}
+    syncToggle();
+    drawChart();
+  });
+  syncToggle();
+
+  /* ---- Copy to clipboard ---- */
+  var toast = document.getElementById('copied');
+  var toastTimer;
+  function copy(text) {
+    navigator.clipboard.writeText(text).then(function () {
+      toast.textContent = 'Copied ' + text;
+      toast.classList.add('show');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(function () { toast.classList.remove('show'); }, 1400);
+    });
+  }
+
+  /* ---- Swatches ---- */
+  function renderSwatches(id, items) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.innerHTML = items.map(function (s) {
+      return '<button class="swatch" data-token="' + s.token + '">' +
+        '<div class="swatch-chip" style="background: var(' + s.token + ')"></div>' +
+        '<div class="swatch-name">' + s.name + '</div>' +
+        '<div class="swatch-token">' + s.token + '</div>' +
+      '</button>';
+    }).join('');
+    el.querySelectorAll('.swatch').forEach(function (s) {
+      s.addEventListener('click', function () { copy(s.dataset.token); });
+    });
+  }
+
+  renderSwatches('sw-surface', [
+    { name: 'Page',           token: '--bg' },
+    { name: 'Subtle',         token: '--bg-subtle' },
+    { name: 'Muted',          token: '--bg-muted' },
+    { name: 'Strong',         token: '--bg-strong' },
+    { name: 'Surface',        token: '--surface' },
+    { name: 'Surface hover',  token: '--surface-hover' },
+    { name: 'Border',         token: '--border' },
+    { name: 'Border strong',  token: '--border-strong' }
+  ]);
+
+  renderSwatches('sw-ink', [
+    { name: 'Primary',   token: '--text' },
+    { name: 'Secondary', token: '--text-secondary' },
+    { name: 'Tertiary',  token: '--text-tertiary' },
+    { name: 'Inverse',   token: '--text-inverse' },
+    { name: 'Link',      token: '--text-link' }
+  ]);
+
+  renderSwatches('sw-accent', [
+    { name: 'Accent',       token: '--accent' },
+    { name: 'Accent hover', token: '--accent-hover' },
+    { name: 'Accent text',  token: '--accent-text' },
+    { name: 'Focus',        token: '--focus' }
+  ]);
+
+  renderSwatches('sw-live', [
+    { name: 'Live',        token: '--live' },
+    { name: 'Live bg',     token: '--live-bg' },
+    { name: 'Live border', token: '--live-border' },
+    { name: 'Live text',   token: '--live-text' }
+  ]);
+
+  renderSwatches('sw-status', [
+    { name: 'Success', token: '--success' }, { name: 'Success bg', token: '--success-bg' },
+    { name: 'Warning', token: '--warning' }, { name: 'Warning bg', token: '--warning-bg' },
+    { name: 'Danger',  token: '--danger'  }, { name: 'Danger bg',  token: '--danger-bg'  },
+    { name: 'Info',    token: '--info'    }, { name: 'Info bg',    token: '--info-bg'    }
+  ]);
+
+  renderSwatches('sw-domain', [
+    { name: 'Billable',      token: '--billable' },
+    { name: 'Non-billable',  token: '--non-billable' },
+    { name: 'Budget ok',     token: '--budget-ok' },
+    { name: 'Budget near',   token: '--budget-near' },
+    { name: 'Budget over',   token: '--budget-over' }
+  ]);
+
+  renderSwatches('sw-viz', [
+    { name: '1 blue',    token: '--viz-1' }, { name: '2 orange', token: '--viz-2' },
+    { name: '3 aqua',    token: '--viz-3' }, { name: '4 yellow', token: '--viz-4' },
+    { name: '5 magenta', token: '--viz-5' }, { name: '6 green',  token: '--viz-6' },
+    { name: '7 violet',  token: '--viz-7' }, { name: '8 red',    token: '--viz-8' }
+  ]);
+
+  /* ---- Scales ---- */
+  function renderScale(id, rows, barFrom) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    el.innerHTML = rows.map(function (r) {
+      var bar = barFrom ? '<div class="scale-bar" style="width:' + barFrom(r) + '"></div>' : '';
+      var note = r.note ? '<div class="scale-note">' + r.note + '</div>' : '';
+      return '<div class="scale-row" data-token="' + r.token + '" style="cursor:pointer">' +
+        '<div class="scale-token">' + r.token + '</div>' +
+        '<div class="scale-value">' + r.value + '</div>' +
+        bar + note + '</div>';
+    }).join('');
+    el.querySelectorAll('.scale-row').forEach(function (r) {
+      r.addEventListener('click', function () { copy(r.dataset.token); });
+    });
+  }
+
+  renderScale('type-scale', [
+    { token: '--fs-xs',   value: '11px', note: 'chips, axis ticks, keyboard hints' },
+    { token: '--fs-sm',   value: '12px', note: 'help text, table meta' },
+    { token: '--fs-base', value: '13px', note: 'body default' },
+    { token: '--fs-md',   value: '14px', note: 'emphasis, section labels' },
+    { token: '--fs-lg',   value: '16px', note: 'card titles, row durations' },
+    { token: '--fs-xl',   value: '20px', note: 'page subtitles' },
+    { token: '--fs-2xl',  value: '24px', note: 'page heading' },
+    { token: '--fs-3xl',  value: '32px', note: 'KPI values' },
+    { token: '--fs-4xl',  value: '40px', note: 'hero figures' }
+  ]);
+
+  renderScale('space-scale', [
+    { token: '--sp-1',  value: '4px'  }, { token: '--sp-2',  value: '8px'  },
+    { token: '--sp-3',  value: '12px' }, { token: '--sp-4',  value: '16px' },
+    { token: '--sp-5',  value: '20px' }, { token: '--sp-6',  value: '24px' },
+    { token: '--sp-8',  value: '32px' }, { token: '--sp-10', value: '40px' },
+    { token: '--sp-12', value: '48px' }, { token: '--sp-16', value: '64px' },
+    { token: '--sp-20', value: '80px' }
+  ], function (r) { return r.value; });
+
+  renderScale('layout-scale', [
+    { token: '--topbar-h',         value: '52px',   note: 'sticky top bar' },
+    { token: '--sidebar-w',        value: '240px',  note: 'expanded navigation' },
+    { token: '--sidebar-rail-w',   value: '56px',   note: 'collapsed rail' },
+    { token: '--content-max',      value: '1440px', note: 'content column ceiling' },
+    { token: '--settings-nav-w',   value: '280px',  note: 'two-pane settings' },
+    { token: '--row-h-comfortable',value: '44px',   note: 'default table row' },
+    { token: '--row-h-compact',    value: '36px',   note: 'compact table row' }
+  ]);
+
+  renderScale('motion-scale', [
+    { token: '--dur-fast', value: '120ms', note: 'hover, focus, colour change' },
+    { token: '--dur',      value: '180ms', note: 'popovers, dropdowns, toasts' },
+    { token: '--dur-slow', value: '280ms', note: 'modals, drawers, route transitions' },
+    { token: '--ease',     value: 'std',   note: 'cubic-bezier(0.2, 0, 0, 1)' }
+  ]);
+
+  /* ---- Radius demo ---- */
+  var radii = [['--r-sm','4'],['--r-md','6'],['--r-lg','8'],['--r-xl','12'],['--r-2xl','16'],['--r-full','full']];
+  document.getElementById('radius-demo').innerHTML = radii.map(function (r) {
+    return '<div style="text-align:center">' +
+      '<div style="width:72px;height:72px;background:var(--bg-muted);border:1px solid var(--border);border-radius:var(' + r[0] + ')"></div>' +
+      '<div class="tertiary mono" style="font-size:var(--fs-xs);margin-top:6px">' + r[1] + '</div></div>';
+  }).join('');
+
+  /* ---- Icon demo ---- */
+  var icons = {
+    timer: '<circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>',
+    calendar: '<rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/>',
+    folder: '<path d="M4 20h16a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13c0 1.1.9 2 2 2Z"/>',
+    users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/>',
+    invoice: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/>',
+    chart: '<path d="M3 3v18h18"/><path d="M7 16v-5M12 16V8M17 16v-3"/>',
+    check: '<path d="M20 6 9 17l-5-5"/>',
+    search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>'
+  };
+  document.getElementById('icon-demo').innerHTML = Object.keys(icons).map(function (k) {
+    return '<div style="text-align:center;color:var(--text-secondary)">' +
+      '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">' + icons[k] + '</svg>' +
+      '<div class="tertiary" style="font-size:var(--fs-xs);margin-top:6px">' + k + '</div></div>';
+  }).join('');
+
+  /* ---- Chart specimens ----
+     Drawn by hand so the guide stays dependency-free. The real app uses
+     Recharts through the <Chart> wrapper; the marks follow the same specs:
+     4px rounded data-ends, 2px surface gap, 2px line, 8px markers. */
+
+  /* ---- Chart hover ----
+     One tooltip element, reused by every chart. Positioned from the hit
+     target's real bounding box, so it works regardless of how the SVG's
+     viewBox is scaled to its container.
+
+     Two rules do most of the usability work here:
+       - The hit target is the full-height column, not the mark. Chasing an 8px
+         dot with a pointer is miserable; the whole slot is generous and forgiving.
+       - Arrow keys drive the same tooltip, so the data is not mouse-only. This
+         is the keyboard-first principle applied to charts. */
+  var chartTip = document.createElement('div');
+  chartTip.className = 'chart-tip';
+  chartTip.setAttribute('role', 'status');
+  document.body.appendChild(chartTip);
+
+  function tipHTML(title, rows, foot) {
+    var h = '<div class="chart-tip-title">' + title + '</div>';
+    rows.forEach(function (r) {
+      h += '<div class="chart-tip-row">' +
+             (r.color ? '<i style="background:' + r.color + '"></i>' : '<i style="background:transparent"></i>') +
+             '<span>' + r.label + '</span><strong>' + r.value + '</strong></div>';
+    });
+    if (foot) h += '<div class="chart-tip-foot"><span>' + foot.label + '</span><strong>' + foot.value + '</strong></div>';
+    return h;
+  }
+
+  function showTip(html, anchorEl) {
+    chartTip.innerHTML = html;
+    chartTip.classList.add('show');
+    var a = anchorEl.getBoundingClientRect();
+    var t = chartTip.getBoundingClientRect();
+    var x = a.left + a.width / 2 - t.width / 2;
+    var y = a.top - t.height - 10;
+    if (y < 8) y = a.bottom + 10;                                  // flip below near the top
+    x = Math.max(8, Math.min(x, window.innerWidth - t.width - 8)); // clamp to the viewport
+    chartTip.style.left = Math.round(x) + 'px';
+    chartTip.style.top = Math.round(y) + 'px';
+  }
+  function hideTip() { chartTip.classList.remove('show'); }
+
+  /**
+   * Adds hover and keyboard interaction to a chart.
+   * `opts.slot(i)` returns the hit rectangle in SVG units.
+   * `opts.tip(i)` returns tooltip HTML.
+   * `opts.on(i)` / `opts.off()` optionally highlight the mark.
+   */
+  function enableChartHover(svg, opts) {
+    var g = el('g', { class: 'hit-layer' });
+    var active = -1;
+    var hits = [];
+
+    function activate(i, viaKeyboard) {
+      if (i === active) return;
+      if (opts.off) opts.off(active);
+      active = i;
+      if (i < 0) { hideTip(); return; }
+      if (opts.on) opts.on(i);
+      showTip(opts.tip(i), hits[i]);
+      if (viaKeyboard) svg.setAttribute('aria-activedescendant', hits[i].id);
+    }
+
+    for (var i = 0; i < opts.count; i++) {
+      (function (idx) {
+        var s = opts.slot(idx);
+        var r = el('rect', {
+          x: s.x, y: s.y, width: s.w, height: s.h,
+          fill: 'transparent', class: 'chart-hit',
+          id: (svg.id || 'c') + '-hit-' + idx
+        });
+        r.addEventListener('mouseenter', function () { activate(idx); });
+        r.addEventListener('focus', function () { activate(idx, true); });
+        g.appendChild(r);
+        hits.push(r);
+      })(i);
+    }
+    svg.appendChild(g);
+    svg.addEventListener('mouseleave', function () { activate(-1); });
+
+    // Keyboard: the chart itself is one tab stop; arrows walk the series.
+    svg.setAttribute('tabindex', '0');
+    svg.addEventListener('keydown', function (e) {
+      var next = null;
+      if (e.key === 'ArrowRight') next = Math.min(active < 0 ? 0 : active + 1, opts.count - 1);
+      else if (e.key === 'ArrowLeft') next = Math.max(active < 0 ? opts.count - 1 : active - 1, 0);
+      else if (e.key === 'Home') next = 0;
+      else if (e.key === 'End') next = opts.count - 1;
+      else if (e.key === 'Escape') { activate(-1); svg.blur(); return; }
+      else return;
+      e.preventDefault();
+      activate(next, true);
+    });
+    svg.addEventListener('blur', function () { activate(-1); });
+  }
+
+  var SVGNS = 'http://www.w3.org/2000/svg';
+  function el(name, attrs, text) {
+    var n = document.createElementNS(SVGNS, name);
+    for (var k in attrs) n.setAttribute(k, attrs[k]);
+    if (text != null) n.textContent = text;
+    return n;
+  }
+  /** Horizontal gridlines plus a baseline. Drawn first so marks sit on top. */
+  function gridLines(svg, x0, x1, baseY, steps, gap) {
+    for (var i = 0; i <= steps; i++) {
+      svg.appendChild(el('line', {
+        x1: x0, x2: x1, y1: baseY - i * gap, y2: baseY - i * gap,
+        stroke: 'var(--viz-grid)', 'stroke-width': 1
+      }));
+    }
+  }
+  /** The current-period band. Drawn before the marks so it never dims them. */
+  function periodBand(svg, x, w, top, bottom, label) {
+    svg.appendChild(el('rect', { x: x, y: top, width: w, height: bottom - top, fill: 'var(--info-bg)' }));
+    if (label) {
+      svg.appendChild(el('text', {
+        x: x + w / 2, y: top + 11, 'text-anchor': 'middle',
+        style: 'font-size:10px;fill:var(--text-tertiary)'
+      }, label));
+    }
+  }
+  function axisLabels(svg, items, y) {
+    items.forEach(function (it) {
+      svg.appendChild(el('text', {
+        x: it.x, y: y, 'text-anchor': 'middle',
+        style: 'font-size:11px;fill:var(--viz-label)'
+      }, it.label));
+    });
+  }
+
+  /* Line: cumulative value with a budget threshold and an over-budget colour
+     change at the crossing point. */
+  (function () {
+    var svg = document.getElementById('c-line');
+    if (!svg) return;
+    var vals = [40,95,150,210,265,320,380,450,520,600,690,780,870,960,1040,1110,1170,1220,1258,1285,1300,1308];
+    var x0 = 44, x1 = 700, baseY = 176, top = 26, max = 1400, budget = 700;
+    var step = (x1 - x0) / (vals.length - 1);
+    var y = function (v) { return baseY - (v / max) * (baseY - top); };
+
+    periodBand(svg, x1 - step * 1.5, step * 1.5 + 8, top - 16, baseY, 'This week');
+    gridLines(svg, x0, x1, baseY, 4, (baseY - top) / 4);
+
+    // Budget threshold
+    svg.appendChild(el('line', { x1: x0, x2: x1, y1: y(budget), y2: y(budget),
+      stroke: 'var(--danger)', 'stroke-width': 1, 'stroke-dasharray': '4 3' }));
+    svg.appendChild(el('rect', { x: x0, y: y(budget) - 9, width: 104, height: 16, rx: 3, fill: 'var(--danger)' }));
+    svg.appendChild(el('text', { x: x0 + 6, y: y(budget) + 2.5, style: 'font-size:10px;fill:#fff' }, 'Budget: 26.67 hrs'));
+
+    // Split the path at the crossing point so the colour change is exact.
+    var under = [], over = [];
+    vals.forEach(function (v, i) {
+      var pt = (x0 + step * i).toFixed(1) + ',' + y(v).toFixed(1);
+      if (v <= budget) under.push(pt); else { if (!over.length && under.length) over.push(under[under.length - 1]); over.push(pt); }
+    });
+    svg.appendChild(el('polyline', { points: under.join(' '), fill: 'none', stroke: 'var(--viz-1)', 'stroke-width': 2 }));
+    svg.appendChild(el('polyline', { points: over.join(' '), fill: 'none', stroke: 'var(--danger)', 'stroke-width': 2 }));
+    // Only the final marker is drawn: a dot on every point is noise.
+    svg.appendChild(el('circle', { cx: x0 + step * (vals.length - 1), cy: y(vals[vals.length - 1]),
+      r: 4, fill: 'var(--viz-surface)', stroke: 'var(--danger)', 'stroke-width': 2 }));
+
+    svg.appendChild(el('line', { x1: x0, x2: x1, y1: baseY, y2: baseY, stroke: 'var(--viz-axis)', 'stroke-width': 1 }));
+    axisLabels(svg, [
+      { x: x0 + step * 2, label: 'Mar' }, { x: x0 + step * 7, label: 'Apr' },
+      { x: x0 + step * 12, label: 'May' }, { x: x0 + step * 17, label: 'Jun' },
+      { x: x0 + step * 21, label: 'Jul' }
+    ], baseY + 16);
+    [0, 700, 1400].forEach(function (v) {
+      svg.appendChild(el('text', { x: x0 - 8, y: y(v) + 3, 'text-anchor': 'end',
+        style: 'font-size:11px;fill:var(--viz-label)' }, v));
+    });
+
+    /* Crosshair and the highlighted point, both inert so they never eat a hover. */
+    var cross = el('line', { y1: top - 16, y2: baseY, stroke: 'var(--border-strong)',
+      'stroke-width': 1, opacity: 0, 'pointer-events': 'none' });
+    var dot = el('circle', { r: 5, fill: 'var(--viz-surface)', 'stroke-width': 2,
+      opacity: 0, 'pointer-events': 'none' });
+    svg.appendChild(cross); svg.appendChild(dot);
+
+    enableChartHover(svg, {
+      count: vals.length,
+      slot: function (i) { return { x: x0 + step * i - step / 2, y: top - 16, w: step, h: baseY - top + 16 }; },
+      on: function (i) {
+        var cx = x0 + step * i, cy = y(vals[i]);
+        cross.setAttribute('x1', cx); cross.setAttribute('x2', cx); cross.setAttribute('opacity', 1);
+        dot.setAttribute('cx', cx); dot.setAttribute('cy', cy);
+        dot.setAttribute('stroke', vals[i] > budget ? 'var(--danger)' : 'var(--viz-1)');
+        dot.setAttribute('opacity', 1);
+      },
+      off: function () { cross.setAttribute('opacity', 0); dot.setAttribute('opacity', 0); },
+      tip: function (i) {
+        var v = vals[i], prev = i > 0 ? vals[i - 1] : null;
+        var rows = [{ color: v > budget ? 'var(--danger)' : 'var(--viz-1)', label: 'Tracked', value: v.toLocaleString() + ' hrs' }];
+        if (prev !== null) rows.push({ color: null, label: 'This week', value: '+' + (v - prev).toLocaleString() + ' hrs' });
+        var over = v - budget;
+        return tipHTML(weekLabel(i), rows, {
+          label: over > 0 ? 'Over budget' : 'Budget remaining',
+          value: (over > 0 ? '+' : '') + over.toLocaleString() + ' hrs'
+        });
+      }
+    });
+  })();
+
+  /** Week-of labels for the specimen series. Real charts get these from the API. */
+  function weekLabel(i) {
+    var d = new Date(2026, 1, 23);
+    d.setDate(d.getDate() + i * 7);
+    return 'Week of ' + d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  }
+
+  /* Bar: discrete quantity per week, current week partial. */
+  (function () {
+    var svg = document.getElementById('c-bar');
+    if (!svg) return;
+    var vals = [2.1,3.4,1.2,5.6,4.0,7.2,3.1,8.8,6.4,2.0,9.1,5.5,11.3,7.7,4.2,12.0,8.6,14.2,10.4,3.6];
+    var x0 = 44, x1 = 700, baseY = 154, top = 24, max = 16;
+    var slot = (x1 - x0) / vals.length, bw = Math.min(18, slot - 6);
+    var y = function (v) { return baseY - (v / max) * (baseY - top); };
+
+    periodBand(svg, x0 + slot * (vals.length - 1) - 3, slot + 6, top - 16, baseY, 'This week');
+    gridLines(svg, x0, x1, baseY, 4, (baseY - top) / 4);
+
+    var bars = [];
+    vals.forEach(function (v, i) {
+      var cx = x0 + slot * i + slot / 2;
+      var r = el('rect', {
+        x: cx - bw / 2, y: y(v), width: bw, height: baseY - y(v), rx: 4,
+        fill: 'var(--viz-1)',
+        /* The current, incomplete period is dimmed so "partial" survives print. */
+        'fill-opacity': i === vals.length - 1 ? 0.6 : 1
+      });
+      svg.appendChild(r); bars.push(r);
+    });
+    svg.appendChild(el('line', { x1: x0, x2: x1, y1: baseY, y2: baseY, stroke: 'var(--viz-axis)', 'stroke-width': 1 }));
+    axisLabels(svg, [
+      { x: x0 + slot * 2, label: 'Mar' }, { x: x0 + slot * 7, label: 'Apr' },
+      { x: x0 + slot * 12, label: 'May' }, { x: x0 + slot * 17, label: 'Jun' }
+    ], baseY + 16);
+    [0, 8, 16].forEach(function (v) {
+      svg.appendChild(el('text', { x: x0 - 8, y: y(v) + 3, 'text-anchor': 'end',
+        style: 'font-size:11px;fill:var(--viz-label)' }, v));
+    });
+
+    var band = el('rect', { y: top - 16, height: baseY - top + 16, fill: 'var(--surface-hover)',
+      opacity: 0, 'pointer-events': 'none' });
+    svg.insertBefore(band, svg.firstChild);
+
+    enableChartHover(svg, {
+      count: vals.length,
+      slot: function (i) { return { x: x0 + slot * i, y: top - 16, w: slot, h: baseY - top + 16 }; },
+      on: function (i) {
+        band.setAttribute('x', x0 + slot * i); band.setAttribute('width', slot); band.setAttribute('opacity', 1);
+        bars[i].setAttribute('fill', 'var(--viz-seq-4)');
+      },
+      off: function (i) {
+        band.setAttribute('opacity', 0);
+        if (bars[i]) bars[i].setAttribute('fill', 'var(--viz-1)');
+      },
+      tip: function (i) {
+        var partial = i === vals.length - 1;
+        var avg = vals.reduce(function (a, b) { return a + b; }, 0) / vals.length;
+        return tipHTML(weekLabel(i), [
+          { color: 'var(--viz-1)', label: 'Hours', value: vals[i].toFixed(2) },
+          { color: null, label: 'vs average', value: (vals[i] >= avg ? '+' : '') + (vals[i] - avg).toFixed(2) }
+        ], partial ? { label: 'Week in progress', value: 'partial' } : null);
+      }
+    });
+  })();
+
+  /* Stacked: paid at the baseline (the only comparable segment), open above. */
+  (function () {
+    var svg = document.getElementById('c-stack');
+    if (!svg) return;
+    var months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    var paid = [22,8,20,14,12,18,14,4,0,0,0,0];
+    var open = [14,4,20,24,12,44,94,32,0,0,0,0];
+    var x0 = 52, x1 = 700, baseY = 154, top = 24, max = 120;
+    var slot = (x1 - x0) / months.length, bw = Math.min(34, slot - 12);
+    var h = function (v) { return (v / max) * (baseY - top); };
+
+    gridLines(svg, x0, x1, baseY, 3, (baseY - top) / 3);
+    months.forEach(function (m, i) {
+      var cx = x0 + slot * i + slot / 2;
+      var ph = h(paid[i]), oh = h(open[i]);
+      if (ph > 0) svg.appendChild(el('rect', { x: cx - bw / 2, y: baseY - ph, width: bw, height: ph, rx: 0, fill: 'var(--viz-6)' }));
+      if (oh > 0) svg.appendChild(el('rect', {
+        /* 2px surface gap: the segment boundary is an edge, not a colour change. */
+        x: cx - bw / 2, y: baseY - ph - oh - 2, width: bw, height: oh, rx: 4,
+        fill: 'color-mix(in srgb, var(--viz-6) 45%, var(--surface))'
+      }));
+    });
+    svg.appendChild(el('line', { x1: x0, x2: x1, y1: baseY, y2: baseY, stroke: 'var(--viz-axis)', 'stroke-width': 1 }));
+    axisLabels(svg, months.map(function (m, i) { return { x: x0 + slot * i + slot / 2, label: m }; }), baseY + 16);
+    [0, 60, 120].forEach(function (v) {
+      svg.appendChild(el('text', { x: x0 - 8, y: baseY - h(v) + 3, 'text-anchor': 'end',
+        style: 'font-size:11px;fill:var(--viz-label)' }, v === 0 ? '$0' : '$' + v + 'k'));
+    });
+
+    var sband = el('rect', { y: top - 16, height: baseY - top + 16, fill: 'var(--surface-hover)',
+      opacity: 0, 'pointer-events': 'none' });
+    svg.insertBefore(sband, svg.firstChild);
+
+    var money = function (k) { return '$' + (k * 1000).toLocaleString('en-US') + '.00'; };
+
+    enableChartHover(svg, {
+      count: months.length,
+      slot: function (i) { return { x: x0 + slot * i, y: top - 16, w: slot, h: baseY - top + 16 }; },
+      on: function (i) {
+        sband.setAttribute('x', x0 + slot * i); sband.setAttribute('width', slot); sband.setAttribute('opacity', 1);
+      },
+      off: function () { sband.setAttribute('opacity', 0); },
+      tip: function (i) {
+        var total = paid[i] + open[i];
+        if (!total) return tipHTML(months[i] + ' 2026', [{ color: null, label: 'No invoices issued', value: '' }]);
+        /* Whole stack in one tooltip, not per segment: the question a stacked
+           bar answers is "what made up this month", and the total is the reason
+           the segments were stacked in the first place. */
+        return tipHTML(months[i] + ' 2026', [
+          { color: 'var(--viz-6)', label: 'Paid', value: money(paid[i]) },
+          { color: 'color-mix(in srgb, var(--viz-6) 45%, var(--surface))', label: 'Open', value: money(open[i]) }
+        ], { label: 'Issued', value: money(total) });
+      }
+    });
+  })();
+
+  function drawChart() {
+    var revenue = [1400, 1900, 3600, 4000, 3500, 1650, 1200];
+    var costs   = [-420, -520, -1400, -1550, -1300, -500, -380];
+    var profit  = [980, 1380, 2200, 2450, 2200, 1150, 820];
+    var x0 = 40, x1 = 700, baseY = 180, scale = 0.032;
+    var step = (x1 - x0) / revenue.length;
+    var bw = 18;
+
+    var grid = '';
+    for (var g = 0; g <= 4; g++) {
+      var gy = baseY - g * 34;
+      grid += '<line x1="40" y1="' + gy + '" x2="700" y2="' + gy + '" stroke="var(--viz-grid)" stroke-width="1"/>';
+    }
+    document.getElementById('chart-grid').innerHTML = grid;
+
+    var bars = '', pts = [], dots = '';
+    revenue.forEach(function (rv, i) {
+      var cx = x0 + step * i + step / 2;
+      var rh = rv * scale, ch = Math.abs(costs[i]) * scale;
+      bars += '<rect x="' + (cx - bw - 1) + '" y="' + (baseY - rh) + '" width="' + bw + '" height="' + rh + '" rx="4" fill="var(--viz-6)"/>';
+      bars += '<rect x="' + (cx + 1) + '" y="' + baseY + '" width="' + bw + '" height="' + ch + '" rx="4" fill="var(--viz-8)"/>';
+      var py = baseY - profit[i] * scale;
+      pts.push(cx + ',' + py);
+      dots += '<circle cx="' + cx + '" cy="' + py + '" r="4" fill="var(--viz-surface)" stroke="var(--viz-1)" stroke-width="2"/>';
+    });
+    document.getElementById('chart-bars').innerHTML = bars;
+    document.getElementById('chart-line').setAttribute('points', pts.join(' '));
+    document.getElementById('chart-dots').innerHTML = dots;
+
+    // Re-attach hover after a redraw (theme change rebuilds the marks).
+    var svg = document.getElementById('chart-line').ownerSVGElement;
+    var old = svg.querySelector('.hit-layer');
+    if (old) old.remove();
+    var hl = svg.querySelector('.hover-band');
+    if (!hl) {
+      hl = el('rect', { class: 'hover-band', y: 20, height: 170, fill: 'var(--surface-hover)',
+        opacity: 0, 'pointer-events': 'none' });
+      svg.insertBefore(hl, svg.firstChild);
+    }
+    var weeks = ['1 Jul', '8 Jul', '15 Jul', '22 Jul', '29 Jul', '5 Aug', '12 Aug'];
+    var usd = function (n) { return (n < 0 ? '-$' : '$') + Math.abs(n).toLocaleString('en-US') + '.00'; };
+
+    enableChartHover(svg, {
+      count: revenue.length,
+      slot: function (i) { return { x: x0 + step * i, y: 20, w: step, h: 170 }; },
+      on: function (i) { hl.setAttribute('x', x0 + step * i); hl.setAttribute('width', step); hl.setAttribute('opacity', 1); },
+      off: function () { hl.setAttribute('opacity', 0); },
+      tip: function (i) {
+        var margin = Math.round((profit[i] / revenue[i]) * 100);
+        return tipHTML('Week of ' + weeks[i], [
+          { color: 'var(--viz-6)', label: 'Revenue', value: usd(revenue[i]) },
+          { color: 'var(--viz-8)', label: 'Costs', value: usd(costs[i]) },
+          { color: 'var(--viz-1)', label: 'Profit', value: usd(profit[i]) }
+        ], { label: 'Margin', value: margin + '%' });
+      }
+    });
+  }
+  drawChart();
+
+  /* Donut: per segment, because there are only two and each is a distinct
+     answer rather than a point in a series. */
+  (function () {
+    var svg = document.querySelector('#viz svg[aria-label*="billable"]');
+    if (!svg) return;
+    var segs = svg.querySelectorAll('circle');
+    if (segs.length < 2) return;
+    var data = [
+      { el: segs[1], color: 'var(--billable)', label: 'Billable', value: '3,001.25 hrs', pct: '79%' },
+      { el: segs[0], color: 'var(--bg-strong)', label: 'Non-billable', value: '821.46 hrs', pct: '21%' }
+    ];
+    data.forEach(function (d) {
+      d.el.style.pointerEvents = 'stroke';
+      d.el.style.cursor = 'default';
+      d.el.addEventListener('mouseenter', function () {
+        showTip(tipHTML(d.label, [
+          { color: d.color, label: 'Hours', value: d.value },
+          { color: null, label: 'Share', value: d.pct }
+        ], { label: 'Total', value: '3,822.71 hrs' }), d.el);
+      });
+      d.el.addEventListener('mouseleave', hideTip);
+    });
+  })();
+
+  /* ---- Date picker specimen ---- */
+  (function () {
+    var grid = document.getElementById('dp-grid');
+    if (!grid) return;
+    var dow = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
+    var html = dow.map(function (d) { return '<div class="dp-dow">' + d + '</div>'; }).join('');
+    // August 2026 starts on a Saturday; the grid opens on the preceding Monday.
+    var lead = [27, 28, 29, 30, 31];
+    lead.forEach(function (d) { html += '<div class="dp-day muted-day">' + d + '</div>'; });
+    for (var d = 1; d <= 31; d++) {
+      var cls = 'dp-day';
+      if (d === 13) cls += ' today';
+      if (d === 14) cls += ' selected';
+      html += '<div class="' + cls + '">' + d + '</div>';
+    }
+    for (var t = 1; t <= 6; t++) html += '<div class="dp-day muted-day">' + t + '</div>';
+    grid.innerHTML = html;
+  })();
+
+  /* ---- Choice cards and day toggles ---- */
+  document.querySelectorAll('.radio-cards').forEach(function (group) {
+    group.addEventListener('click', function (e) {
+      var card = e.target.closest('.radio-card');
+      if (!card || card.classList.contains('disabled')) return;
+      group.querySelectorAll('.radio-card').forEach(function (c) { c.classList.remove('selected'); });
+      card.classList.add('selected');
+    });
+  });
+  document.querySelectorAll('.day-toggle, .segmented').forEach(function (group) {
+    group.addEventListener('click', function (e) {
+      var b = e.target.closest('button');
+      if (!b) return;
+      if (group.classList.contains('day-toggle')) {
+        b.setAttribute('aria-pressed', b.getAttribute('aria-pressed') === 'true' ? 'false' : 'true');
+      } else {
+        group.querySelectorAll('button').forEach(function (x) { x.setAttribute('aria-pressed', 'false'); });
+        b.setAttribute('aria-pressed', 'true');
+      }
+    });
+  });
+  document.querySelectorAll('.switch').forEach(function (s) {
+    s.addEventListener('click', function () {
+      s.setAttribute('aria-checked', s.getAttribute('aria-checked') === 'true' ? 'false' : 'true');
+    });
+  });
+
+  /* ---- Live AG Grid specimen ----
+     Feature-detected end to end. If the CDN is blocked or the installed AG Grid
+     exposes a different API shape, the static table beside it is revealed
+     instead, so this page degrades to what it showed before rather than to an
+     empty box. The app's own grid is bundled and typed, so it has no such
+     uncertainty. */
+  var gridApi = null;
+
+  function showGridFallback() {
+    var host = document.getElementById('grid-demo');
+    var fb = document.getElementById('grid-fallback');
+    if (host) host.style.display = 'none';
+    if (fb) fb.style.display = 'block';
+  }
+
+  function money(cents) {
+    return '$' + (cents / 100).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function buildGrid() {
+    var host = document.getElementById('grid-demo');
+    if (!host) return;
+
+    var ag = window.agGrid;
+    if (!ag || typeof ag.createGrid !== 'function' || !ag.themeQuartz) {
+      showGridFallback();
+      return;
+    }
+
+    try {
+      if (ag.ModuleRegistry && ag.AllCommunityModule) {
+        ag.ModuleRegistry.registerModules([ag.AllCommunityModule]);
+      }
+
+      /* The same parameter mapping as tokens/ag-grid-theme.ts. Kept in sync by
+         hand here because this page cannot import TypeScript; the shipping file
+         is the source of truth. */
+      var theme = ag.themeQuartz.withParams({
+        browserColorScheme: 'inherit',
+        backgroundColor: 'var(--surface)',
+        foregroundColor: 'var(--text)',
+        borderColor: 'var(--border)',
+        chromeBackgroundColor: 'var(--bg-muted)',
+        headerBackgroundColor: 'var(--bg-muted)',
+        headerTextColor: 'var(--text-tertiary)',
+        headerFontSize: 'var(--fs-xs)',
+        headerFontWeight: 600,
+        headerHeight: '36px',
+        headerColumnBorder: false,
+        oddRowBackgroundColor: 'transparent',
+        rowHoverColor: 'var(--surface-hover)',
+        selectedRowBackgroundColor: 'var(--info-bg)',
+        rowHeight: 'var(--row-h)',
+        columnBorder: false,
+        wrapperBorder: false,
+        wrapperBorderRadius: 0,
+        fontFamily: 'var(--typeface-sans)',
+        fontSize: 'var(--fs-base)',
+        spacing: 4,
+        cellHorizontalPadding: 12,
+        accentColor: 'var(--focus)',
+        borderRadius: 'var(--r-md)',
+        checkboxBorderRadius: 'var(--r-sm)',
+        iconSize: 14
+      });
+
+      var rows = [
+        { _id: 'g1', _kind: 'group', client: "Example Client 03" },
+        { _id: 'p1', _kind: 'data', project: 'Example Project 01', type: 'Fixed Fee', hours: 40.00, billed: 1609020, costs: 718197, used: 0.60 },
+        { _id: 'g2', _kind: 'group', client: 'Example Client 04' },
+        { _id: 'p2', _kind: 'data', project: 'Example Project 02', type: 'Fixed Fee', hours: 1307.97, billed: 2395830, costs: 2395830, used: 1.48 },
+        { _id: 'g3', _kind: 'group', client: 'Example Client 12' },
+        { _id: 'p3', _kind: 'data', project: 'Example Project 06', type: 'Time & Materials', hours: 664.44, billed: 664440, costs: 358880, used: 0.97 },
+        { _id: 'p4', _kind: 'data', project: 'Example Project 08', type: 'Time & Materials', hours: 803.15, billed: 8031480, costs: 3157255, used: 1.18 },
+        { _id: 'g4', _kind: 'group', client: 'Example Client 14' },
+        { _id: 'p5', _kind: 'data', project: 'Example Project 10', type: 'Time & Materials', hours: 743.38, billed: 1420860, costs: 495020, used: 0.42 }
+      ];
+
+      var options = {
+        theme: theme,
+        rowData: rows,
+        getRowId: function (p) { return p.data._id; },
+        isFullWidthRow: function (p) { return p.rowNode.data && p.rowNode.data._kind !== 'data'; },
+        fullWidthCellRenderer: function (p) {
+          var d = document.createElement('div');
+          d.className = 'tly-group-row';
+          d.textContent = p.data.client || '';
+          return d;
+        },
+        getRowHeight: function (p) { return p.data && p.data._kind === 'group' ? 38 : undefined; },
+        getRowClass: function (p) { return p.data && p.data._kind === 'group' ? 'tly-row-group' : undefined; },
+        rowSelection: { mode: 'multiRow', checkboxes: true, headerCheckbox: true, enableClickSelection: false,
+                        isRowSelectable: function (n) { return n.data && n.data._kind === 'data'; } },
+        defaultColDef: { sortable: true, resizable: true, suppressHeaderMenuButton: true, cellClass: 'tly-cell', minWidth: 80 },
+        columnDefs: [
+          { field: 'project', headerName: 'Project', flex: 1, minWidth: 220, cellClass: 'tly-cell' },
+          { field: 'type', headerName: 'Type', width: 150,
+            cellRenderer: function (p) {
+              if (!p.value) return '';
+              var s = document.createElement('span');
+              s.className = 'badge'; s.textContent = p.value; return s;
+            } },
+          { field: 'hours', headerName: 'Hours', width: 110, cellClass: 'tly-cell tly-numeric', headerClass: 'tly-header-numeric',
+            valueFormatter: function (p) { return p.value == null ? '' : p.value.toFixed(2); } },
+          { field: 'billed', headerName: 'If billed hourly', width: 150, cellClass: 'tly-cell tly-numeric', headerClass: 'tly-header-numeric',
+            valueFormatter: function (p) { return p.value == null ? '' : money(p.value); } },
+          { field: 'used', headerName: 'Budget', width: 150, cellClass: 'tly-cell',
+            cellRenderer: function (p) {
+              if (p.value == null) return '';
+              var wrap = document.createElement('div'); wrap.className = 'meter-row';
+              var m = document.createElement('div'); m.className = 'meter';
+              var pct = Math.min(p.value, 1) * 100;
+              var tone = p.value > 1 ? 'near' : (p.value >= 0.8 ? 'near' : 'ok');
+              m.innerHTML = '<span class="' + tone + '" style="width:' + pct + '%"></span>' +
+                (p.value > 1 ? '<span class="gap"></span><span class="over" style="width:' + Math.min((p.value - 1) * 100, 40) + '%"></span>' : '');
+              var v = document.createElement('span');
+              v.style.cssText = 'font-size:var(--fs-sm);color:var(--text-secondary);min-width:38px;text-align:right';
+              v.className = 'tabular';
+              v.textContent = Math.round(p.value * 100) + '%';
+              wrap.appendChild(m); wrap.appendChild(v);
+              return wrap;
+            } },
+          { field: 'costs', headerName: 'Costs', width: 130, cellClass: 'tly-cell tly-numeric', headerClass: 'tly-header-numeric',
+            valueFormatter: function (p) { return p.value == null ? '' : money(p.value); } }
+        ],
+        pinnedBottomRowData: [
+          { _id: '__total', _kind: 'data', project: 'Total for all pages', hours: 3672.18, billed: 14121630, costs: 7125182 }
+        ],
+        suppressCellFocus: false,
+        enableCellTextSelection: true,
+        ensureDomOrder: true
+      };
+
+      options.onSelectionChanged = function () {
+        if (!gridApi) return;
+        setSelectionCount(gridApi.getSelectedRows().length);
+      };
+
+      gridApi = ag.createGrid(host, options);
+    } catch (err) {
+      showGridFallback();
+    }
+  }
+
+  /* ---- Action row ----
+     Three layers, one fixed-height container. Switching a layer changes only
+     opacity and pointer-events, so the grid below cannot move. */
+  var selectedCount = 0;
+
+  function setActionLayer(name) {
+    document.querySelectorAll('#action-row .action-layer').forEach(function (l) {
+      l.classList.toggle('is-active', l.dataset.layer === name);
+    });
+  }
+
+  function setSelectionCount(n) {
+    selectedCount = n;
+    var c = document.getElementById('sel-count');
+    var ac = document.getElementById('act-count');
+    if (c) c.textContent = String(n);
+    if (ac) ac.textContent = String(n);
+    setActionLayer(n > 0 ? 'select' : 'browse');
+  }
+
+  (function wireActionRow() {
+    var row = document.getElementById('action-row');
+    if (!row) return;
+
+    var labels = { tags: 'Add tags', rate: 'Set rate', billable: 'Set tasks billable', delete: 'Delete' };
+
+    row.addEventListener('click', function (e) {
+      var btn = e.target.closest('button');
+      if (!btn) return;
+
+      if (btn.id === 'sel-clear') {
+        if (gridApi) gridApi.deselectAll(); else setSelectionCount(0);
+        return;
+      }
+      if (btn.id === 'act-back' || btn.id === 'act-cancel') {
+        setActionLayer('select');
+        return;
+      }
+      if (btn.id === 'act-apply') {
+        if (gridApi) gridApi.deselectAll(); else setSelectionCount(0);
+        toast.textContent = 'Applied to ' + selectedCount + ' rows';
+        toast.classList.add('show');
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(function () { toast.classList.remove('show'); }, 1600);
+        return;
+      }
+      if (btn.dataset.act) {
+        /* `delete` is destructive and `tags` needs a multi-select, so both would
+           open a modal in the app. Only `rate` and `billable` fit one row. */
+        var label = document.getElementById('act-label');
+        if (label) label.textContent = labels[btn.dataset.act] || 'Action';
+        setActionLayer('act');
+      }
+    });
+
+    /* Escape steps back one state rather than clearing the selection outright. */
+    document.addEventListener('keydown', function (e) {
+      if (e.key !== 'Escape') return;
+      var act = document.querySelector('#action-row .action-layer[data-layer="act"]');
+      if (act && act.classList.contains('is-active')) setActionLayer('select');
+    });
+  })();
+
+  buildGrid();
+  setSelectionCount(0);
+
+  /* ---- Scrollspy ---- */
+  var links = Array.prototype.slice.call(document.querySelectorAll('.guide-nav a'));
+  var sections = links.map(function (a) { return document.querySelector(a.getAttribute('href')); }).filter(Boolean);
+  var spy = new IntersectionObserver(function (entries) {
+    entries.forEach(function (en) {
+      if (!en.isIntersecting) return;
+      links.forEach(function (l) {
+        l.classList.toggle('is-active', l.getAttribute('href') === '#' + en.target.id);
+      });
+    });
+  }, { rootMargin: '-10% 0px -80% 0px' });
+  sections.forEach(function (s) { spy.observe(s); });
+})();
+</script>
+</body>
+</html>
