@@ -141,7 +141,7 @@ export const startOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth(),
 export const endOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth() + 1, 0);
 export const sameDay = (a: Date, b: Date) => isoDate(a) === isoDate(b);
 
-/** "Thu, 13 Aug" — the format used in page chrome. */
+/** "Thu, 13 Aug", the format used in page chrome. */
 export const formatDayLong = (d: string | Date) => {
   const x = toDate(d);
   return `${DOW[x.getDay()]}, ${x.getDate()} ${MONTHS[x.getMonth()]}`;
@@ -151,7 +151,7 @@ export const formatDayShort = (d: string | Date) => {
   const x = toDate(d);
   return `${x.getDate()} ${MONTHS[x.getMonth()]}`;
 };
-/** "08/13/2026" — the format used inside tables. */
+/** "08/13/2026", the format used inside tables. */
 export const formatDateUS = (d: string | Date) => {
   const x = toDate(d);
   return `${String(x.getMonth() + 1).padStart(2, "0")}/${String(x.getDate()).padStart(2, "0")}/${x.getFullYear()}`;
