@@ -16,14 +16,7 @@ import { db } from "@/server/db/client";
 import * as s from "@/server/db/schema";
 import { verifyPassword } from "@/server/auth/password";
 import { createSession, sessionCookieOptions } from "@/server/auth/session";
-import {
-  clearBucket,
-  consume,
-  enforce,
-  enforceAvailable,
-  signInEmailKey,
-  signInIpKey,
-} from "@/server/auth/rate-limit";
+import { clearBucket, enforce, signInEmailKey, signInIpKey } from "@/server/auth/rate-limit";
 import { AppError, toProblem } from "@/server/errors";
 import { clientIp, parseOrThrow } from "@/server/http";
 import { newId } from "@/server/db/ids";
@@ -56,20 +49,28 @@ export async function POST(req: NextRequest) {
     // address is unknown the per-address limit is skipped and the per-email
     // bucket carries the load alone.
     //
-    // The per-email bucket counts FAILURES, not attempts, and a success clears
-    // it. That distinction is the difference between a limiter and a weapon.
-    // Counting attempts meant anybody who knew an address could spend ten
-    // requests on it, right or wrong, and lock the owner out for fifteen
-    // minutes; the owner could not clear it by typing the correct password,
-    // because the correct password also counted. Eleven staff on one guessable
-    // domain, one of whose addresses is committed in this repository, made that
-    // 110 requests to lock out the entire company, repeatable forever.
+    // The per-email point is spent up front and given back on success.
+    //
+    // An earlier version read the count first and spent a point only if the
+    // password turned out to be wrong, so that a correct password never
+    // contributed to a lockout. The intent was right and the implementation was
+    // not: read-then-act is not atomic, and a reviewer sent twenty simultaneous
+    // wrong passwords against a bucket with one point left and got twenty 401s.
+    // Every one of them read the same count before any of them wrote. That is a
+    // rate limiter that stops sequential guessing and not concurrent guessing,
+    // which is the only kind worth doing.
+    //
+    // Consuming first is atomic (Redis INCR, or a single-threaded map), so the
+    // count cannot be raced. Clearing on success below recovers the property
+    // that mattered: a person who mistypes nine times and then gets it right
+    // walks away with an empty bucket rather than one failure from a lockout.
     //
     // What this still leaves, stated plainly rather than argued away: ten wrong
-    // guesses against one address still locks that address for fifteen minutes.
-    // That is inherent to per-account limiting and it is the accepted trade. It
-    // is bounded, it is per-account rather than company-wide, and a legitimate
-    // user is never the one who trips it.
+    // guesses against one address locks that address for fifteen minutes, and
+    // somebody who knows an address can do that deliberately. It is inherent to
+    // per-account limiting and it is the accepted trade, because it is bounded,
+    // it is per-account rather than company-wide, and the owner clears it by
+    // signing in once the window rolls.
     //
     // The brute-force ceiling is 40 guesses an hour against a named account.
     // Too slow for a decent password, too fast to be relaxed about a weak one,
@@ -78,7 +79,7 @@ export async function POST(req: NextRequest) {
     // rather than a default: behind Caddy the address is known, the branch below
     // runs, and the per-address limit does the real work.
     if (ip) await enforce("auth", signInIpKey(ip));
-    await enforceAvailable("auth", signInEmailKey(email));
+    await enforce("auth", signInEmailKey(email));
 
     const [user] = await db
       .select({
@@ -95,14 +96,25 @@ export async function POST(req: NextRequest) {
     // who works here. verifyPassword burns comparable time either way.
     const ok = user && !user.archivedAt && (await verifyPassword(user.passwordHash, password));
     if (!ok) {
-      // Now, and only now, is a point spent. See the note above the check.
-      await consume("auth", signInEmailKey(email));
       throw new AppError("unauthenticated", "That email and password do not match.");
     }
 
-    // Succeeding clears the failures that came before, so a handful of typos
-    // followed by the right password leaves nothing behind.
+    // Succeeding gives the point back on both dimensions.
+    //
+    // The address bucket matters more than it looks. Everybody signs in from
+    // the office, so behind Caddy all eleven staff share one address, and
+    // counting successes there rations the company: a reviewer signed twelve
+    // people in with the correct password from one address and the twelfth got
+    // a 429. That is the same shared-bucket outage the "unknown" key used to
+    // cause, moved to the office IP and now triggered by ordinary Monday
+    // morning use rather than by an attacker.
+    //
+    // Failures still accumulate per address, which is the part that stops
+    // credential stuffing. Successes do not, because a correct password is
+    // evidence the request was legitimate, and rate limiting legitimate traffic
+    // is just an outage with extra steps.
     await clearBucket("auth", signInEmailKey(email));
+    if (ip) await clearBucket("auth", signInIpKey(ip));
 
     const session = await createSession(user.id, {
       ip: clientIp(req),

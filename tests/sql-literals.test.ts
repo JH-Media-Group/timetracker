@@ -66,9 +66,19 @@
  *
  * A deliberate lie to the compiler (`d as unknown as string`) still passes
  * here, and so does `sql.raw` string concatenation, which is a different bug
- * (injection, not serialisation) and belongs to a different check. Both are
- * caught by half 2 the moment a test executes them, so the residue is code that
- * lies about its types *and* is never executed by any test.
+ * (injection, not serialisation) and belongs to a different check.
+ *
+ * So does a Date nested in an object, `${{ at: cutoff }}`. That one was tried
+ * and reverted, and the reason is worth keeping. Recursing into an object type's
+ * properties flags every drizzle column reference in the codebase, because a
+ * timestamp column's type carries `data: Date`, and `${s.sessions.expiresAt}` is
+ * a column reference rather than a bind parameter. Fifty false positives is how
+ * a check gets deleted. Half 2 catches the nested case at runtime, where a
+ * column reference and an object literal are trivially distinguishable, so that
+ * is where it lives.
+ *
+ * All three are caught by half 2 the moment a test executes them, so the residue
+ * is code that lies about its types *and* is never executed by any test.
  */
 
 import { readdirSync, statSync } from "node:fs";
@@ -152,7 +162,7 @@ interface Scan {
  * before it can go in a query, which is a fair price and usually an improvement
  * on its own.
  */
-function mentionsDate(checker: ts.TypeChecker, type: ts.Type): boolean {
+function mentionsDate(checker: ts.TypeChecker, type: ts.Type, depth = 0): boolean {
   const parts = type.isUnion() ? type.types : [type];
   return parts.some((part) => {
     if (part.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return true;
@@ -163,11 +173,11 @@ function mentionsDate(checker: ts.TypeChecker, type: ts.Type): boolean {
     // A generic parameter constrained to Date is a Date at every call site.
     if (part.flags & ts.TypeFlags.TypeParameter) {
       const constraint = checker.getBaseConstraintOfType(part);
-      if (constraint && mentionsDate(checker, constraint)) return true;
+      if (constraint && mentionsDate(checker, constraint, depth)) return true;
     }
 
     // An intersection is a Date if any member is (`Date & { brand }`).
-    if (part.isIntersection()) return part.types.some((m) => mentionsDate(checker, m));
+    if (part.isIntersection()) return part.types.some((m) => mentionsDate(checker, m, depth));
 
     // A Date behind a type alias still prints as Date.
     return checker.typeToString(part) === "Date";
@@ -313,6 +323,37 @@ describe("raw sql templates", () => {
    * above uses local declarations and would still pass in that state, so this
    * asserts against the real program.
    */
+  /**
+   * Every import resolved.
+   *
+   * This is the failure that makes the whole check untrustworthy rather than
+   * merely incomplete. One unresolvable import turns everything downstream of
+   * it into `any`, and `any` is an offence here, so the guard reports a
+   * confident and completely wrong diagnosis: "a Date in a raw sql template" on
+   * a line holding a string. A reviewer produced exactly that by adding a file
+   * importing a package that does not exist.
+   *
+   * Checked before the offences are reported, so the failure names the real
+   * cause instead of sending somebody to look for a Date that was never there.
+   */
+  it("resolved every import, so `any` means `any` and not `unresolved`", () => {
+    const unresolved = ts
+      .getPreEmitDiagnostics(program)
+      .filter((d) => d.code === 2307 || d.code === 2305 || d.code === 2306)
+      .filter((d) => d.file && roots.includes(d.file.fileName))
+      .map((d) => {
+        const at = d.file!.getLineAndCharacterOfPosition(d.start ?? 0);
+        return `  ${relative(ROOT, d.file!.fileName).replace(/\\/g, "/")}:${at.line + 1}  ${ts.flattenDiagnosticMessageText(d.messageText, " ")}`;
+      });
+
+    expect(
+      unresolved,
+      "an import did not resolve, so the checker typed part of this program as " +
+        "`any` and every conclusion below it is unreliable. Fix the import; the " +
+        "Date findings are meaningless until you do:\n" + unresolved.join("\n")
+    ).toEqual([]);
+  });
+
   it("resolved real types across the real program", () => {
     expect(roots.length, "no source files found").toBeGreaterThan(50);
     expect(result.templates, "no sql templates found, so the tag match is broken").toBeGreaterThan(50);

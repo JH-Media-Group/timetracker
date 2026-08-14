@@ -49,6 +49,8 @@ const buckets = new Map<string, Bucket>();
 
 /** Above this the map is treated as under attack rather than merely busy. */
 const MAX_BUCKETS = 20_000;
+/** How often the map is walked, whatever its size. */
+const SWEEP_INTERVAL_MS = 60_000;
 let lastSweep = 0;
 
 /**
@@ -63,14 +65,32 @@ let lastSweep = 0;
  *
  * Two changes. The scan is time-based, so its cost is amortised rather than
  * paid per request. And when the map is still over the ceiling after expiring
- * everything it can, the oldest entries go, because a limiter that takes the
- * process down with it has stopped being a defence. Dropping a live bucket
- * grants somebody extra attempts; the alternative grants everybody an outage.
+ * everything it can, entries are dropped, because a limiter that takes the
+ * process down with it has stopped being a defence.
+ *
+ * **Never drop a bucket that is currently limiting somebody.** The first
+ * version evicted oldest-first, and a reviewer pointed out that this hands an
+ * attacker the eviction as a tool: create twenty thousand fresh buckets with
+ * invented email addresses and the bucket that is refusing your guesses against
+ * a real address falls out of the front of the map. Buckets at or over their
+ * limit are the only ones doing any work, so they are the last thing to throw
+ * away. What gets evicted instead is the attacker's own flood, which costs them
+ * nothing and gains them nothing.
+ *
+ * If every bucket is at its limit and we are still over the ceiling, the map
+ * stays over the ceiling. That is the right way round: memory pressure is
+ * visible and recoverable, and quietly unlocking accounts under load is not.
  *
  * This is the fallback path. With Redis, expiry is the server's problem.
  */
 function sweep(now: number) {
-  if (buckets.size < MAX_BUCKETS && now - lastSweep < 60_000) return;
+  // Time, and only time. The first two versions gated on `buckets.size`, which
+  // meant that once the map sat at the ceiling the condition was true on every
+  // call: a full scan and a log line per request, which is the per-request cost
+  // the rewrite claimed to have removed, on ten times as many entries as
+  // before. A reviewer measured 292x. Size cannot gate a sweep whose own
+  // outcome is that the size stays high.
+  if (now - lastSweep < SWEEP_INTERVAL_MS) return;
   lastSweep = now;
 
   for (const [key, bucket] of buckets) {
@@ -79,16 +99,27 @@ function sweep(now: number) {
 
   if (buckets.size <= MAX_BUCKETS) return;
 
-  // Map preserves insertion order, so the front is the oldest.
-  const excess = buckets.size - MAX_BUCKETS;
+  // Insertion order, so the front is the oldest, but skip anything that is
+  // actively refusing requests. `Map.set` on an existing key does not reorder
+  // it, so "oldest" here is first-created rather than least-recently-used, and
+  // a long-lived bucket that is doing its job sits at the front where a naive
+  // eviction would reach it first.
+  const limit = LIMITS.auth.points;
+  let excess = buckets.size - MAX_BUCKETS;
   let dropped = 0;
-  for (const key of buckets.keys()) {
-    if (dropped++ >= excess) break;
+  for (const [key, bucket] of buckets) {
+    if (excess <= 0) break;
+    if (bucket.count >= limit) continue;
     buckets.delete(key);
+    dropped++;
+    excess--;
   }
+
   console.warn(
-    `[rate-limit] in-process buckets exceeded ${MAX_BUCKETS}; dropped ${excess} of the oldest. ` +
-      "This is the no-Redis fallback under load, and it means some limits reset early."
+    `[rate-limit] in-process buckets exceeded ${MAX_BUCKETS}; dropped ${dropped} idle ones` +
+      (excess > 0 ? `, and ${excess} still limiting were kept` : "") +
+      `. This is the no-Redis fallback under load, and it is logged at most once every ` +
+      `${SWEEP_INTERVAL_MS / 1000}s.`
   );
 }
 
@@ -198,8 +229,17 @@ export async function consume(routeClass: RouteClass, key: string): Promise<Rate
 
   try {
     const count = await client.incr(full);
-    if (count === 1) await client.pexpire(full, limit.windowMs);
-    const ttl = await client.pttl(full);
+
+    // Set the expiry whenever the key has none, not only when the counter reads
+    // 1. `INCR` then `PEXPIRE` is two round trips, and a process or a Redis that
+    // dies between them leaves a key that counts up forever: at ten it refuses
+    // before the password is even checked, so the account's owner can never
+    // clear it by knowing their password, and nothing ever expires it. Asking
+    // for the TTL and repairing a missing one costs the round trip we were
+    // already making.
+    const ttlBefore = await client.pttl(full);
+    if (ttlBefore < 0) await client.pexpire(full, limit.windowMs);
+    const ttl = ttlBefore < 0 ? limit.windowMs : ttlBefore;
     const remaining = limit.points - count;
     return {
       allowed: remaining >= 0,
@@ -221,47 +261,6 @@ export async function enforce(routeClass: RouteClass, key: string): Promise<void
       meta: { retry_after_seconds: result.retryAfterSeconds },
     });
   }
-}
-
-/**
- * Refuses when the bucket is empty, without spending a point.
- *
- * For limits that should count failures rather than attempts. Sign-in is the
- * case: counting every attempt means a correct password contributes to the
- * lockout that a wrong one causes, so somebody who knows an address can lock
- * the owner out of their own account by typing anything ten times, and the
- * owner cannot clear it by succeeding.
- */
-export async function enforceAvailable(routeClass: RouteClass, key: string): Promise<void> {
-  const limit = LIMITS[routeClass];
-  const full = bucketKey(routeClass, key);
-  const now = Date.now();
-
-  let count = 0;
-  let ttlMs = limit.windowMs;
-
-  const client = await getRedis();
-  if (client) {
-    try {
-      count = Number((await client.get(full)) ?? 0);
-      const ttl = await client.pttl(full);
-      if (ttl > 0) ttlMs = ttl;
-    } catch {
-      // Redis is down. Fall through to the local bucket rather than refusing.
-      const local = buckets.get(full);
-      count = local && local.resetAt > now ? local.count : 0;
-    }
-  } else {
-    const local = buckets.get(full);
-    count = local && local.resetAt > now ? local.count : 0;
-    if (local) ttlMs = Math.max(0, local.resetAt - now);
-  }
-
-  if (count < limit.points) return;
-
-  throw new AppError("rate_limited", "Too many requests. Try again shortly.", {
-    meta: { retry_after_seconds: Math.max(1, Math.ceil((ttlMs > 0 ? ttlMs : limit.windowMs) / 1000)) },
-  });
 }
 
 /**

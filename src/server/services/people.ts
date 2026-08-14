@@ -7,7 +7,7 @@
  * that gating happens in the serializer.
  */
 
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { assertCan, type Ctx } from "@/server/ctx";
 import { BASE_PROFILES, type BaseProfileKey, type Capability } from "@/server/auth/capabilities";
 import * as s from "@/server/db/schema";
@@ -168,6 +168,26 @@ export async function updateUser(ctx: Ctx, id: string, input: UserInput): Promis
   const [before] = await ctx.db.select(USER_COLUMNS).from(s.users).where(eq(s.users.id, id)).limit(1);
   if (!before) throw notFound("That person");
 
+  /**
+   * The owner's record belongs to the owner.
+   *
+   * Only `profileId` used to be protected, which left the owner's **email**
+   * editable by anybody holding `people:manage`. That is not cosmetic: the
+   * planned Google SSO matches a first sign-in to an existing row by email
+   * address (BACKEND_PRD 7.1), so changing it hands the account to whoever
+   * controls the new address. The rule was always "the owner cannot be demoted
+   * or removed"; it was enforced for two verbs and open for the rest of the
+   * record.
+   */
+  if (before.isOwner && ctx.actor.kind !== "system" && id !== ctx.actor.userId) {
+    throw forbidden("Only the account owner can edit the owner's record.");
+  }
+
+  // Editing somebody more powerful than you is the same reach as demoting them.
+  if (before.profileId && id !== ctx.actor.userId) {
+    await assertOutranksOrEqual(ctx, before.profileId, "edit");
+  }
+
   const patch: Record<string, unknown> = { updatedAt: ctx.now() };
   if (input.firstName !== undefined) patch.firstName = input.firstName.trim();
   if (input.lastName !== undefined) patch.lastName = input.lastName.trim();
@@ -218,18 +238,68 @@ export async function archiveUser(ctx: Ctx, id: string, archived: boolean): Prom
     throw validationFailed({ _: ["The account owner cannot be archived."] });
   }
 
+  // Archiving somebody is the most complete version of reaching down: they stop
+  // being able to sign in at all. It needs the same rank rule as a demotion,
+  // and until a review found this it had none.
+  if (before.profileId) await assertOutranksOrEqual(ctx, before.profileId, archived ? "archive" : "restore");
+
+  if (archived && id === ctx.actor.userId) {
+    throw validationFailed({
+      _: ["You cannot archive yourself. Ask another administrator, so somebody is left holding the keys."],
+    });
+  }
+
+  if (archived) await assertNotTheLastAdministrator(ctx, id);
+
   await ctx.db
     .update(s.users)
     .set({ archivedAt: archived ? ctx.now() : null, updatedAt: ctx.now() })
     .where(eq(s.users.id, id));
 
-  // Archiving ends every session on the next request anyway; revoking makes it
-  // immediate and visible in the sessions list.
   if (archived) {
+    // Archiving ends every session on the next request anyway; revoking makes it
+    // immediate and visible in the sessions list.
     await ctx.db
       .update(s.sessions)
       .set({ revokedAt: ctx.now() })
       .where(and(eq(s.sessions.userId, id), isNull(s.sessions.revokedAt)));
+
+    /**
+     * Stop the clock, at the moment they left.
+     *
+     * A running timer survived archiving, and the consequences were quiet and
+     * then loud. Quiet, because every report and aggregate excludes entries with
+     * `timer_started_at` set, so those hours simply vanish from the numbers.
+     * Loud, because whenever somebody later stops it, the duration is computed
+     * as `now - timer_started_at`: weeks of wall-clock seconds in a single
+     * entry, sailing past the 24-hour ceiling the write schemas enforce, and
+     * landing in a client's billable total.
+     *
+     * Closing it here uses the archive time, which is the last moment we know
+     * they were working.
+     */
+    const stoppedAt = ctx.now();
+    await ctx.db
+      .update(s.timeEntries)
+      .set({
+        durationSeconds: sql`GREATEST(0, LEAST(86400, EXTRACT(EPOCH FROM (${stoppedAt.toISOString()}::timestamptz - ${s.timeEntries.timerStartedAt}))::int))`,
+        timerStartedAt: null,
+        updatedAt: stoppedAt,
+      })
+      .where(and(eq(s.timeEntries.userId, id), isNull(s.timeEntries.deletedAt), sql`${s.timeEntries.timerStartedAt} IS NOT NULL`));
+
+    /**
+     * And take them off their projects.
+     *
+     * A live `project_members` row keeps an archived person inside
+     * `visibleUserIds`, so they stay part of a project manager's reach and keep
+     * appearing in assignment pickers. Archiving the membership rather than
+     * deleting it keeps their history intact, which is the house rule.
+     */
+    await ctx.db
+      .update(s.projectMembers)
+      .set({ archivedAt: stoppedAt })
+      .where(and(eq(s.projectMembers.userId, id), isNull(s.projectMembers.archivedAt)));
   }
 
   ctx.audit({
@@ -337,15 +407,94 @@ export async function listProfiles(ctx: Ctx) {
  *   3. the account owner's profile is fixed, including by the owner. An account
  *      with no administrator is an account nobody can repair.
  */
+/**
+ * Refuses to archive the last person who could let anybody back in.
+ *
+ * `people:manage` is what grants and restores accounts. An account with nobody
+ * holding it is an account where a locked-out person stays locked out and a
+ * departed contractor stays on the roster, and the only route back is a hand
+ * edit against the database. The owner is exempt from archiving already, so
+ * this is really about the case where the owner has left the company and the
+ * administrators are managing each other.
+ *
+ * Counted rather than assumed: this reads the live roster, so it stays true as
+ * profiles are edited.
+ */
+async function assertNotTheLastAdministrator(ctx: Ctx, excludingUserId: string): Promise<void> {
+  const rows = await ctx.db
+    .select({ capabilities: s.permissionProfiles.capabilities })
+    .from(s.users)
+    .innerJoin(s.permissionProfiles, eq(s.users.profileId, s.permissionProfiles.id))
+    .where(and(isNull(s.users.archivedAt), ne(s.users.id, excludingUserId)));
+
+  const remaining = rows.filter((row) =>
+    ((row.capabilities ?? []) as Capability[]).includes("people:manage")
+  ).length;
+
+  if (remaining === 0) {
+    throw validationFailed({
+      _: [
+        "This is the last person who can manage people. Archiving them would " +
+          "leave nobody able to add, restore, or unlock an account. Give somebody " +
+          "else those permissions first.",
+      ],
+    });
+  }
+}
+
+/**
+ * Refuses when the target currently holds a permission the actor does not.
+ *
+ * The grant check below asks whether the *new* profile stays inside the actor's
+ * own permissions, which stops promotion. For a long time nothing asked the
+ * same question about the *current* profile, so demotion was unguarded and a
+ * review proved the consequence: a People Admin could move any non-owner
+ * Administrator to Member, and the change took effect on that administrator's
+ * very next request, because capabilities are re-read from the profile each
+ * time. The same gap let a People Admin archive an Administrator outright and
+ * revoke their sessions. Between the two, one People Admin could strip and lock
+ * out every administrator except the owner.
+ *
+ * Reaching down is the same escalation as reaching up. Somebody who can remove
+ * the people above them ends up the most powerful account by subtraction.
+ */
+async function assertOutranksOrEqual(ctx: Ctx, targetProfileId: string, verb: string): Promise<void> {
+  if (ctx.actor.kind === "system") return;
+
+  const [profile] = await ctx.db
+    .select({ capabilities: s.permissionProfiles.capabilities })
+    .from(s.permissionProfiles)
+    .where(eq(s.permissionProfiles.id, targetProfileId))
+    .limit(1);
+
+  if (!profile) return; // No profile is no permissions; nothing to outrank.
+
+  const theirs = (profile.capabilities ?? []) as Capability[];
+  const held = ctx.actor.capabilities;
+  const beyond = theirs.filter((c) => !held.has(c));
+
+  if (beyond.length > 0) {
+    throw forbidden(
+      `You cannot ${verb} somebody whose permissions exceed your own. ` +
+        `They hold ${beyond.slice(0, 3).join(", ")}` +
+        (beyond.length > 3 ? `, and ${beyond.length - 3} more` : "") +
+        " and you do not."
+    );
+  }
+}
+
 async function assertMayGrantProfile(
   ctx: Ctx,
   targetUserId: string,
-  target: { isOwner: boolean },
+  target: { isOwner: boolean; profileId: string | null },
   profileId: string
 ): Promise<void> {
   if (target.isOwner) {
     throw validationFailed({ profileId: ["The account owner's permissions cannot be changed."] });
   }
+
+  // Reaching down, checked before reaching up.
+  if (target.profileId) await assertOutranksOrEqual(ctx, target.profileId, "change the permissions of");
 
   if (targetUserId === ctx.actor.userId) {
     throw validationFailed({

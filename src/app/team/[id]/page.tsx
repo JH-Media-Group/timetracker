@@ -155,7 +155,10 @@ export default function PersonDetailPage() {
               <CalendarClock className="size-3.5" />View timesheet
             </Button>
             {can("people:manage") && (
-              <Button variant="secondary" onClick={() => router.push("/settings?s=people")}>
+              // This used to go to /settings?s=people, from which clicking the
+              // person came straight back here, so there was no way to edit
+              // anybody at all. TALLY-6.
+              <Button variant="secondary" onClick={() => router.push(`/team/${person.id}/edit`)}>
                 Edit person
               </Button>
             )}

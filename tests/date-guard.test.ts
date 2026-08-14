@@ -1,23 +1,24 @@
 /**
  * The runtime half of the Date-in-sql guard, and the concurrency bug it had.
  *
- * The guard used to throw from inside postgres.js's `debug` callback. That
- * fires within `build(q)`, after the query has been pushed onto the
- * connection's `sent` array, so throwing unwound into the driver's own error
- * path: it rejected whichever query the connection currently pointed at rather
- * than the offending one, skipped the Sync needed to resynchronise, and left
- * the offender in `sent` so the next `ReadyForQuery` handed it the following
- * query's rows.
+ * The guard used to throw from inside postgres.js's `debug` callback, which
+ * fires within the driver's `build(q)` after the query has been pushed onto the
+ * connection's `sent` array. It now lives in drizzle's `logger.logQuery`, which
+ * runs before the driver is entered at all.
  *
- * A reviewer reproduced that deterministically: three concurrent queries with a
- * Date in the middle one, and the innocent first query was rejected with the
- * Date error while the actual offender resolved carrying the third query's
- * result set. A guard that blames the wrong line and silently returns the wrong
- * rows is worse than the bug it watches for.
+ * **What these tests do and do not establish.** One reviewer reported that the
+ * old placement corrupted pipelined connections and handed one query another's
+ * rows; a second could not reproduce that under eighteen concurrent queries on
+ * a five-connection pool, and neither can this file, whose four queries against
+ * a pool of five never share a connection. So read the concurrency test below
+ * as what it is: an assertion that a Date in one query does not disturb the
+ * queries around it, which is a property worth holding whether or not the
+ * original report was right. The reasons the guard moved are in
+ * `src/server/db/client.ts`, and connection corruption is no longer one of
+ * them.
  *
- * It now lives in drizzle's `logger.logQuery`, which runs before the driver is
- * called at all. These tests exist so it cannot drift back: the first two prove
- * it still catches the bug, and the third is the concurrency case that failed.
+ * What the tests do establish, by mutation: reverting to the old placement
+ * turns three of them red.
  */
 
 import { and, eq, sql } from "drizzle-orm";
@@ -46,6 +47,27 @@ describe("the Date bind-parameter guard", () => {
 
     await expect(
       db.select().from(s.sessions).where(sql`${s.sessions.expiresAt} < ${untyped}`)
+    ).rejects.toThrow(/A Date reached the database as bind parameter/);
+  });
+
+  /**
+   * A Date one level in.
+   *
+   * `${{ at: cutoff }}` reaches the driver as an object holding a Date and
+   * fails exactly as a bare one does. It passed both halves of this guard until
+   * a reviewer tried it. The static half cannot close it without flagging every
+   * drizzle column reference, so it is closed here.
+   */
+  it("refuses a Date nested inside an interpolated object", async () => {
+    const wrapped = { at: new Date() };
+
+    await expect(
+      db.select().from(s.sessions).where(sql`${s.sessions.expiresAt} < ${wrapped}`)
+    ).rejects.toThrow(/A Date reached the database as bind parameter/);
+
+    const inArray = [new Date()];
+    await expect(
+      db.select().from(s.sessions).where(sql`${s.sessions.expiresAt} < ${inArray}`)
     ).rejects.toThrow(/A Date reached the database as bind parameter/);
   });
 

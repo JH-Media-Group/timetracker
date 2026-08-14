@@ -18,6 +18,7 @@ import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
 import { assertCan, assertCanAny, type Ctx } from "@/server/ctx";
 import * as s from "@/server/db/schema";
 import { clientScope, projectScope, timeEntryScope, visibleUserIds } from "@/server/auth/scope";
+import { notFound } from "@/server/errors";
 import { toNumber } from "@/server/db/sql-money";
 import { roundSeconds, type RoundingRule } from "@/domain/rounding";
 import { profitFrom, recogniseFee } from "@/domain/profitability";
@@ -721,7 +722,12 @@ export async function projectSummary(ctx: Ctx, projectId: string): Promise<Proje
     .from(s.projects)
     .where(and(eq(s.projects.id, projectId), projectScope(ctx)))
     .limit(1);
-  if (!project) throw new Error("not_found");
+  // `notFound()`, not a bare Error. A bare one is not an AppError, so
+  // `toProblem` cannot recognise it and turns a scope miss into a 500. That
+  // breaks the house rule twice over: the caller is told the server is
+  // broken rather than that the record is not theirs, and a 500 is the one
+  // status that gets logged as an incident.
+  if (!project) throw notFound("That project");
 
   assertMayReadProjectReport(ctx, project);
 
@@ -922,7 +928,12 @@ export async function projectChart(
     .from(s.projects)
     .where(and(eq(s.projects.id, projectId), projectScope(ctx)))
     .limit(1);
-  if (!project) throw new Error("not_found");
+  // `notFound()`, not a bare Error. A bare one is not an AppError, so
+  // `toProblem` cannot recognise it and turns a scope miss into a 500. That
+  // breaks the house rule twice over: the caller is told the server is
+  // broken rather than that the record is not theirs, and a 500 is the one
+  // status that gets logged as an incident.
+  if (!project) throw notFound("That project");
 
   assertMayReadProjectReport(ctx, project);
 

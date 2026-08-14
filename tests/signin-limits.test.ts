@@ -118,6 +118,33 @@ describe("sign-in rate limiting", () => {
     expect((await post(EMAIL, "wrong")).status).toBe(429);
   });
 
+  /**
+   * The limit has to hold under concurrency, which is the only kind of guessing
+   * worth stopping.
+   *
+   * A previous version read the count and then acted on it, so a reviewer sent
+   * twenty simultaneous wrong passwords at a bucket with one point left and got
+   * twenty 401s: every request read the same count before any of them wrote.
+   * Consuming atomically first is what fixes it, and this is the assertion that
+   * says so.
+   */
+  it("holds when the guesses arrive all at once", async () => {
+    const attempts = 40;
+    const statuses = await Promise.all(
+      Array.from({ length: attempts }, () => post(EMAIL, "wrong").then((r) => r.status))
+    );
+
+    const verified = statuses.filter((s) => s === 401).length;
+    const refused = statuses.filter((s) => s === 429).length;
+
+    expect(verified + refused, "every request should be one or the other").toBe(attempts);
+    expect(
+      verified,
+      `${verified} of ${attempts} concurrent guesses reached password verification; the bucket allows 10`
+    ).toBeLessThanOrEqual(10);
+    expect(refused, "the rest must be refused").toBe(attempts - verified);
+  });
+
   /** A locked account must not lock the rest of the company. */
   it("keeps the buckets separate per address", async () => {
     for (let i = 0; i < 11; i++) await post(EMAIL, "wrong");

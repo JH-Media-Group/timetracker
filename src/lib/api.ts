@@ -250,6 +250,23 @@ interface UserWire {
  */
 let profileKeyById = new Map<string, PermissionProfile>();
 
+/**
+ * The other direction, for writing.
+ *
+ * The UI speaks in profile keys ("people_admin") because that is what a badge
+ * shows and what a permission means. The API speaks in profile ids, because a
+ * custom profile has an id and no key. Both translations belong here, in the
+ * one file that knows the wire vocabulary, so no component ever holds an id.
+ */
+let profileIdByKey = new Map<PermissionProfile, string>();
+
+/** Every profile the account has, in the order the roster should offer them. */
+let profileList: { id: string; name: string; key: PermissionProfile }[] = [];
+
+export function permissionProfiles(): readonly { id: string; name: string; key: PermissionProfile }[] {
+  return profileList;
+}
+
 function fromUser(u: UserWire): User {
   return {
     id: u.id,
@@ -626,6 +643,14 @@ export async function getBootstrap() {
   profileKeyById = new Map(
     (b.profiles ?? []).map((p) => [p.id, (p.baseKey ?? "member") as PermissionProfile])
   );
+  profileIdByKey = new Map(
+    (b.profiles ?? []).map((p) => [(p.baseKey ?? "member") as PermissionProfile, p.id])
+  );
+  profileList = (b.profiles ?? []).map((p) => ({
+    id: p.id,
+    name: p.name,
+    key: (p.baseKey ?? "member") as PermissionProfile,
+  }));
 
   return {
     me: fromUser(b.me),
@@ -1079,6 +1104,10 @@ export async function updateUser(id: ID, p: Partial<User>): Promise<User> {
     startedOn: p.startedOn === undefined ? undefined : (p.startedOn || null),
     roles: p.roles,
     departments: p.departments,
+    // The UI holds a profile key; the wire wants an id. An unknown key is sent
+    // as undefined and therefore dropped below, which leaves the permission
+    // alone rather than guessing at one.
+    profileId: p.profile === undefined ? undefined : profileIdByKey.get(p.profile),
   };
   for (const key of Object.keys(body)) if (body[key] === undefined) delete body[key];
   return fromUser(await patch<UserWire>(`/users/${id}`, body));

@@ -25,6 +25,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 import { and, eq, isNull } from "drizzle-orm";
 import { AppError, forbidden, fromDatabaseError, toProblem, unauthenticated, validationFailed } from "./errors";
 import { assertCan, createCtx, flush, type Ctx } from "./ctx";
@@ -321,24 +322,33 @@ export function clientIp(req: NextRequest): string | null {
 /**
  * The value if it is an IP address, otherwise null.
  *
- * Deliberately not a full parser. It has to be strict enough that Postgres will
- * accept it as `inet`, and anything that gets past this and still fails there
- * is a bug worth hearing about rather than one to swallow.
+ * `net.isIP` rather than a regex. The first attempt at this was a hand-written
+ * pattern, and a reviewer fed it `:::`, `1::2::3`, and a nine-group IPv6
+ * address: all three passed, and all three are rejected by Postgres as `inet`.
+ * That combination is the dangerous one, because audit rows are written inside
+ * the same transaction as the mutation they describe, so a bad value does not
+ * merely lose the address, it throws at commit and rolls back the work the user
+ * just saved. Writing an IPv6 grammar correctly is a known-hard exercise and
+ * the standard library has already done it.
+ *
+ * A zone identifier is stripped (`fe80::1%eth0`); Postgres will not take one and
+ * the scope is meaningless to us anyway. A bracketed form is unwrapped, since
+ * that is how an address with a port is usually written.
+ *
+ * What this deliberately does not accept: CIDR suffixes and leading-zero octets,
+ * both of which `inet` would take. No proxy sends either, and accepting them
+ * would mean carrying a parser again.
  */
 function asAddress(value: string): string | null {
-  if (!value || value.length > 45) return null;
+  if (!value) return null;
 
-  // IPv4, four octets in range.
-  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(value);
-  if (v4) {
-    return v4.slice(1).every((octet) => Number(octet) <= 255 && !/^0\d/.test(octet)) ? value : null;
-  }
+  let candidate = value.trim();
+  if (candidate.startsWith("[") && candidate.endsWith("]")) candidate = candidate.slice(1, -1);
 
-  // IPv6, including the bracketed and IPv4-mapped forms a proxy may send.
-  const bare = value.startsWith("[") && value.endsWith("]") ? value.slice(1, -1) : value;
-  if (/^[0-9a-fA-F:]+(?:\.\d{1,3}){0,3}$/.test(bare) && bare.includes(":")) return bare;
+  const zone = candidate.indexOf("%");
+  if (zone !== -1) candidate = candidate.slice(0, zone);
 
-  return null;
+  return isIP(candidate) === 0 ? null : candidate;
 }
 
 /* ---------------------------------------------------------- idempotency */

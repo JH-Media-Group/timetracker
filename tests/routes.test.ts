@@ -78,7 +78,12 @@ const EXEMPT: Record<string, string> = {
   "reports/time": "service: gated by report:view_own, which everyone holds, and redacts money",
   "reports/team":
     "service: accepts report:view_team or the wider report:view_all, which one route option cannot express",
-  "users/[id]/rates": "service: gated by rates:view_cost and rates:manage inside",
+  "users/[id]/rates":
+    "service: GET is gated by rates:view_billable, or by the row being your own, " +
+    "and cost rows are then filtered out unless the actor holds rates:view_cost. " +
+    "POST is gated by rates:manage. (This line said rates:view_cost until a " +
+    "review compared it to the code; the behaviour was right and the sentence " +
+    "meant to make it checkable was not.)",
   "users/[id]/rates/[rateId]": "service: gated by rates:manage inside",
 };
 

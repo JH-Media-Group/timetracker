@@ -37,28 +37,29 @@ declare global {
  *
  * WHY THIS IS DRIZZLE'S LOGGER AND NOT POSTGRES.JS'S `debug` HOOK
  *
- * The first version threw from inside postgres.js's `debug` callback, and a
- * reviewer showed that it corrupts the connection under concurrency. `debug`
- * fires inside `build(q)`, after the query has been pushed onto the connection's
- * `sent` array. Throwing there unwinds into the driver's own error path, which
- * rejects whichever query the connection currently points at rather than the one
- * that offended, skips the Sync it would need to resynchronise, and leaves the
- * offending entry in `sent` so the next `ReadyForQuery` hands it the *following*
- * query's rows. Reproduced deterministically with three concurrent queries: the
- * innocent first query was rejected with the Date error, the actual offender
- * resolved successfully carrying the third query's result set, and the third got
- * a protocol error. The pool is `max: 5` under test and several services issue
- * nine queries in one `Promise.all`, so this was reachable, and a guard that
- * misattributes the failure and silently returns the wrong rows is worse than
- * the bug it was watching for.
+ * Three concrete reasons, and one that was claimed and withdrawn.
  *
- * Drizzle's `logger.logQuery` runs in drizzle's own code before the driver is
- * called at all. Throwing there rejects exactly the call that made the mistake,
- * the query is never sent, and the connection state machine is never entered.
+ *   1. `logQuery` runs in drizzle's own code before the driver is called, so
+ *      throwing there rejects exactly the call that made the mistake and the
+ *      query is never sent. Throwing from `debug` happens inside the driver's
+ *      `build(q)`, after the query has been pushed onto the connection's `sent`
+ *      array, which is a worse place to raise from on principle even where it
+ *      is survivable.
+ *   2. The message survives. Drizzle wraps a driver-phase throw in
+ *      `DrizzleQueryError`, so the explanation this guard exists to give was
+ *      buried; a `logQuery` throw is passed through intact.
+ *   3. `debug` also flips `enumerable` on every query's parameters, which put
+ *      argon2 hashes and session token hashes into vitest failure output.
  *
- * As a side benefit it also avoids postgres.js's `debug` option flipping
- * `enumerable` on every query's parameters, which put argon2 hashes and session
- * token hashes into vitest failure output.
+ * **Withdrawn:** an earlier version of this comment said the old placement
+ * corrupted pipelined connections, rejecting the wrong query and handing one
+ * query another's rows. That came from a reviewer's reproduction, and a second
+ * reviewer could not reproduce it: restoring the old placement and running
+ * eighteen concurrent queries against a five-connection pool produced zero
+ * misattributions, zero crossed result sets, and a healthy connection
+ * afterwards. It is left recorded rather than deleted because asserting an
+ * unverified failure as established fact is the same drift this file's
+ * neighbours were written to stop, and the reasons above stand without it.
  *
  * Test-only, because production has no business discovering this at runtime: by
  * then the query has already failed. Note also that postgres.js on its own
@@ -67,9 +68,24 @@ declare global {
  * breaks. The migration runner builds its own postgres.js client and is
  * untouched, which is right.
  */
+/**
+ * A Date anywhere in the value, not just at the top.
+ *
+ * `params.findIndex(v => v instanceof Date)` missed `${{ at: cutoff }}`, which a
+ * reviewer demonstrated passing both this guard and the static one and then
+ * failing inside the driver exactly as the bare Date does. Bounded depth so a
+ * cyclic or enormous parameter cannot turn the check into the problem.
+ */
+function containsDate(value: unknown, depth = 0): boolean {
+  if (value instanceof Date) return true;
+  if (depth >= 4 || value === null || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some((item) => containsDate(item, depth + 1));
+  return Object.values(value as Record<string, unknown>).some((item) => containsDate(item, depth + 1));
+}
+
 const dateParameterGuard = {
   logQuery(query: string, params: unknown[]): void {
-    const index = params.findIndex((value) => value instanceof Date);
+    const index = params.findIndex((value) => containsDate(value));
     if (index === -1) return;
 
     throw new TypeError(

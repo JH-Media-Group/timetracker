@@ -17,7 +17,7 @@ import { createCtx, withTransaction, type Actor, type Ctx } from "@/server/ctx";
 import { BASE_PROFILES, type BaseProfileKey, type Capability } from "@/server/auth/capabilities";
 import { listClients, getClient, createClient } from "@/server/services/clients";
 import { listProjects, getProject } from "@/server/services/projects";
-import { listProfiles, listUsers, getUser, updateUser } from "@/server/services/people";
+import { archiveUser, listProfiles, listUsers, getUser, updateUser } from "@/server/services/people";
 import { listRates } from "@/server/services/rates";
 import { search } from "@/server/services/search";
 import { AppError } from "@/server/errors";
@@ -285,12 +285,65 @@ describe("write capabilities", () => {
     expect(updated.firstName).toBe("Renamed");
   });
 
-  it("refuses anybody changing the account owner's permissions, including an Administrator", async () => {
+  /**
+   * The owner's whole record, not just their permissions.
+   *
+   * This asserted `validation_failed` and now asserts `forbidden`, because the
+   * guard moved and widened. It used to live inside the profile check, which
+   * meant an Administrator could not change the owner's *profile* and could
+   * change the owner's *email*, and the planned SSO matches a first sign-in to
+   * an existing row by email address. Refusing the whole record is the rule the
+   * PRD always stated; refusing one field was as far as the code went.
+   */
+  it("refuses anybody but the owner editing the owner's record", async () => {
     await db.update(s.users).set({ isOwner: true }).where(eq(s.users.id, people.member!));
     const ctx = await ctxFor("administrator");
+
     await expect(
       updateUser(ctx, people.member!, { profileId: profiles.accounting! })
-    ).rejects.toMatchObject({ code: "validation_failed" });
+    ).rejects.toMatchObject({ code: "forbidden" });
+
+    // The field that mattered and was not covered.
+    await expect(
+      updateUser(ctx, people.member!, { email: "attacker@example.invalid" })
+    ).rejects.toMatchObject({ code: "forbidden" });
+  });
+
+  /**
+   * Reaching down is the same escalation as reaching up.
+   *
+   * A review proved a People Admin could move any non-owner Administrator to
+   * Member, and separately archive them and revoke their sessions. The grant
+   * check asked whether the new profile stayed inside the actor's permissions
+   * and never asked the same about the current one, so demotion was open. One
+   * People Admin could strip every administrator except the owner.
+   */
+  it("refuses a People Admin demoting an Administrator", async () => {
+    const ctx = await ctxFor("people_admin");
+    await expect(
+      updateUser(ctx, people.administrator!, { profileId: profiles.member! })
+    ).rejects.toMatchObject({ code: "forbidden" });
+  });
+
+  it("refuses a People Admin archiving an Administrator", async () => {
+    const ctx = await ctxFor("people_admin");
+    await expect(archiveUser(ctx, people.administrator!, true)).rejects.toMatchObject({
+      code: "forbidden",
+    });
+  });
+
+  it("still lets a People Admin archive somebody at or below their own rank", async () => {
+    const ctx = await ctxFor("people_admin");
+    const archived = await archiveUser(ctx, people.member!, true);
+    expect(archived.archivedAt).toBeTruthy();
+  });
+
+  /** Nobody archives themselves out of the only seat that can undo it. */
+  it("refuses archiving yourself", async () => {
+    const ctx = await ctxFor("administrator");
+    await expect(archiveUser(ctx, people.administrator!, true)).rejects.toMatchObject({
+      code: "validation_failed",
+    });
   });
 });
 
