@@ -1,0 +1,219 @@
+{
+  "$comment": "Cache, not authority. Recover it by searching Confluence under rootPageId and Jira for the syncLabel. Drift is detected by remoteVersion, not by a body hash: local files are Markdown and Confluence stores its own format, so a round-tripped hash would flag every page as drifted. If the live version is higher than remoteVersion, a human edited the page. Do not overwrite it; show the divergence and ask.",
+  "docs": {
+    "docs/PRD-OVERVIEW.md": {
+      "pageId": "2969567233",
+      "title": "Product Overview PRD",
+      "mode": "mirror",
+      "localHash": "a4daf95752f021d6f1d788b0e4b908368acc177641ffa000f8e7d6a27f84c4f2",
+      "remoteVersion": 1,
+      "lastSyncedAt": "2026-08-14T15:30:00Z"
+    },
+    "docs/IMPLEMENTATION_PLAN.md": {
+      "pageId": "2969600001",
+      "title": "Implementation Plan",
+      "mode": "mirror",
+      "localHash": "9ce6e31a6a46f0190638e635325d863aa85835fb095cff88becccebc5e0a10f1",
+      "remoteVersion": 2,
+      "lastSyncedAt": "2026-08-14T15:30:00Z"
+    },
+    "docs/BUILD_EPICS.md": {
+      "pageId": "2969501718",
+      "title": "Build Epics (E0 to E13)",
+      "mode": "mirror",
+      "localHash": "2708543394407ac7e1db7e833257c6b8b0847f674807a414e265fe2abb9b8efc",
+      "remoteVersion": 2,
+      "lastSyncedAt": "2026-08-14T15:30:00Z"
+    },
+    "docs/TESTING-NOTES.md": {
+      "pageId": "2969632769",
+      "title": "Testing Notes",
+      "mode": "mirror",
+      "localHash": "10751547b6a665591a5f0db0a5ea42483131d0d3d72d3a935a13cc275f00bebc",
+      "remoteVersion": 2,
+      "lastSyncedAt": "2026-08-14T15:30:00Z"
+    },
+    "docs/PERMISSIONS-AND-CREDENTIALS.md": {
+      "pageId": "2969534466",
+      "title": "What Tally needs from you (credentials and decisions)",
+      "mode": "mirror",
+      "localHash": "0adb356bc8bc5c1296dfabcbc90b0dce9f7eb991b978633e10d3301fb7046bc7",
+      "remoteVersion": 1,
+      "lastSyncedAt": "2026-08-14T15:30:00Z"
+    },
+    "docs/FRONTEND_PRD.md": {
+      "pageId": "2969403406",
+      "title": "Frontend PRD (summary)",
+      "mode": "summary",
+      "localHash": "43e73b419a6f16d50707ba71f4bcca0587c4eb8fd89ee2c45ce97931041250f5",
+      "remoteVersion": 2,
+      "lastSyncedAt": "2026-08-14T15:30:00Z"
+    },
+    "docs/BACKEND_PRD.md": {
+      "pageId": "2969665537",
+      "title": "Backend PRD (summary)",
+      "mode": "summary",
+      "localHash": "cf7e6f07fcc2b79b00269dc4f1f074b2eda261ad4fa508812bd109db319c3c9d",
+      "remoteVersion": 2,
+      "lastSyncedAt": "2026-08-14T15:30:00Z"
+    }
+  },
+  "issues": {
+    "backend-api": {
+      "key": "TALLY-1",
+      "type": "Epic",
+      "title": "Backend and API (build epics E0 to E10)",
+      "lastState": "Done"
+    },
+    "frontend-wiring": {
+      "key": "TALLY-2",
+      "type": "Epic",
+      "title": "Front end wiring and verification (E11, E12)",
+      "lastState": "Done"
+    },
+    "security-sweep": {
+      "key": "TALLY-3",
+      "type": "Epic",
+      "title": "Security sweep and adversarial reviews (E13)",
+      "lastState": "Done"
+    },
+    "blocked-credentials": {
+      "key": "TALLY-4",
+      "type": "Epic",
+      "title": "Blocked on credentials and accounts",
+      "lastState": "To Do"
+    },
+    "testing-round-1": {
+      "key": "TALLY-5",
+      "type": "Epic",
+      "title": "Testing round one: Jason's first pass, 2026-08-14",
+      "lastState": "To Do"
+    },
+    "team-member-editing": {
+      "key": "TALLY-6",
+      "type": "Bug",
+      "title": "A manager cannot edit or remove a team member",
+      "lastState": "To Do",
+      "parent": "TALLY-5"
+    },
+    "grids-fill-viewport": {
+      "key": "TALLY-7",
+      "type": "Task",
+      "title": "Tables should fill the viewport instead of leaving white space below",
+      "lastState": "To Do",
+      "parent": "TALLY-5"
+    },
+    "verify-reports": {
+      "key": "TALLY-8",
+      "type": "Task",
+      "title": "Confirm the four reports render with data now the server is back",
+      "lastState": "To Do",
+      "parent": "TALLY-5"
+    },
+    "verify-settings": {
+      "key": "TALLY-9",
+      "type": "Task",
+      "title": "Verify Settings: integrations and the tracking preferences",
+      "lastState": "To Do",
+      "parent": "TALLY-5"
+    },
+    "nav-contrast": {
+      "key": "TALLY-10",
+      "type": "Task",
+      "title": "Left nav: darken the active and hover backgrounds",
+      "lastState": "To Do",
+      "parent": "TALLY-5"
+    },
+    "readable-slugs": {
+      "key": "TALLY-11",
+      "type": "Task",
+      "title": "Readable slugs in URLs instead of UUIDs",
+      "lastState": "To Do",
+      "parent": "TALLY-5"
+    },
+    "project-task-people": {
+      "key": "TALLY-12",
+      "type": "Task",
+      "title": "Project detail, Tasks tab: make the person rows clickable",
+      "lastState": "To Do",
+      "parent": "TALLY-5"
+    },
+    "retainer-creation": {
+      "key": "TALLY-13",
+      "type": "Bug",
+      "title": "There is no way to create a retainer",
+      "lastState": "To Do",
+      "parent": "TALLY-5"
+    },
+    "person-tasks-tab": {
+      "key": "TALLY-14",
+      "type": "Task",
+      "title": "Person detail: add a Tasks tab showing each work segment with start and end times",
+      "lastState": "To Do",
+      "parent": "TALLY-5"
+    },
+    "person-profile-badge": {
+      "key": "TALLY-15",
+      "type": "Task",
+      "title": "Person detail: show the permission profile as a badge beside Contractor",
+      "lastState": "To Do",
+      "parent": "TALLY-5"
+    },
+    "recent-time-filter": {
+      "key": "TALLY-16",
+      "type": "Task",
+      "title": "Recent Time: add a project filter and show start and end times",
+      "lastState": "To Do",
+      "parent": "TALLY-5"
+    },
+    "invoicing-blank-space": {
+      "key": "TALLY-17",
+      "type": "Task",
+      "title": "Invoicing report: fill or remove the blank space beside Aging",
+      "lastState": "To Do",
+      "parent": "TALLY-5"
+    },
+    "expense-category-edit": {
+      "key": "TALLY-18",
+      "type": "Task",
+      "title": "Settings, Expense Categories: click a category to edit it",
+      "lastState": "To Do",
+      "parent": "TALLY-5"
+    },
+    "sendgrid": {
+      "key": "TALLY-19",
+      "type": "Task",
+      "title": "SendGrid: domain authentication, then the API key, then outbound email",
+      "lastState": "To Do",
+      "parent": "TALLY-4"
+    },
+    "google-sso": {
+      "key": "TALLY-20",
+      "type": "Task",
+      "title": "Google Workspace SSO: OAuth client, then the sign-in routes",
+      "lastState": "To Do",
+      "parent": "TALLY-4"
+    },
+    "object-storage": {
+      "key": "TALLY-21",
+      "type": "Task",
+      "title": "Object storage: a private Space for receipts, logos and invoice PDFs",
+      "lastState": "To Do",
+      "parent": "TALLY-4"
+    },
+    "droplet": {
+      "key": "TALLY-22",
+      "type": "Task",
+      "title": "The droplet: size it, then deploy behind Caddy with backups",
+      "lastState": "To Do",
+      "parent": "TALLY-4"
+    },
+    "harvest-import": {
+      "key": "TALLY-23",
+      "type": "Task",
+      "title": "Harvest export: run the import and reconcile every total to the cent",
+      "lastState": "To Do",
+      "parent": "TALLY-4"
+    }
+  }
+}

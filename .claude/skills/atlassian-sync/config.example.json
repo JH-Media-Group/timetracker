@@ -1,0 +1,32 @@
+{
+  "$comment": "Copy to the repo ROOT as .atlassian-sync.json and fill in. This is the per-repo binding between local files and Atlassian. Commit it (no secrets here) so the mapping travels between machines.",
+
+  "cloudId": "REQUIRED - the Atlassian cloudId. Resolve once with the MCP tool getAccessibleAtlassianResources and paste the id here.",
+  "site": "yoursite.atlassian.net",
+
+  "jira": {
+    "projectKey": "CSU",
+    "defaultIssueType": "Task",
+    "epicStrategy": "parent",
+    "$epicStrategy_note": "'parent' for team-managed projects (epic = parent issue). Company-managed projects may need an Epic Link customfield id instead; the skill detects this via getJiraProjectIssueTypesMetadata.",
+    "syncLabel": "claude-sync",
+    "$syncLabel_note": "Marker label put on every issue this skill creates. Used for search-before-create dedup and for JQL roll-ups. Do not reuse for anything else.",
+    "repoLabel": null,
+    "$repoLabel_note": "Optional. Set when MORE THAN ONE repo shares this Jira project (multi-repo project). Each repo gets a distinct label, e.g. repo-frontend / repo-backend, so issues are attributable to a repo. Leave null for a single-repo project.",
+    "boardId": null,
+    "$boardId_note": "Optional. Set if you want sprint awareness (which sprint an issue belongs to / active sprint)."
+  },
+
+  "confluence": {
+    "spaceKey": "CSU",
+    "rootPageId": "REQUIRED - id of the parent page under which this repo's docs mirror tree is built (e.g. a page titled 'Docs: <repo>'). For a multi-repo project, give each repo its own docs-root page under a shared space.",
+    "docGlobs": ["docs/**/*.md", "**/PRD*.md", "**/prd/**/*.md", "RUNBOOK.md", "README.md"],
+    "excludeGlobs": ["node_modules/**", ".tmp/**", "**/CHANGELOG.md", "**/.atlassian-sync/**"]
+  },
+
+  "session": {
+    "handoffPageId": "REQUIRED - id of the living 'Session Log / Working State' page for this project.",
+    "machineName": "auto",
+    "$machineName_note": "'auto' = derive from hostname. Identifies which computer wrote each session entry."
+  }
+}

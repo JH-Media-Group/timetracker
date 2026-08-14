@@ -1,0 +1,42 @@
+{
+  "$comment": "Binds this repo to the Tally Jira project and Confluence space. No secrets here; commit it so the mapping travels between machines.",
+  "cloudId": "59458994-9e02-41bd-86b5-cbb637d2711a",
+  "site": "jhmedia.atlassian.net",
+  "jira": {
+    "projectKey": "TALLY",
+    "defaultIssueType": "Task",
+    "epicStrategy": "parent",
+    "$epicStrategy_note": "TALLY is team-managed (style: next-gen, simplified: true), so an epic is the parent issue. No Epic Link customfield.",
+    "syncLabel": "claude-sync",
+    "repoLabel": null,
+    "$repoLabel_note": "One repo, one project. Leave null unless a second repo joins.",
+    "boardId": "490",
+    "$boardId_note": "The TALLY board. Read sprint state from it; never open or close a sprint automatically."
+  },
+  "confluence": {
+    "spaceKey": "TA",
+    "spaceId": "2969370627",
+    "homePageId": "2969370796",
+    "rootPageId": "2969468929",
+    "$rootPageId_note": "Set during init to the 'Product requirements' page: the parent of the mirrored docs tree.",
+    "docGlobs": [
+      "docs/**/*.md",
+      "CLAUDE.md"
+    ],
+    "excludeGlobs": [
+      "node_modules/**",
+      "**/CHANGELOG.md",
+      "**/.atlassian-sync/**"
+    ],
+    "largeDocs": [
+      "docs/FRONTEND_PRD.md",
+      "docs/BACKEND_PRD.md"
+    ],
+    "$largeDocs_note": "Published as a substantial summary plus a link to the Git file rather than mirrored whole. Both are over 100 KB, BACKEND_PRD is mostly DDL, and the connector's edge WAF rejects bodies containing SQL and shell operators. Git stays authoritative for these two and the pages say so."
+  },
+  "session": {
+    "handoffPageId": "2969501697",
+    "$handoffPageId_note": "Set during init to the Session Log page.",
+    "machineName": "auto"
+  }
+}

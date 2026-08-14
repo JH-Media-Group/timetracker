@@ -4,7 +4,7 @@ Ordered build plan. Each numbered item is a mergeable unit of work with its own 
 
 | | |
 |---|---|
-| Status | Front end built against a mock API; backend not started |
+| Status | Phases 0 through 3 built and running against Postgres. See [BUILD_EPICS.md](BUILD_EPICS.md) for what actually shipped. |
 | Updated | 2026-08-14 |
 
 Mark items `[x]` as they land and add the commit SHA. This file is the working state that travels between sessions.
@@ -13,12 +13,18 @@ Mark items `[x]` as they land and add the commit SHA. This file is the working s
 
 ## Where we actually are
 
-The whole front end exists and runs, ahead of the phase order below, against the mock API in `src/lib/api.ts`. That was deliberate: it let every page and interaction be reviewed before a line of backend was written. What it means for this plan:
+The build did not follow this plan's ordering. The front end was built first against a mock API, then the backend was built in one pass as the E0 to E13 epics in [BUILD_EPICS.md](BUILD_EPICS.md), and the two were joined at the `src/lib/api.ts` seam. **BUILD_EPICS.md is the accurate record of what exists.** This file is now the forward plan: what is left.
 
-- Phase 0 items **0.2, 0.3, 0.35** are done in substance (scaffold, tokens and theme, the `DataGrid` wrapper). **0.1, 0.4, 0.5, 0.6** are not: no git repo, no CI, no Postgres, no server-side seed.
-- Every UI item in Phases 1 through 4 has a built screen already. They are **not** ticked, because each one still needs its service, its schema, and its tests. Treat the existing page as the specification made concrete, and the item as "wire this to the real thing".
-- The mock seed in `src/mock/seed.ts` is JHMG-shaped and deterministic. `scripts/seed.ts` (item 0.6) should produce the same shape server-side so the front end sees no difference on the day it switches over.
-- The seam is one file. When a service comes up, replace the matching function bodies in `src/lib/api.ts` with `fetch` calls and delete nothing else.
+Done, in substance, whatever the numbering here says:
+
+- All of Phase 0. Repo, scaffold, tokens, the `DataGrid` wrapper, the local Postgres and Redis stack, migrations, and a deterministic server-side seed.
+- Phase 1 except the Harvest import (waiting on the export) and Google SSO (waiting on OAuth credentials).
+- Phase 2 in full: rates, budgets, project detail, expenses, approvals, and the profitability, team and contractor reports.
+- Phase 3 except the three items that need a credential: PDF storage, email send, and the Stripe pay page. Invoices, recurring invoices, retainers, payments and the invoicing report are built.
+
+Not started: Phase 1.5 (offline queue, calendar drag-create, Google Calendar overlay, mobile Track), Phase 4 (bulk actions, import/export, saved reports, audit log UI, Slack, the droplet), and the QuickBooks sync.
+
+The seam is still one file. Every service the front end calls goes through `src/lib/api.ts`, and nothing else in the app speaks HTTP.
 
 ---
 

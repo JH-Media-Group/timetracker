@@ -29,6 +29,15 @@ Auto-loaded into every Claude Code session in this repo. Read it before doing an
 
 Don't re-derive what is documented; cite back to it. If code and PRD disagree, the PRD wins until it is deliberately amended in the same commit.
 
+## Jira and Confluence
+
+Work is tracked in Jira project **TALLY** and documented in Confluence space **TA**, both on `jhmedia.atlassian.net`. The binding is `.atlassian-sync.json` in the repo root, the state cache is `.atlassian-sync/manifest.json`, and the mechanism is the `atlassian-sync` skill in `.claude/skills/`.
+
+- **Start a session by reading the Session Log page** (id in `session.handoffPageId`). It is the handoff between sessions and machines.
+- **A unit of work is a Jira issue**, opened when it starts and closed with a comment naming the commit. Search before creating: `project = TALLY AND labels = claude-sync AND summary ~ "..."`. TALLY is team-managed, so an epic is the parent issue.
+- **Docs sync outward, never inward.** `docs/**/*.md` and this file mirror to Confluence under the "Product requirements" page. FRONTEND_PRD and BACKEND_PRD are published as summaries, not mirrors, and Git stays authoritative for them; the pages say so.
+- **Drift is detected by Confluence version number,** not by hashing the page body. If a page's live version is higher than the one in the manifest, a human edited it: show the divergence and ask, do not overwrite.
+
 ## Non-negotiable conventions
 
 - **No em dashes** in user-facing output: UI copy, docs, emails, commit-visible prose. Use commas, parentheses, or hyphens. `grep -cP '\x{2014}'` should return 0 on every doc (the escape keeps this check from flagging itself). The one exception is the em dash used as the **no value** glyph in a table cell, of which there are seven: a hyphen there reads as a minus sign, and a money column cannot afford the ambiguity. That is typography, not prose.
@@ -66,6 +75,7 @@ Don't re-derive what is documented; cite back to it. If code and PRD disagree, t
 **Last updated:** 2026-08-14. Maintain this section manually.
 
 - Backend and wiring complete. E0 through E13 in [docs/BUILD_EPICS.md](docs/BUILD_EPICS.md) are ticked. Handed to Jason for testing.
+- **Jason's first testing pass is TALLY-5 with thirteen children.** The two real gaps are TALLY-6 (a manager cannot edit or remove a person) and TALLY-13 (no way to create a retainer); both are missing screens rather than broken ones. TALLY-14 (a Tasks tab on a person, with start and end times) subsumes TALLY-12 and TALLY-16, so build it first. TALLY-11 (readable slugs instead of UUIDs) touches every route, the seam, the schema, a backfill and the importer, so cost it before starting.
 - Not built, each waiting on a credential rather than on a decision about scope: Google SSO, email delivery, receipt and PDF storage, the deployment, and running the Harvest import against real data. [docs/PERMISSIONS-AND-CREDENTIALS.md](docs/PERMISSIONS-AND-CREDENTIALS.md) says what does not work until each arrives.
 - Deliberately disabled in the UI rather than faked: the full account export, CSV import, and the integration connect buttons. Per-grid CSV export does work.
 - Open decisions parked for Jason: final product name ("Tally" is a placeholder), droplet size (4 vCPU/8 GB proposed), whether contractors keep password auth or everyone lands in Workspace, and whether invoice numbering continues Harvest's sequence.
