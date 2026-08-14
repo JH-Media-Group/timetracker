@@ -297,23 +297,24 @@ describe("stored totals against the stored lines", () => {
 
 /* ====================================== invariant 3: balance = sum of transactions */
 
-describe("a retainer balance against its ledger", () => {
-  const ledgerBalance = async (retainerId: string) => {
-    const rows = await db
-      .select({ kind: s.retainerTransactions.kind, amountCents: s.retainerTransactions.amountCents })
-      .from(s.retainerTransactions)
-      .where(eq(s.retainerTransactions.retainerId, retainerId));
-    return rows.reduce((a, r) => a + (r.kind === "draw" ? -r.amountCents : r.amountCents), 0);
-  };
+const ledgerBalance = async (retainerId: string) => {
+  const rows = await db
+    .select({ kind: s.retainerTransactions.kind, amountCents: s.retainerTransactions.amountCents })
+    .from(s.retainerTransactions)
+    .where(eq(s.retainerTransactions.retainerId, retainerId));
+  return rows.reduce((a, r) => a + (r.kind === "draw" ? -r.amountCents : r.amountCents), 0);
+};
 
-  const seedRetainer = async (balanceCents: number) => {
-    const id = newId();
-    await db.insert(s.retainers).values({ id, clientId, balanceCents: 0 });
-    await addRetainerTransaction(ctxFor(admin, "administrator"), id, {
-      kind: "add", amountCents: balanceCents,
-    });
-    return id;
-  };
+const seedRetainer = async (balanceCents: number) => {
+  const id = newId();
+  await db.insert(s.retainers).values({ id, clientId, balanceCents: 0 });
+  await addRetainerTransaction(ctxFor(admin, "administrator"), id, {
+    kind: "add", amountCents: balanceCents,
+  });
+  return id;
+};
+
+describe("a retainer balance against its ledger", () => {
 
   it("holds through a draw at send time", async () => {
     const ctx = ctxFor(admin, "administrator");
@@ -372,6 +373,34 @@ describe("a retainer balance against its ledger", () => {
     expect(original!.balanceCents).toBe(60_000);
     expect(newer!.balanceCents).toBe(0);
     expect(await ledgerBalance(drawn)).toBe(60_000);
+  });
+
+  it("returns the excess when an invoice is edited below its draw", async () => {
+    const ctx = ctxFor(admin, "administrator");
+    const retainer = await seedRetainer(500_000);
+
+    const invoice = await createInvoice(ctx, {
+      clientId, issueDate: TODAY, dueDate: "2026-09-14",
+      lines: [{ projectId: projectA, description: "Design", quantity: 1, unitPriceCents: 300_000, isTaxed: false }],
+    });
+    await markSent(ctx, invoice.id);
+
+    const [afterSend] = await db.select().from(s.retainers).where(eq(s.retainers.id, retainer));
+    expect(afterSend!.balanceCents).toBe(200_000);
+
+    // The client and we agree the job was smaller. The draw was sized against
+    // the old total, so the difference has to go back.
+    const reduced = await updateInvoice(ctx, invoice.id, {
+      lines: [{ projectId: projectA, description: "Design", quantity: 1, unitPriceCents: 100_000, isTaxed: false }],
+    });
+
+    const [afterEdit] = await db.select().from(s.retainers).where(eq(s.retainers.id, retainer));
+    expect(reduced.totalCents).toBe(100_000);
+    expect(reduced.retainerDrawCents).toBe(100_000);
+    expect(afterEdit!.balanceCents).toBe(400_000);
+    expect(await ledgerBalance(retainer)).toBe(400_000);
+    // And the client is not owed money on an invoice they have overpaid.
+    expect(reduced.balanceCents).toBe(0);
   });
 
   it("refuses a draw larger than the balance", async () => {
@@ -443,6 +472,53 @@ describe("claiming time and expenses", () => {
     const [b] = await db.select().from(s.timeEntries).where(eq(s.timeEntries.id, second));
     expect(a!.invoiceId).toBe(invoice.id);
     expect(b!.invoiceId).toBeNull();
+  });
+
+  it("keeps its attachments when the lines are replaced without naming records", async () => {
+    const ctx = ctxFor(admin, "administrator");
+    const entry = await addEntry(ptA, projectA, 3600, 10_000);
+
+    const invoice = await createInvoice(ctx, {
+      clientId, issueDate: TODAY, dueDate: "2026-09-14",
+      lines: [{ projectId: projectA, description: "A", quantity: 1, unitPriceCents: 10_000, isTaxed: false }],
+      timeEntryIds: [entry],
+    });
+
+    // A caller that changes a description but says nothing about the work is
+    // not asking for the work to be released. Releasing it would put the same
+    // hour back in the pool while this invoice still bills it.
+    await updateInvoice(ctx, invoice.id, {
+      lines: [{ projectId: projectA, description: "A, revised", quantity: 1, unitPriceCents: 10_000, isTaxed: false }],
+    });
+
+    const [row] = await db.select().from(s.timeEntries).where(eq(s.timeEntries.id, entry));
+    expect(row!.invoiceId).toBe(invoice.id);
+  });
+
+  it("clears the rate lock on anything it releases", async () => {
+    const ctx = ctxFor(admin, "administrator");
+    const entry = await addEntry(ptA, projectA, 3600, 10_000);
+
+    const invoice = await createInvoice(ctx, {
+      clientId, issueDate: TODAY, dueDate: "2026-09-14",
+      lines: [{ projectId: projectA, description: "A", quantity: 1, unitPriceCents: 10_000, isTaxed: false }],
+      timeEntryIds: [entry],
+    });
+    await markSent(ctx, invoice.id);
+
+    const [locked] = await db.select().from(s.timeEntries).where(eq(s.timeEntries.id, entry));
+    expect(locked!.ratesLockedAt).not.toBeNull();
+
+    // Taken off the invoice entirely. A rate lock with nothing holding it can
+    // never be cleared by anything, and the entry becomes unrateable forever.
+    await updateInvoice(ctx, invoice.id, {
+      lines: [{ projectId: projectA, description: "A", quantity: 1, unitPriceCents: 10_000, isTaxed: false }],
+      timeEntryIds: [],
+    });
+
+    const [released] = await db.select().from(s.timeEntries).where(eq(s.timeEntries.id, entry));
+    expect(released!.invoiceId).toBeNull();
+    expect(released!.ratesLockedAt).toBeNull();
   });
 
   it("gives everything back when a draft is deleted", async () => {

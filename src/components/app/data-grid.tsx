@@ -97,11 +97,15 @@ export function DataGrid<T extends object>({
       fileName: `${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${stamp}.csv`,
       allColumns: false,
       skipPinnedBottom: false,
-      // Cell renderers return React elements, which stringify to "[object
-      // Object]". The formatted value is what the person is reading, so that is
-      // what the file gets.
-      processCellCallback: (p) =>
-        p.value == null ? "" : (p.formatValue ? p.formatValue(p.value) : String(p.value)),
+      // Two jobs. Cell renderers return React elements, which stringify to
+      // "[object Object]", so the formatted value is what the file gets. And a
+      // cell that starts with = + - or @ is a formula to Excel, which will run
+      // it on open: notes, descriptions and client names are all free text
+      // somebody else typed, so every one of them is prefixed.
+      processCellCallback: (p) => {
+        const text = p.value == null ? "" : p.formatValue ? p.formatValue(p.value) : String(p.value);
+        return /^[=+\-@\t\r]/.test(text) ? `'${text}` : text;
+      },
     });
   }, [api, label]);
   const [density, setDensity] = React.useState<"comfortable" | "compact">(densityProp ?? "comfortable");

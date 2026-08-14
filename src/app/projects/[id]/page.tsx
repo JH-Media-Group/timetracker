@@ -47,11 +47,18 @@ export default function ProjectDetailPage() {
   // From the server, not from the entries in hand. The two used to compute
   // "invoiced" and "left to invoice" by different rules, and the project page
   // is where somebody decides whether to send a bill.
-  const { data: summary } = useQuery({
+  const { data: summary, error: summaryError } = useQuery({
     queryKey: ["project-summary", id],
     queryFn: () => api.getProjectSummary(id),
     enabled: !!id,
+    // A refused report is an answer, not a failure to retry.
+    retry: (count, e) => count < 1 && !(api.isApiError(e) && e.status === 403),
   });
+
+  // The project itself is readable, its report is not. Say which, rather than
+  // rendering a row of zeros that reads as "this project has done nothing".
+  const reportRestricted = api.isApiError(summaryError) && summaryError.status === 403;
+  const showsMoney = summary != null && summary.billableCents !== undefined;
 
   const pin = useMutation({
     mutationFn: () => api.togglePin(id, !pinned),
@@ -257,7 +264,15 @@ export default function ProjectDetailPage() {
         </Card>
 
         {/* KPI row */}
-        <div className="mb-6 grid gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        {reportRestricted && (
+          <Card className="mb-6">
+            <p className="text-base text-ink-secondary">
+              This project&apos;s reports are limited to its managers. You can still see the project,
+              its tasks, and your own time on it.
+            </p>
+          </Card>
+        )}
+        <div className={cn("mb-6 grid gap-3 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5", reportRestricted && "hidden")}>
           <Kpi label="Total hours" value={formatDuration(summary?.totalSeconds ?? 0, settings.timeDisplay)}>
             <KpiRow label="Billable" value={formatDuration(summary?.billableSeconds ?? 0, settings.timeDisplay)} />
             <KpiRow label="Non-billable" value={formatDuration(summary?.nonBillableSeconds ?? 0, settings.timeDisplay)} />
@@ -289,10 +304,11 @@ export default function ProjectDetailPage() {
             </Kpi>
           )}
 
-          <Kpi label="Invoiced amount" value={formatMoney(summary?.invoicedCents ?? 0)} />
+          {showsMoney && <Kpi label="Invoiced amount" value={formatMoney(summary?.invoicedCents ?? 0)} />}
 
+          {showsMoney && (
           <Kpi label="Uninvoiced amount" value={formatMoney(summary?.uninvoicedCents ?? 0)}>
-            {project.feeCents != null && <KpiRow label="Total project fees" value={formatMoney(project.feeCents)} />}
+            {project.feeCents != null && showsMoney && <KpiRow label="Total project fees" value={formatMoney(project.feeCents)} />}
             {summary?.feesToDateCents != null && summary.feesToDateCents !== project.feeCents && (
               <KpiRow label="Earned so far" value={formatMoney(summary.feesToDateCents)} />
             )}
@@ -301,6 +317,7 @@ export default function ProjectDetailPage() {
             )}
             <Link href={`/invoices?project=${id}`} className="text-base text-link underline">New invoice</Link>
           </Kpi>
+          )}
         </div>
 
         {/* Tabs */}
@@ -316,7 +333,7 @@ export default function ProjectDetailPage() {
 
         {tab === "tasks" && (
           <Card padded={false}>
-            <BreakdownHeader cols={["Billable tasks", "Hours", "If billed hourly", ...(can("rates:view_cost") ? ["Costs"] : [])]} />
+            <BreakdownHeader cols={["Billable tasks", "Hours", ...(showsMoney ? ["If billed hourly"] : []), ...(can("rates:view_cost") ? ["Costs"] : [])]} />
             {byTask.map((row) => {
               const task = taskById.get(row.taskId);
               const open = expanded === row.taskId;
@@ -331,7 +348,7 @@ export default function ProjectDetailPage() {
                       <span className="truncate">{task?.name}</span>
                     </span>
                     <span className="w-24 text-right tabular-nums">{formatDuration(row.seconds, settings.timeDisplay)}</span>
-                    <span className="w-36 text-right tabular-nums">{formatMoney(row.billable)}</span>
+                    {showsMoney && <span className="w-36 text-right tabular-nums">{formatMoney(row.billable)}</span>}
                     {can("rates:view_cost") && <span className="w-32 text-right tabular-nums">{formatMoney(row.cost)}</span>}
                   </button>
                   {open && (
@@ -358,7 +375,7 @@ export default function ProjectDetailPage() {
             <TotalRow
               cols={[
                 formatDuration(summary?.totalSeconds ?? 0, settings.timeDisplay),
-                formatMoney(summary?.billableCents ?? 0),
+                ...(showsMoney ? [formatMoney(summary?.billableCents ?? 0)] : []),
                 ...(can("rates:view_cost") ? [formatMoney((summary?.costCents ?? 0) - (summary?.expenseCents ?? 0))] : []),
               ]}
             />
@@ -367,7 +384,7 @@ export default function ProjectDetailPage() {
 
         {tab === "team" && (
           <Card padded={false}>
-            <BreakdownHeader cols={["Team", "Hours", "If billed hourly", ...(can("rates:view_cost") ? ["Costs"] : [])]} />
+            <BreakdownHeader cols={["Team", "Hours", ...(showsMoney ? ["If billed hourly"] : []), ...(can("rates:view_cost") ? ["Costs"] : [])]} />
             {byPerson.map((row) => {
               const u = userById.get(row.userId);
               return (
@@ -378,7 +395,7 @@ export default function ProjectDetailPage() {
                     {project.managerIds.includes(row.userId) && <Badge variant="outline">Manager</Badge>}
                   </span>
                   <span className="w-24 text-right tabular-nums">{formatDuration(row.seconds, settings.timeDisplay)}</span>
-                  <span className="w-36 text-right tabular-nums">{formatMoney(row.billable)}</span>
+                  {showsMoney && <span className="w-36 text-right tabular-nums">{formatMoney(row.billable)}</span>}
                   {can("rates:view_cost") && <span className="w-32 text-right tabular-nums">{formatMoney(row.cost)}</span>}
                 </div>
               );

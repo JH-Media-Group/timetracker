@@ -25,7 +25,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { createHash } from "node:crypto";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import { AppError, forbidden, fromDatabaseError, toProblem, unauthenticated, validationFailed } from "./errors";
 import { assertCan, createCtx, flush, type Ctx } from "./ctx";
 import { resolveSession } from "./auth/session";
@@ -71,6 +71,12 @@ export interface RouteOptions {
    * write, which is what makes the audit flush automatic.
    */
   transactional?: boolean;
+  /**
+   * Ignored while `next.config.mjs` applies `private, no-store` to `/api/*`,
+   * which it does deliberately: every response here is scoped to one person's
+   * permissions and must not sit in a shared cache. Kept because a per-route
+   * value is the right shape if that ever changes.
+   */
   cacheControl?: string;
   /** Ends the caller's own session by clearing the cookie on the way out. */
   clearSessionCookie?: boolean;
@@ -83,6 +89,10 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
     const requestId = newId();
     const params = context?.params ? await context.params : {};
     const mutating = MUTATING.has(req.method);
+
+    // Declared outside the try so the catch can release it. A claim taken and
+    // then abandoned answers every later attempt with "still being processed".
+    let claim: IdempotencyClaim | null = null;
 
     try {
       const ctx = options.public ? publicCtx(req, requestId) : await authenticatedCtx(req, requestId);
@@ -111,7 +121,6 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
         );
       }
 
-      let claim: IdempotencyClaim | null = null;
       if (idempotencyKey && mutating) {
         claim = await claimIdempotencyKey(ctx, req, idempotencyKey);
         if (claim.replay) return claim.replay;
@@ -145,6 +154,11 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
       if (options.clearSessionCookie) {
         const { clearedCookieOptions } = await import("./auth/session");
         response.cookies.set(clearedCookieOptions());
+      } else if (ctx.actor.renewedUntil) {
+        // The session rolled forward on this request, so the cookie does too.
+        const { sessionCookieOptions } = await import("./auth/session");
+        const token = req.cookies.get("tally_session")?.value;
+        if (token) response.cookies.set({ ...sessionCookieOptions(ctx.actor.renewedUntil), value: token });
       }
 
       // Recording the response must never turn a committed mutation into a
@@ -158,6 +172,16 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
 
       return response;
     } catch (error) {
+      // Release the claim. It was taken before the handler ran so that two
+      // copies of a retried request could not both execute, but the handler
+      // failed, so nothing happened and the retry should be allowed to. Left
+      // in place with a null status, the row answers every later attempt with
+      // "still being processed", forever.
+      if (claim) {
+        await releaseIdempotencyClaim(claim).catch((e) =>
+          console.error(`[${requestId}] could not release the idempotency claim`, e)
+        );
+      }
       return problemResponse(error, requestId);
     }
   };
@@ -335,6 +359,19 @@ async function claimIdempotencyKey(ctx: Ctx, req: NextRequest, key: string): Pro
       },
     }),
   };
+}
+
+/**
+ * Lets a failed request be retried with the same key.
+ *
+ * Only the actor's own unfinished claim is removed: a completed one has a
+ * stored response and is the whole point of the mechanism, and another actor's
+ * is none of our business.
+ */
+async function releaseIdempotencyClaim(claim: IdempotencyClaim) {
+  await db
+    .delete(s.idempotencyKeys)
+    .where(and(eq(s.idempotencyKeys.key, claim.key), isNull(s.idempotencyKeys.responseStatus)));
 }
 
 async function completeIdempotencyClaim(claim: IdempotencyClaim, status: number, body: unknown) {

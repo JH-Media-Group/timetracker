@@ -139,7 +139,21 @@ export const userPatchSchema = z.object({
   firstName: z.string().trim().min(1).max(100).optional(),
   lastName: z.string().trim().min(1).max(100).optional(),
   email: z.string().email().optional(),
-  timezone: z.string().min(1).max(64).optional(),
+  timezone: z
+    .string()
+    .max(64)
+    .refine(
+      (v) => {
+        try {
+          new Intl.DateTimeFormat("en-US", { timeZone: v });
+          return true;
+        } catch {
+          return false;
+        }
+      },
+      { message: "That is not a timezone this system knows." }
+    )
+    .optional(),
   weeklyCapacitySeconds: z.number().int().min(0).max(168 * 3600).optional(),
   employmentType: z.enum(["employee", "contractor"]).optional(),
   profileId: z.string().uuid().optional(),

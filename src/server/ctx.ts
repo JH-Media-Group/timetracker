@@ -31,6 +31,11 @@ export interface Actor {
   /** The person's timezone, used to resolve calendar days for their own records. */
   timezone: string;
   isOwner: boolean;
+  /**
+   * Set when this request rolled the session forward, so the response can send
+   * the browser a cookie with the new expiry. Null on every other request.
+   */
+  renewedUntil?: Date | null;
 }
 
 export interface AuditInput {

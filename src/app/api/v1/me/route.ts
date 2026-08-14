@@ -26,9 +26,29 @@ export const GET = route(async (ctx) => {
   });
 }, { rateLimit: "read" });
 
+/**
+ * A timezone the platform actually knows.
+ *
+ * `min(1)` accepted anything, and every calendar-day resolution afterwards
+ * throws `RangeError: Invalid time zone specified`, so one bad preference
+ * turned every later time-entry write into a 500 for that person and for
+ * anybody logging time on their behalf.
+ */
+const timezone = z.string().refine(
+  (v) => {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: v });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+  { message: "That is not a timezone this system knows." }
+);
+
 const patchSchema = z.object({
   theme: z.enum(["system", "light", "dark"]).optional(),
-  timezone: z.string().min(1).optional(),
+  timezone: timezone.optional(),
   notificationPrefs: z.record(z.string(), z.unknown()).optional(),
 });
 

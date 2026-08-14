@@ -22,7 +22,7 @@ import { toNumber } from "@/server/db/sql-money";
 import { roundSeconds, type RoundingRule } from "@/domain/rounding";
 import { profitFrom, recogniseFee } from "@/domain/profitability";
 import { displayState, type InvoiceState } from "@/domain/invoices";
-import { canSeeBillable } from "@/server/serialize";
+import { canSeeBillable, canSeeCost } from "@/server/serialize";
 import { dayIn, type IsoDate } from "@/domain/calendar";
 import { getSettings, roundingRule } from "./settings";
 
@@ -682,15 +682,21 @@ export interface ProjectSummary {
   totalSeconds: number;
   billableSeconds: number;
   nonBillableSeconds: number;
-  billableCents: number;
-  costCents: number;
-  expenseCents: number;
-  invoicedCents: number;
-  uninvoicedCents: number;
+  /**
+   * Money fields are absent, not zero, when the actor may not see them.
+   *
+   * Zero is a fact about a project. Absent is a fact about the reader, and
+   * collapsing the two is how a redaction gets read as an accounting figure.
+   */
+  billableCents?: number;
+  costCents?: number;
+  expenseCents?: number;
+  invoicedCents?: number;
+  uninvoicedCents?: number;
   /** Invoiced beyond what has been earned. Zero unless the project is fixed fee. */
-  overbilledCents: number;
+  overbilledCents?: number;
   /** The fee earned so far, for a fixed-fee project. Null for time and materials. */
-  feesToDateCents: number | null;
+  feesToDateCents?: number | null;
   budget: {
     by: string;
     budget: number | null;
@@ -708,12 +714,16 @@ export interface ProjectSummary {
  * cost two round trips (summary and chart) rather than one per card.
  */
 export async function projectSummary(ctx: Ctx, projectId: string): Promise<ProjectSummary> {
+  assertCan(ctx, "report:view_own");
+
   const [project] = await ctx.db
     .select()
     .from(s.projects)
     .where(and(eq(s.projects.id, projectId), projectScope(ctx)))
     .limit(1);
   if (!project) throw new Error("not_found");
+
+  assertMayReadProjectReport(ctx, project);
 
   const settings = await getSettings(ctx);
   const today = dayIn(settings.timezone, ctx.now());
@@ -816,26 +826,57 @@ export async function projectSummary(ctx: Ctx, projectId: string): Promise<Proje
   const budgetValue = budgetIsHours ? project.budgetSeconds : project.budgetFeeCents;
   const budgetSpent = budgetIsHours ? toNumber(time?.budgetSeconds ?? "0") : toNumber(time?.budgetCents ?? "0");
 
+  // Layer three. The gate above decided whether this project's report may be
+  // read at all; this decides which of its numbers this reader may see.
+  const showsBillable = canSeeBillable(ctx);
+  const showsCost = canSeeCost(ctx);
+  const budgetIsMoney = !budgetIsHours && budgetValue != null;
+
   return {
     totalSeconds,
     billableSeconds,
     nonBillableSeconds: totalSeconds - billableSeconds,
-    billableCents: toNumber(time?.billableCents ?? "0"),
-    costCents: toNumber(time?.costCents ?? "0") + expenseCents,
-    expenseCents,
-    invoicedCents,
-    uninvoicedCents,
-    overbilledCents,
-    feesToDateCents: project.billingType === "fixed_fee" ? feesToDate : null,
+    ...(showsBillable
+      ? {
+          billableCents: toNumber(time?.billableCents ?? "0"),
+          expenseCents,
+          invoicedCents,
+          uninvoicedCents,
+          overbilledCents,
+          feesToDateCents: project.billingType === "fixed_fee" ? feesToDate : null,
+        }
+      : {}),
+    ...(showsCost ? { costCents: toNumber(time?.costCents ?? "0") + expenseCents } : {}),
     budget: {
       by: project.budgetBy,
-      budget: budgetValue ?? null,
-      spent: budgetSpent,
-      remaining: budgetValue == null ? null : budgetValue - budgetSpent,
+      // A fee budget is money. Its percentage is a ratio, which says nothing
+      // about the amounts, so that stays.
+      budget: budgetIsMoney && !showsBillable ? null : budgetValue ?? null,
+      spent: budgetIsMoney && !showsBillable ? 0 : budgetSpent,
+      remaining:
+        budgetValue == null || (budgetIsMoney && !showsBillable) ? null : budgetValue - budgetSpent,
       percentUsed: budgetValue ? budgetSpent / budgetValue : null,
       monthly: project.budgetResetsMonthly,
     },
   };
+}
+
+/**
+ * Whether this actor may read this project's report at all.
+ *
+ * `projects.report_visibility` was stored, editable from the project form, and
+ * enforced nowhere: the constant describing what an "open" report contains had
+ * no reader, so the setting was decoration. `managers` now means what the form
+ * says it means.
+ */
+function assertMayReadProjectReport(ctx: Ctx, project: { reportVisibility: string }): void {
+  if (ctx.actor.kind === "system") return;
+  if (project.reportVisibility === "everyone") return;
+  assertCanAny(
+    ctx,
+    ["report:view_all", "report:view_team", "report:view_financial", "project:manage", "rates:view_cost"],
+    "This project's reports are limited to its managers."
+  );
 }
 
 /**
@@ -874,12 +915,21 @@ export async function projectChart(
   projectId: string,
   metric: "progress" | "hours" = "progress"
 ): Promise<{ label: string; value: number }[]> {
+  assertCan(ctx, "report:view_own");
+
   const [project] = await ctx.db
-    .select({ id: s.projects.id })
+    .select({ id: s.projects.id, reportVisibility: s.projects.reportVisibility })
     .from(s.projects)
     .where(and(eq(s.projects.id, projectId), projectScope(ctx)))
     .limit(1);
   if (!project) throw new Error("not_found");
+
+  assertMayReadProjectReport(ctx, project);
+
+  // The progress chart is cumulative billable value. Somebody who cannot see
+  // the money gets the hours chart, which answers the shape question without
+  // answering the money one.
+  if (metric === "progress" && !canSeeBillable(ctx)) metric = "hours";
 
   const rows = await ctx.db
     .select({

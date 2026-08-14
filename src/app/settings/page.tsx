@@ -518,7 +518,13 @@ function SecuritySection() {
             // No confirmation dialog and no undo, because there is nothing to
             // undo: signing back in is the recovery. The typed confirmation is
             // reserved for actions that destroy data.
-            if (window.confirm("Sign every device out, including this one?")) signOutAll.mutate();
+            if (
+              window.confirm(
+                "This signs out every person in the account, on every device, including you. Continue?"
+              )
+            ) {
+              signOutAll.mutate();
+            }
           }}
         >
           Sign all devices out

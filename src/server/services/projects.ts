@@ -506,6 +506,18 @@ export async function setTags(ctx: Ctx, projectId: string, names: string[]) {
 
 export async function pinProject(ctx: Ctx, projectId: string, pinned: boolean) {
   if (pinned) {
+    // Pinning is a personal preference, but it is a preference about something
+    // you can see. Without this, any id at all can be pinned and then appears
+    // in the picker as a project the person has no access to.
+    const [visible] = await ctx.db
+      .select({ id: s.projects.id })
+      .from(s.projects)
+      .where(and(eq(s.projects.id, projectId), projectScope(ctx)))
+      .limit(1);
+    if (!visible) throw notFound("That project");
+  }
+
+  if (pinned) {
     await ctx.db
       .insert(s.userPinnedProjects)
       .values({ userId: ctx.actor.userId, projectId })

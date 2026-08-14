@@ -194,8 +194,11 @@ export async function createExpense(ctx: Ctx, input: ExpenseInput): Promise<Expe
   const targetUserId = input.userId ?? ctx.actor.userId;
   const own = targetUserId === ctx.actor.userId;
 
+  // `expense:manage` is about other people's expenses, not about everybody's.
+  // Reach still has to be checked, the way `time.ts` checks it: a project
+  // manager who oversees four people cannot file an expense for the eleventh.
   if (own) assertCan(ctx, "expense:create_own");
-  else if (!ctx.actor.capabilities.has("expense:manage") && !(await canActOnBehalfOf(ctx, targetUserId))) {
+  else if (!(await canActOnBehalfOf(ctx, targetUserId))) {
     throw forbidden("You cannot record expenses for that person.");
   }
 
@@ -399,6 +402,21 @@ export async function setReimbursementState(
   paidAt?: string
 ): Promise<number> {
   assertCan(ctx, "expense:manage");
+
+  // Approving or paying your own reimbursement is the money version of
+  // approving your own timesheet, which `approvals.ts` refuses in as many
+  // words. An owner is exempted for the same reason they are everywhere:
+  // somebody has to be able to act when there is nobody above them.
+  if (state !== "pending" && !ctx.actor.isOwner) {
+    const own = await ctx.db
+      .select({ id: s.expenses.id })
+      .from(s.expenses)
+      .where(and(inArray(s.expenses.id, ids), eq(s.expenses.userId, ctx.actor.userId)))
+      .limit(1);
+    if (own.length > 0) {
+      throw forbidden("Somebody else has to approve your own reimbursements.");
+    }
+  }
   if (ids.length === 0) return 0;
 
   return withTransaction(ctx, async (tx) => {

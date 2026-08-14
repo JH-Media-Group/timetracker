@@ -3,7 +3,12 @@ import { and, eq, inArray, isNull } from "drizzle-orm";
 import { body, route } from "@/server/http";
 import * as s from "@/server/db/schema";
 
+// An explicit empty list means "these ones", of which there are none. Only an
+// absent key means "all of them", and `[]` used to be read as the second.
 const schema = z.object({ ids: z.array(z.string().uuid()).optional() });
+
+/** No id can be this, so an empty selection matches nothing rather than everything. */
+const ZERO_UUID = "00000000-0000-0000-0000-000000000000";
 
 /** Marks the named notifications read, or all of them. Always scoped to the actor. */
 export const POST = route(
@@ -20,7 +25,7 @@ export const POST = route(
         and(
           eq(s.notifications.userId, ctx.actor.userId),
           isNull(s.notifications.readAt),
-          ids?.length ? inArray(s.notifications.id, ids) : undefined
+          ids === undefined ? undefined : inArray(s.notifications.id, ids.length ? ids : [ZERO_UUID])
         )
       )
       .returning({ id: s.notifications.id });

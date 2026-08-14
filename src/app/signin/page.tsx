@@ -30,8 +30,17 @@ import { Logo } from "@/components/app/logo";
  */
 function safeNext(value: string | null): string {
   if (!value) return "/timesheet";
-  if (!value.startsWith("/") || value.startsWith("//") || value.startsWith("/\\")) return "/timesheet";
-  return value;
+  try {
+    // Resolve it the way the browser will, then insist the result is still
+    // here. Prefix tests are not enough: URL parsing strips ASCII tab, newline
+    // and carriage return before parsing, so "/\n/evil.example" collapses into
+    // a protocol-relative URL that a startsWith("//") check never sees.
+    const url = new URL(value, window.location.origin);
+    if (url.origin !== window.location.origin) return "/timesheet";
+    return url.pathname + url.search + url.hash;
+  } catch {
+    return "/timesheet";
+  }
 }
 
 export default function SignInPage() {

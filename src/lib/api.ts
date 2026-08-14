@@ -193,11 +193,26 @@ const patch_ = patch;
 const put = async <T,>(path: string, body: unknown): Promise<T> => (await request<T>("PUT", path, { body })).data;
 const del = async <T,>(path: string): Promise<T> => (await request<T>("DELETE", path)).data;
 
-/** A key for a money-moving POST, so a double click is one payment. */
-const idempotencyKey = () =>
-  typeof crypto !== "undefined" && "randomUUID" in crypto
-    ? crypto.randomUUID()
-    : `k${Date.now()}${Math.random().toString(36).slice(2)}`;
+/**
+ * A key derived from the operation, so a retry carries the same one.
+ *
+ * A fresh UUID per call makes the whole mechanism inert: the server stores the
+ * claim, matches nothing against it, and a double click on "Record payment"
+ * produces two payments. The key has to be a function of what is being asked
+ * for, which is what makes asking twice the same request.
+ *
+ * FNV-1a because it needs to be synchronous, stable across reloads, and only
+ * has to distinguish one payload from another, not resist anybody.
+ */
+function idempotencyKey(operation: string, payload: unknown): string {
+  const text = `${operation}:${JSON.stringify(payload)}`;
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return `${operation}-${hash.toString(16).padStart(8, "0")}-${text.length.toString(16)}`;
+}
 
 /* ================================================================= adapters */
 
@@ -249,11 +264,12 @@ function fromUser(u: UserWire): User {
     departments: u.departments ?? [],
     weeklyCapacitySeconds: u.weeklyCapacitySeconds,
     timezone: u.timezone,
-    // Absent means "you may not see this", which is not the same as zero. The
-    // UI renders a dash for undefined and "$0.00" for zero, so the difference
-    // has to survive the adapter.
-    billableRateCents: u.billableRateCents ?? 0,
-    costRateCents: u.costRateCents ?? 0,
+    // Absent means "you may not see this", which is not the same as zero, so
+    // the field stays absent. Collapsing it to a number here presents a
+    // redaction as an accounting figure, which is the failure this comment was
+    // written to prevent and then did not.
+    billableRateCents: u.billableRateCents,
+    costRateCents: u.costRateCents,
     archivedAt: opt(u.archivedAt),
     startedOn: opt(u.startedOn),
   };
@@ -375,8 +391,8 @@ function fromTimeEntry(e: TimeEntryWire): TimeEntryView {
     timerStartedAt: opt(e.timerStartedAt),
     notes: opt(e.notes),
     isBillable: e.isBillable,
-    billableRateCents: e.billableRateCents ?? 0,
-    costRateCents: e.costRateCents ?? 0,
+    billableRateCents: e.billableRateCents,
+    costRateCents: e.costRateCents,
     invoiceId: opt(e.invoiceId),
     billedExternally: e.billedExternally,
     approvalId: opt(e.approvalId),
@@ -1136,10 +1152,14 @@ export async function updateInvoice(id: ID, p: Partial<Invoice>): Promise<Invoic
 
 export async function recordPayment(id: ID, amountCents: number, paidAt: string): Promise<InvoiceView> {
   // A payment is money moving, so a retried request must not become two.
+  const body = { amountCents, paidAt: new Date(paidAt).toISOString() };
   return fromInvoice(await post<InvoiceWire>(
     `/invoices/${id}/payments`,
-    { amountCents, paidAt: new Date(paidAt).toISOString() },
-    idempotencyKey()
+    body,
+    // Keyed on the invoice and the payment itself, so a double click is one
+    // payment and a genuinely second payment of the same amount on the same
+    // day is still two.
+    idempotencyKey(`payment-${id}`, body)
   ));
 }
 
@@ -1206,36 +1226,35 @@ export interface CreateInvoiceInput {
 }
 
 export async function createInvoice(input: CreateInvoiceInput): Promise<InvoiceView> {
-  return fromInvoice(await post<InvoiceWire>(
-    "/invoices",
-    {
-      clientId: input.clientId,
-      subject: input.subject?.trim() || null,
-      notes: input.notes?.trim() || null,
-      poNumber: input.poNumber?.trim() || null,
-      issueDate: input.issueDate,
-      dueDate: input.dueDate,
-      taxPercent: input.taxPercent ?? null,
-      discountPercent: input.discountPercent ?? null,
-      lines: input.lines.map((l) => ({
-        projectId: l.projectId,
-        description:
-          l.sublabel && l.sublabel !== "Billable time" ? `${l.label}: ${l.sublabel}` : l.label,
-        quantity: l.quantity,
-        unitPriceCents: Math.round(l.unitPriceCents),
-        // The exact value, not `quantity x unitPrice`. The quantity is hours
-        // rounded to two decimals for the document, and re-deriving the amount
-        // from it is how the preview and the invoice came out dollars apart.
-        amountCents: Math.round(l.amountCents),
-        isTaxed: l.kind !== "expense",
-        itemType: l.kind === "expense" ? "Expense" : "Service",
-      })),
-      projectIds: [...new Set(input.lines.map((l) => l.projectId))],
-      timeEntryIds: input.lines.flatMap((l) => l.entryIds),
-      expenseIds: input.lines.flatMap((l) => l.expenseIds),
-    },
-    idempotencyKey()
-  ));
+  const body = {
+    clientId: input.clientId,
+    subject: input.subject?.trim() || null,
+    notes: input.notes?.trim() || null,
+    poNumber: input.poNumber?.trim() || null,
+    issueDate: input.issueDate,
+    dueDate: input.dueDate,
+    taxPercent: input.taxPercent ?? null,
+    discountPercent: input.discountPercent ?? null,
+    lines: input.lines.map((l) => ({
+      projectId: l.projectId,
+      description: l.sublabel && l.sublabel !== "Billable time" ? `${l.label}: ${l.sublabel}` : l.label,
+      quantity: l.quantity,
+      unitPriceCents: Math.round(l.unitPriceCents),
+      // The exact value, not `quantity x unitPrice`. The quantity is hours
+      // rounded to two decimals for the document, and re-deriving the amount
+      // from it is how the preview and the invoice came out dollars apart.
+      amountCents: Math.round(l.amountCents),
+      isTaxed: l.kind !== "expense",
+      itemType: l.kind === "expense" ? "Expense" : "Service",
+    })),
+    projectIds: [...new Set(input.lines.map((l) => l.projectId))],
+    timeEntryIds: input.lines.flatMap((l) => l.entryIds),
+    expenseIds: input.lines.flatMap((l) => l.expenseIds),
+  };
+
+  // Keyed on the whole payload: the same lines for the same client on the same
+  // dates is the same invoice, however many times the button is pressed.
+  return fromInvoice(await post<InvoiceWire>("/invoices", body, idempotencyKey("invoice", body)));
 }
 
 export async function deleteInvoice(id: ID): Promise<boolean> {
@@ -1287,7 +1306,7 @@ export async function duplicateInvoice(id: ID): Promise<InvoiceView> {
       })),
       projectIds: source.projectIds,
     },
-    idempotencyKey()
+    idempotencyKey(`duplicate-${id}`, { issueDate, dueDate })
   ));
 }
 

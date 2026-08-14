@@ -129,13 +129,21 @@ export async function actorForToken(token: string): Promise<Actor | null> {
 
   // Rolling expiry, written at most once an hour so a busy tab does not turn
   // every read into a write.
+  //
+  // The cookie has to roll with it. Extending only the database row means the
+  // browser still discards the cookie thirty days after sign-in however much
+  // the person has used Tally in between, which is not a rolling window at all,
+  // it is a fixed one with extra writing.
+  let renewedUntil: Date | null = null;
   if (now.getTime() - row.lastSeenAt.getTime() > TOUCH_INTERVAL_MS) {
     const extended = new Date(now.getTime() + ROLLING_DAYS * 86_400_000);
-    await db
+    const [updated] = await db
       .update(s.sessions)
       .set({ lastSeenAt: now, expiresAt: sql`LEAST(${extended}, ${s.sessions.absoluteExpiresAt})` })
-      .where(eq(s.sessions.id, row.sessionId));
+      .where(eq(s.sessions.id, row.sessionId))
+      .returning({ expiresAt: s.sessions.expiresAt });
     await db.update(s.users).set({ lastSeenAt: now }).where(eq(s.users.id, row.userId));
+    renewedUntil = updated?.expiresAt ?? extended;
   }
 
   return {
@@ -146,6 +154,7 @@ export async function actorForToken(token: string): Promise<Actor | null> {
     kind: "user",
     timezone: row.timezone,
     isOwner: row.isOwner,
+    renewedUntil,
   };
 }
 

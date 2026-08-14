@@ -612,13 +612,22 @@ async function attachRecords(
   }
 }
 
-/** Gives back everything an invoice was holding, so it can be billed again. */
+/**
+ * Gives back everything an invoice was holding, so it can be billed again.
+ *
+ * The rate lock goes with it. A record released from a sent invoice that keeps
+ * `rates_locked_at` can never be re-rated, and nothing would ever clear it,
+ * because the thing that set it no longer refers to the record.
+ */
 async function releaseRecords(ctx: Ctx, invoiceId: string) {
   await ctx.db
     .update(s.timeEntries)
-    .set({ invoiceId: null })
+    .set({ invoiceId: null, ratesLockedAt: null })
     .where(eq(s.timeEntries.invoiceId, invoiceId));
-  await ctx.db.update(s.expenses).set({ invoiceId: null }).where(eq(s.expenses.invoiceId, invoiceId));
+  await ctx.db
+    .update(s.expenses)
+    .set({ invoiceId: null, ratesLockedAt: null })
+    .where(eq(s.expenses.invoiceId, invoiceId));
 }
 
 /* ------------------------------------------------------------------ update */
@@ -659,6 +668,24 @@ export async function updateInvoice(
       // records. Without it, deleting a line leaves its hours claimed against
       // an invoice that no longer bills them: permanently uninvoiceable, and
       // invisible to the next preview.
+      //
+      // Replacing the lines without naming the records is a request to bill
+      // different work than the invoice is holding, which is how the same hour
+      // ends up on two invoices. If the caller does not say what the new lines
+      // cover, keep what was already attached.
+      const keepTimeEntryIds =
+        input.timeEntryIds ??
+        (await tx.db
+          .select({ id: s.timeEntries.id })
+          .from(s.timeEntries)
+          .where(eq(s.timeEntries.invoiceId, id))).map((r) => r.id);
+      const keepExpenseIds =
+        input.expenseIds ??
+        (await tx.db
+          .select({ id: s.expenses.id })
+          .from(s.expenses)
+          .where(eq(s.expenses.invoiceId, id))).map((r) => r.id);
+
       await releaseRecords(tx, id);
       await tx.db.delete(s.invoiceLineItems).where(eq(s.invoiceLineItems.invoiceId, id));
 
@@ -675,7 +702,20 @@ export async function updateInvoice(
       }));
       if (lines.length) await tx.db.insert(s.invoiceLineItems).values(lines);
 
-      await attachRecords(tx, id, before.clientId, input.timeEntryIds ?? [], input.expenseIds ?? []);
+      await attachRecords(tx, id, before.clientId, keepTimeEntryIds, keepExpenseIds);
+
+      // Records that were on a sent invoice and are no longer on any invoice
+      // must lose their rate lock too, or they stay unrateable forever.
+      if (before.state !== "draft") {
+        await tx.db
+          .update(s.timeEntries)
+          .set({ ratesLockedAt: tx.now() })
+          .where(eq(s.timeEntries.invoiceId, id));
+        await tx.db
+          .update(s.expenses)
+          .set({ ratesLockedAt: tx.now() })
+          .where(eq(s.expenses.invoiceId, id));
+      }
     }
 
     // Totals are recomputed from whatever the lines now are, whether or not
@@ -714,9 +754,20 @@ export async function updateInvoice(
       patch.taxPercent = taxPercent == null ? null : String(taxPercent);
       patch.discountPercent = discountPercent == null ? null : String(discountPercent);
 
+      // A retainer draw was sized against the old total. Editing the invoice
+      // below it would leave the client debited for more than they are being
+      // billed, so the excess goes back on the ledger as its own movement.
+      let drawCents = before.retainerDrawCents;
+      if (drawCents > totals.totalCents) {
+        const excess = drawCents - totals.totalCents;
+        await reverseRetainerDraw(tx, id, before.clientId, excess, "invoice reduced");
+        drawCents = totals.totalCents;
+        patch.retainerDrawCents = drawCents;
+      }
+
       // A paid invoice edited upward is no longer paid. Leaving the state alone
       // would drop it out of receivables while it is still owed.
-      const settled = await settledCents(tx, id, before.paidCents);
+      const settled = before.paidCents + drawCents;
       const state = stateAfterPayment(totals.totalCents, settled, before.state as InvoiceState);
       if (state !== before.state) {
         patch.state = state;
@@ -1018,6 +1069,12 @@ export async function recordPayment(
       );
     }
 
+    // Hold the invoice row for the rest of the transaction. Recomputing
+    // paid_cents from the ledger is only safe if nobody else is recomputing it
+    // at the same time: two concurrent payments each sum a set that excludes
+    // the other, and the second write wins.
+    await tx.db.execute(sql`SELECT 1 FROM invoices WHERE id = ${id} FOR UPDATE`);
+
     await tx.db.insert(s.invoicePayments).values({
       id: newId(),
       invoiceId: id,
@@ -1242,7 +1299,13 @@ async function reverseRetainerDraw(
   });
 
   await ctx.db.update(s.retainers).set({ balanceCents: balanceAfter }).where(eq(s.retainers.id, retainer.id));
-  await ctx.db.update(s.invoices).set({ retainerDrawCents: 0 }).where(eq(s.invoices.id, invoiceId));
+
+  // Subtract what was returned rather than zeroing, because an edit can return
+  // part of a draw while the rest of it still applies.
+  await ctx.db
+    .update(s.invoices)
+    .set({ retainerDrawCents: sql`GREATEST(0, ${s.invoices.retainerDrawCents} - ${drawCents})` })
+    .where(eq(s.invoices.id, invoiceId));
 }
 
 /* --------------------------------------------------- recurring and retainers */

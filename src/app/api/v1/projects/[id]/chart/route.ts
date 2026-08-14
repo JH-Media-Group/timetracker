@@ -15,5 +15,5 @@ export const GET = route(
       throw e;
     }
   },
-  { rateLimit: "report", transactional: false }
+  { rateLimit: "report", capability: "report:view_own", transactional: false }
 );

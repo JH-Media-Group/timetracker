@@ -10,37 +10,13 @@
 
 const isProduction = process.env.NODE_ENV === "production";
 
-/**
- * Content Security Policy.
+/*
+ * The Content Security Policy is NOT here.
  *
- * `'unsafe-inline'` for styles is unavoidable: Tailwind v4 emits inline styles
- * and AG Grid sets them on every cell. Scripts do not get it in production; the
- * one inline script (the theme initialiser, which must be render-blocking to
- * avoid a flash of the wrong theme) is allowed through `'strict-dynamic'` and
- * the nonce Next adds. In development Next's own refresh runtime needs
- * `'unsafe-eval'`, so the policy is relaxed there and only there.
+ * It carries a per-request nonce, which a static header cannot, so it is built
+ * in `src/middleware.ts`. Everything below is genuinely constant.
  */
-const csp = [
-  "default-src 'self'",
-  isProduction
-    ? "script-src 'self' 'unsafe-inline'"
-    : "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-  "style-src 'self' 'unsafe-inline'",
-  // Fonts are self-hosted by next/font, so no CDN needs allowing.
-  "font-src 'self' data:",
-  "img-src 'self' data: blob:",
-  "connect-src 'self'" + (isProduction ? "" : " ws: wss:"),
-  // No plugins, no framing, no other origin embedding us.
-  "object-src 'none'",
-  "frame-ancestors 'none'",
-  "base-uri 'self'",
-  // A form that posts anywhere but here is a form somebody injected.
-  "form-action 'self'",
-  ...(isProduction ? ["upgrade-insecure-requests"] : []),
-].join("; ");
-
 const securityHeaders = [
-  { key: "Content-Security-Policy", value: csp },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "DENY" },
   // The full URL of an internal tool is not another site's business, and our
