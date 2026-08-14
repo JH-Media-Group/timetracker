@@ -492,20 +492,11 @@ function DataSection() {
       <Card>
         <SectionTitle>Start over</SectionTitle>
         <p className="mb-3 text-base text-ink-secondary">
-          This build runs on sample data held in your browser. Resetting restores the original
-          sample set and discards anything you changed while testing.
+          This build runs on sample data. Reseeding drops every record and rebuilds the sample set,
+          which is a command run on the server rather than a button here, because it is not
+          something anyone should be one mis-click away from.
         </p>
-        <label className="mb-3 flex cursor-pointer items-center gap-2.5">
-          <Checkbox checked={reset} onCheckedChange={setReset} />
-          <span className="text-base text-ink">I understand this discards my test edits.</span>
-        </label>
-        <Button
-          variant="danger"
-          disabled={!reset}
-          onClick={() => { api.resetDatabase(); window.location.href = "/timesheet"; }}
-        >
-          Reset the sample data
-        </Button>
+        <pre className="rounded-md border border-line bg-surface-sunken px-3 py-2 text-sm text-ink-secondary">pnpm db:reset</pre>
       </Card>
     </div>
   );

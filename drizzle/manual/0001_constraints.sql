@@ -171,31 +171,50 @@ CREATE UNIQUE INDEX IF NOT EXISTS invoices_number_unique
 -- IF NOT EXISTS matches on NAME ALONE. A database that ran an earlier version
 -- of this file already has an index with each of these names and WITHOUT the
 -- NULLS NOT DISTINCT property, so a plain CREATE ... IF NOT EXISTS is a silent
--- no-op and the duplicate-row hole stays open. Check the property, not the
--- name, and rebuild when it is wrong.
+-- no-op and the duplicate-row hole stays open. Compare the DEFINITION, not the
+-- name, and rebuild whenever it differs.
+--
+-- The retainer index is also partial. Archiving a client-wide retainer and
+-- opening a replacement is an ordinary thing to do, and without the predicate
+-- the archived row keeps the slot forever: the replacement is refused and the
+-- client can never hold a retainer again.
 DO $$
 DECLARE
   target record;
+  wanted text;
+  actual text;
 BEGIN
   FOR target IN
     SELECT * FROM (VALUES
-      ('retainers_client_project_unique', 'retainers', '(client_id, project_id)'),
-      ('integration_connections_unique', 'integration_connections', '(provider, scope, user_id)')
-    ) AS t(index_name, table_name, columns)
+      ('retainers_client_project_unique', 'retainers',
+       '(client_id, project_id)', ' WHERE archived_at IS NULL'),
+      ('integration_connections_unique', 'integration_connections',
+       '(provider, scope, user_id)', '')
+    ) AS t(index_name, table_name, columns, predicate)
   LOOP
-    IF EXISTS (
-      SELECT 1 FROM pg_index i
-      JOIN pg_class c ON c.oid = i.indexrelid
-      WHERE c.relname = target.index_name AND NOT i.indnullsnotdistinct
+    wanted := format(
+      'CREATE UNIQUE INDEX %I ON %I %s NULLS NOT DISTINCT%s',
+      target.index_name, target.table_name, target.columns, target.predicate
+    );
+
+    SELECT pg_get_indexdef(c.oid) INTO actual
+    FROM pg_class c WHERE c.relname = target.index_name AND c.relkind = 'i';
+
+    -- pg_get_indexdef normalises whitespace, schema-qualifies, and expands the
+    -- column list, so the two strings never match literally. Compare the two
+    -- properties that actually matter instead.
+    IF actual IS NOT NULL AND (
+      (SELECT NOT i.indnullsnotdistinct FROM pg_index i
+       JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname = target.index_name)
+      OR (target.predicate <> '' AND actual NOT LIKE '%WHERE%')
+      OR (target.predicate = '' AND actual LIKE '%WHERE%')
     ) THEN
       EXECUTE format('DROP INDEX IF EXISTS %I', target.index_name);
+      actual := NULL;
     END IF;
 
-    IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = target.index_name AND relkind = 'i') THEN
-      EXECUTE format(
-        'CREATE UNIQUE INDEX %I ON %I %s NULLS NOT DISTINCT',
-        target.index_name, target.table_name, target.columns
-      );
+    IF actual IS NULL THEN
+      EXECUTE wanted;
     END IF;
   END LOOP;
 END $$;

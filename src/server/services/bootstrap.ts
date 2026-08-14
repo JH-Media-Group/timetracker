@@ -24,7 +24,7 @@ import { pinnedProjectIds } from "./projects";
 import { getUser } from "./people";
 
 export async function bootstrap(ctx: Ctx) {
-  const [me, users, clients, projects, tasks, settings, categories, pinned] = await Promise.all([
+  const [me, users, clients, projects, tasks, settings, categories, pinned, profiles] = await Promise.all([
     getUser(ctx, ctx.actor.userId),
     listUsers(ctx),
     listClients(ctx, { includeArchived: true }),
@@ -37,6 +37,16 @@ export async function bootstrap(ctx: Ctx) {
       .where(isNull(s.expenseCategories.archivedAt))
       .orderBy(asc(s.expenseCategories.name)),
     pinnedProjectIds(ctx),
+    // Names only. The capability list of a profile is a map of how to escalate
+    // and stays behind people:manage; a label for "Project manager" is not.
+    ctx.db
+      .select({
+        id: s.permissionProfiles.id,
+        name: s.permissionProfiles.name,
+        baseKey: s.permissionProfiles.baseKey,
+      })
+      .from(s.permissionProfiles)
+      .orderBy(asc(s.permissionProfiles.name)),
   ]);
 
   return {
@@ -54,7 +64,9 @@ export async function bootstrap(ctx: Ctx) {
       archivedAt: c.archivedAt ? c.archivedAt.toISOString() : null,
     })),
     pinnedProjectIds: pinned,
+    profiles,
     capabilities: [...ctx.actor.capabilities].sort(),
+    baseKey: ctx.actor.baseKey,
   };
 }
 

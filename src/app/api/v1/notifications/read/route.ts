@@ -8,7 +8,10 @@ const schema = z.object({ ids: z.array(z.string().uuid()).optional() });
 /** Marks the named notifications read, or all of them. Always scoped to the actor. */
 export const POST = route(
   async (ctx, req) => {
-    const { ids } = await body(req, schema).catch(() => ({ ids: undefined }));
+    // Not caught. A malformed `ids` used to fall back to "mark everything
+    // read", which is a silent, unrecoverable action taken because the request
+    // was wrong.
+    const { ids } = await body(req, schema);
 
     const rows = await ctx.db
       .update(s.notifications)

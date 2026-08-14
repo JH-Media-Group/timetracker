@@ -164,6 +164,15 @@ export const invoiceLineSchema = z.object({
   description: z.string().min(1).max(500),
   quantity: z.number().min(0),
   unitPriceCents: z.number().int(),
+  /**
+   * The line's exact value, when the caller has it.
+   *
+   * A time line is worth `sum(seconds x rate) / 3600`, which is not
+   * `hours x rate` once the hours have been rounded to two decimals for the
+   * document. Dropping this field is how the preview and the invoice it
+   * produced came out a couple of dollars apart.
+   */
+  amountCents: z.number().int().optional(),
   isTaxed: z.boolean().default(true),
   itemType: z.string().max(60).optional(),
 });

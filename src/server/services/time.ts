@@ -779,9 +779,19 @@ export async function upsertWeek(
     );
     const seen = new Set<string>();
 
+    const inWeek = new Set(days);
+
     for (const row of input.rows) {
       const notes = row.notes?.trim() || null;
-      for (const day of days) {
+
+      // Only the days the client actually sent. Sweeping all seven and treating
+      // an absent one as zero would mean a single-cell save silently deleted the
+      // rest of that row, which is exactly what the grid does when it saves on
+      // blur. Clearing a cell is an explicit zero, so nothing is lost.
+      for (const day of Object.keys(row.days)) {
+        if (!inWeek.has(day)) {
+          throw validationFailed({ days: [day + " is not in the week starting " + input.weekStart + "."] });
+        }
         const seconds = Math.max(0, Math.round(row.days[day] ?? 0));
         const key = keyOf(row.projectId, row.taskId, notes, day);
         seen.add(key);

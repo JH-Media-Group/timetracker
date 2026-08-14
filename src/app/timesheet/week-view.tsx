@@ -54,8 +54,8 @@ export function WeekView({ weekStart, userId, entries, loading }: {
   const removeRow = useMutation({
     mutationFn: async (row: Row) => {
       const all = Object.values(row.cells).flat();
-      const removed: TimeEntry[] = [];
-      for (const e of all) { const r = await api.deleteTimeEntry(e.id); if (r) removed.push(r); }
+      const removed: { id: string }[] = [];
+      for (const e of all) { removed.push(await api.deleteTimeEntry(e.id)); }
       return removed;
     },
     onSuccess: (removed) => {

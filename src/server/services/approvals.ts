@@ -15,7 +15,7 @@ import { and, asc, desc, eq, gte, inArray, isNull, lte, sql } from "drizzle-orm"
 import { assertCan, withTransaction, type Ctx } from "@/server/ctx";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
-import { approvalScope, canActOnBehalfOf } from "@/server/auth/scope";
+import { approvalScope, canActOnBehalfOf, visibleUserIds } from "@/server/auth/scope";
 import { AppError, forbidden, notFound, validationFailed } from "@/server/errors";
 import { addDays, dayIn, eachDay, isIsoDate, startOfWeek, type IsoDate } from "@/domain/calendar";
 import { getSettings } from "./settings";
@@ -54,7 +54,7 @@ const toDto = (row: s.SubmissionRow): SubmissionDto => ({
 
 export async function listSubmissions(
   ctx: Ctx,
-  opts: { state?: string; periodStart?: IsoDate } = {}
+  opts: { state?: string; periodStart?: IsoDate; limit?: number } = {}
 ): Promise<SubmissionDto[]> {
   const conditions = [approvalScope(ctx)];
   if (opts.state && opts.state !== "all") conditions.push(eq(s.timesheetSubmissions.state, opts.state));
@@ -65,7 +65,7 @@ export async function listSubmissions(
     .from(s.timesheetSubmissions)
     .where(and(...conditions))
     .orderBy(desc(s.timesheetSubmissions.periodStart), desc(s.timesheetSubmissions.submittedAt))
-    .limit(500);
+    .limit(opts.limit ?? 500);
 
   return rows.map(toDto);
 }
@@ -208,6 +208,29 @@ export async function submitTimesheet(
 
     // Associate the period's rows, so the submission is a record of what was
     // reviewed rather than only of when.
+    //
+    // Cleared first. An entry moved out of the period between two submissions
+    // otherwise keeps pointing at this one, and the submission then claims to
+    // cover work that is no longer in it.
+    await tx.db
+      .update(s.timeEntries)
+      .set({ approvalId: null })
+      .where(
+        and(
+          eq(s.timeEntries.approvalId, id),
+          sql`(${s.timeEntries.spentOn} < ${periodStart} OR ${s.timeEntries.spentOn} > ${periodEnd})`
+        )
+      );
+    await tx.db
+      .update(s.expenses)
+      .set({ approvalId: null })
+      .where(
+        and(
+          eq(s.expenses.approvalId, id),
+          sql`(${s.expenses.spentOn} < ${periodStart} OR ${s.expenses.spentOn} > ${periodEnd})`
+        )
+      );
+
     await tx.db
       .update(s.timeEntries)
       .set({ approvalId: id })
@@ -376,6 +399,9 @@ export async function remindToSubmit(
       .where(
         and(
           isNull(s.users.archivedAt),
+          // Reach, not just capability. Without this, omitting `userIds` mailed
+          // the whole company on behalf of a reviewer who oversees four people.
+          sql`${s.users.id} IN ${visibleUserIds(tx)}`,
           input.userIds?.length ? inArray(s.users.id, input.userIds) : sql`true`,
           sql`NOT EXISTS (
             SELECT 1 FROM ${s.timesheetSubmissions} sub

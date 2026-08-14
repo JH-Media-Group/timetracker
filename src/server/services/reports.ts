@@ -17,11 +17,12 @@
 import { and, eq, isNull, sql, type SQL } from "drizzle-orm";
 import { assertCan, assertCanAny, type Ctx } from "@/server/ctx";
 import * as s from "@/server/db/schema";
-import { clientScope, projectScope, timeEntryScope } from "@/server/auth/scope";
+import { clientScope, projectScope, timeEntryScope, visibleUserIds } from "@/server/auth/scope";
 import { toNumber } from "@/server/db/sql-money";
 import { roundSeconds, type RoundingRule } from "@/domain/rounding";
 import { profitFrom, recogniseFee } from "@/domain/profitability";
 import { displayState, type InvoiceState } from "@/domain/invoices";
+import { canSeeBillable } from "@/server/serialize";
 import { dayIn, type IsoDate } from "@/domain/calendar";
 import { getSettings, roundingRule } from "./settings";
 
@@ -136,7 +137,13 @@ export async function timeReport(
 
   const totalSeconds = parsed.reduce((a, r) => a + r.totalSeconds, 0);
   const billableSeconds = parsed.reduce((a, r) => a + r.billableSeconds, 0);
-  const billableCents = parsed.reduce((a, r) => a + r.billableCents, 0);
+
+  // The money on this report is a capability, not a side effect of being able
+  // to see your own hours. Everybody holds `report:view_own`, so without this a
+  // Member could divide value by hours and read their own billable rate to the
+  // cent, which is exactly what their profile says they cannot see.
+  const showsMoney = canSeeBillable(ctx);
+  const billableCents = showsMoney ? parsed.reduce((a, r) => a + r.billableCents, 0) : 0;
 
   // Weekly buckets for the chart, from one extra grouped query rather than by
   // re-reading every entry.
@@ -155,6 +162,7 @@ export async function timeReport(
   return {
     rows: parsed.map((r) => ({
       ...r,
+      billableCents: showsMoney ? r.billableCents : 0,
       nonBillableSeconds: r.totalSeconds - r.billableSeconds,
       share: totalSeconds ? r.totalSeconds / totalSeconds : 0,
     })),
@@ -356,12 +364,24 @@ export async function profitabilityReport(
   const costCents = rows.reduce((a, r) => a + r.costCents, 0);
   const totals = profitFrom(revenueCents, costCents);
 
+  // Scoped and dated, like everything else on the page. Without both, a
+  // three-month view showed the account's all-time invoiced total next to three
+  // months of revenue, and showed it to people who cannot see those clients.
   const [invoiced] = await ctx.db
     .select({
       total: sql<string>`COALESCE(SUM(${s.invoices.totalCents}), 0)::text`,
     })
     .from(s.invoices)
-    .where(and(isNull(s.invoices.deletedAt), sql`${s.invoices.state} <> 'draft'`));
+    .innerJoin(s.clients, eq(s.clients.id, s.invoices.clientId))
+    .where(
+      and(
+        isNull(s.invoices.deletedAt),
+        sql`${s.invoices.state} <> 'draft'`,
+        sql`${s.invoices.issueDate} >= ${input.from}`,
+        sql`${s.invoices.issueDate} <= ${input.to}`,
+        clientScope(ctx)
+      )
+    );
 
   const flags: ProfitabilityReport["flags"] = [];
   if (missingRates.length) {
@@ -447,6 +467,10 @@ export async function teamReport(
     .where(
       and(
         isNull(s.users.archivedAt),
+        // Every other list in this file composes a scope predicate. This one
+        // composed none, so a team-scoped reviewer read the whole company's
+        // hours, capacity and utilization.
+        sql`${s.users.id} IN ${visibleUserIds(ctx)}`,
         input.employmentType ? eq(s.users.employmentType, input.employmentType) : sql`true`
       )
     )
@@ -534,6 +558,7 @@ export async function invoicingReport(ctx: Ctx, input: Period): Promise<Invoicin
       state: s.invoices.state,
       totalCents: s.invoices.totalCents,
       paidCents: s.invoices.paidCents,
+      retainerDrawCents: s.invoices.retainerDrawCents,
       sentAt: s.invoices.sentAt,
       paidAt: s.invoices.paidAt,
     })
@@ -562,12 +587,12 @@ export async function invoicingReport(ctx: Ctx, input: Period): Promise<Invoicin
         state: r.state as InvoiceState,
         dueDate: r.dueDate,
         totalCents: r.totalCents,
-        paidCents: r.paidCents,
+        paidCents: r.paidCents + r.retainerDrawCents,
         today,
       }),
       totalCents: r.totalCents,
       paidCents: r.paidCents,
-      balanceCents: r.totalCents - r.paidCents,
+      balanceCents: r.totalCents - r.paidCents - r.retainerDrawCents,
       daysLate: r.state === "open" ? daysLate : 0,
       bucket: r.state === "open" ? bucketFor(daysBetween(r.dueDate, today)) : "Settled",
       sentAt: r.sentAt,
@@ -578,18 +603,45 @@ export async function invoicingReport(ctx: Ctx, input: Period): Promise<Invoicin
   const inPeriod = detailed.filter((r) => r.issueDate >= input.from && r.issueDate <= input.to);
   const open = detailed.filter((r) => r.state === "open");
 
+  // Cash comes from when it arrived, not from when the invoice was raised. A
+  // December invoice paid in July is July's collection, and reading `paidCents`
+  // against `issueDate` reported it as December's.
+  const payments = await ctx.db
+    .select({
+      month: sql<string>`to_char(${s.invoicePayments.paidAt} AT TIME ZONE 'UTC', 'YYYY-MM')`,
+      day: sql<string>`to_char(${s.invoicePayments.paidAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD')`,
+      amountCents: sql<string>`COALESCE(SUM(${s.invoicePayments.amountCents}), 0)::text`,
+    })
+    .from(s.invoicePayments)
+    .innerJoin(s.invoices, eq(s.invoices.id, s.invoicePayments.invoiceId))
+    .innerJoin(s.clients, eq(s.clients.id, s.invoices.clientId))
+    .where(and(isNull(s.invoicePayments.voidedAt), isNull(s.invoices.deletedAt), clientScope(ctx)))
+    .groupBy(
+      sql`to_char(${s.invoicePayments.paidAt} AT TIME ZONE 'UTC', 'YYYY-MM')`,
+      sql`to_char(${s.invoicePayments.paidAt} AT TIME ZONE 'UTC', 'YYYY-MM-DD')`
+    );
+
+  const collectedInPeriod = payments
+    .filter((r) => r.day >= input.from && r.day <= input.to)
+    .reduce((a, r) => a + toNumber(r.amountCents), 0);
+
   const aging = BUCKETS.map((bucket) => ({
     bucket,
     amountCents: open.filter((r) => r.bucket === bucket).reduce((a, r) => a + r.balanceCents, 0),
   }));
 
   const monthlyMap = new Map<string, { issued: number; collected: number }>();
-  for (const r of detailed) {
+  for (const r of inPeriod) {
     const month = r.issueDate.slice(0, 7);
     const bucket = monthlyMap.get(month) ?? { issued: 0, collected: 0 };
     bucket.issued += r.totalCents;
-    bucket.collected += r.paidCents;
     monthlyMap.set(month, bucket);
+  }
+  for (const r of payments) {
+    if (r.day < input.from || r.day > input.to) continue;
+    const bucket = monthlyMap.get(r.month) ?? { issued: 0, collected: 0 };
+    bucket.collected += toNumber(r.amountCents);
+    monthlyMap.set(r.month, bucket);
   }
 
   const paidInvoices = detailed.filter((r) => r.state === "paid" && r.paidAt && r.sentAt);
@@ -600,11 +652,19 @@ export async function invoicingReport(ctx: Ctx, input: Period): Promise<Invoicin
       )
     : null;
 
+  // The rows are the period's invoices plus anything still open from before it.
+  // A receivables page that hid the oldest debt because it was raised last year
+  // would be the one thing it must never do, but the table also must not show
+  // forty settled invoices from outside the window and call them this month's.
+  const visible = detailed.filter(
+    (r) => (r.issueDate >= input.from && r.issueDate <= input.to) || r.state === "open"
+  );
+
   return {
-    rows: detailed.map(({ sentAt: _sentAt, paidAt: _paidAt, ...rest }) => rest),
+    rows: visible.map(({ sentAt: _sentAt, paidAt: _paidAt, ...rest }) => rest),
     totals: {
       issuedCents: inPeriod.reduce((a, r) => a + r.totalCents, 0),
-      collectedCents: inPeriod.reduce((a, r) => a + r.paidCents, 0),
+      collectedCents: collectedInPeriod,
       outstandingCents: open.reduce((a, r) => a + r.balanceCents, 0),
       overdueCents: open.filter((r) => r.daysLate > 0).reduce((a, r) => a + r.balanceCents, 0),
     },
@@ -627,6 +687,10 @@ export interface ProjectSummary {
   expenseCents: number;
   invoicedCents: number;
   uninvoicedCents: number;
+  /** Invoiced beyond what has been earned. Zero unless the project is fixed fee. */
+  overbilledCents: number;
+  /** The fee earned so far, for a fixed-fee project. Null for time and materials. */
+  feesToDateCents: number | null;
   budget: {
     by: string;
     budget: number | null;
@@ -681,30 +745,72 @@ export async function projectSummary(ctx: Ctx, projectId: string): Promise<Proje
     .from(s.expenses)
     .where(and(eq(s.expenses.projectId, projectId), isNull(s.expenses.deletedAt)));
 
-  const [invoiced] = await ctx.db
-    .select({ totalCents: sql<string>`COALESCE(SUM(${s.invoices.totalCents}), 0)::text` })
+  // What this project was invoiced.
+  //
+  // Not the total of every invoice it appears on: a three-project invoice used
+  // to charge its full value to all three, which then subtracted three times
+  // over from a fixed fee. Each invoice is split by the share of its lines that
+  // name this project, and the whole invoice total is split that way rather
+  // than only the lines, so tax and discount travel with the revenue they came
+  // from. An invoice with no project-named lines falls back to an equal split
+  // across the projects it is linked to, because attributing it nowhere would
+  // make money disappear.
+  const invoiceShares = await ctx.db
+    .select({
+      totalCents: s.invoices.totalCents,
+      mineCents: sql<string>`COALESCE((
+        SELECT SUM(li.amount_cents) FROM ${s.invoiceLineItems} li
+        WHERE li.invoice_id = ${s.invoices.id} AND li.project_id = ${projectId}
+      ), 0)::text`,
+      namedCents: sql<string>`COALESCE((
+        SELECT SUM(li.amount_cents) FROM ${s.invoiceLineItems} li
+        WHERE li.invoice_id = ${s.invoices.id} AND li.project_id IS NOT NULL
+      ), 0)::text`,
+      linkedProjects: sql<string>`GREATEST(1, (
+        SELECT COUNT(*) FROM ${s.invoiceProjects} ip WHERE ip.invoice_id = ${s.invoices.id}
+      ))::text`,
+    })
     .from(s.invoices)
-    .innerJoin(s.invoiceProjects, eq(s.invoiceProjects.invoiceId, s.invoices.id))
     .where(
       and(
-        eq(s.invoiceProjects.projectId, projectId),
         isNull(s.invoices.deletedAt),
-        sql`${s.invoices.state} <> 'draft'`
+        sql`${s.invoices.state} <> 'draft'`,
+        sql`${s.invoices.id} IN (
+          SELECT invoice_id FROM ${s.invoiceLineItems} WHERE project_id = ${projectId}
+          UNION
+          SELECT invoice_id FROM ${s.invoiceProjects} WHERE project_id = ${projectId}
+        )`
       )
     );
 
   const totalSeconds = toNumber(time?.totalSeconds ?? "0");
   const billableSeconds = toNumber(time?.billableSeconds ?? "0");
   const expenseCents = toNumber(expenses?.totalCents ?? "0");
-  const invoicedCents = toNumber(invoiced?.totalCents ?? "0");
 
-  // Fixed fee bills the fee, not the hours, so what is left to invoice is the
-  // fee minus what has been invoiced, floored at zero: over-billing shows zero
-  // rather than a negative receivable.
+  const invoicedCents = invoiceShares.reduce((sum, r) => {
+    const named = toNumber(r.namedCents);
+    const mine = toNumber(r.mineCents);
+    const share =
+      named > 0
+        ? Math.round((r.totalCents * mine) / named)
+        : Math.round(r.totalCents / toNumber(r.linkedProjects));
+    return sum + share;
+  }, 0);
+
+  // Fixed fee bills the fee, not the hours. What is earned so far is the whole
+  // fee for a one-off and elapsed whole months x the fee for a monthly one:
+  // comparing a monthly project's lifetime invoicing against a single month's
+  // fee reported nothing left to bill, forever.
+  const feesToDate = feesEarnedToDate(project, today);
   const uninvoicedCents =
     project.billingType === "fixed_fee"
-      ? Math.max(0, (project.feeCents ?? 0) - invoicedCents)
+      ? Math.max(0, feesToDate - invoicedCents)
       : toNumber(time?.uninvoicedCents ?? "0") + toNumber(expenses?.uninvoicedCents ?? "0");
+
+  // Billed past what has been earned. Not an error, but the page should say so
+  // rather than showing a flat zero left to invoice.
+  const overbilledCents =
+    project.billingType === "fixed_fee" ? Math.max(0, invoicedCents - feesToDate) : 0;
 
   const budgetIsHours = project.budgetBy.endsWith("_hours");
   const budgetValue = budgetIsHours ? project.budgetSeconds : project.budgetFeeCents;
@@ -719,6 +825,8 @@ export async function projectSummary(ctx: Ctx, projectId: string): Promise<Proje
     expenseCents,
     invoicedCents,
     uninvoicedCents,
+    overbilledCents,
+    feesToDateCents: project.billingType === "fixed_fee" ? feesToDate : null,
     budget: {
       by: project.budgetBy,
       budget: budgetValue ?? null,
@@ -728,6 +836,36 @@ export async function projectSummary(ctx: Ctx, projectId: string): Promise<Proje
       monthly: project.budgetResetsMonthly,
     },
   };
+}
+
+/**
+ * The fee a fixed-fee project has earned by a date.
+ *
+ * BACKEND_PRD section 4.11: a single fee is earned in full once the project has
+ * started, a monthly fee accrues one month at a time from the start date. A
+ * project with no start date is treated as having started, because the
+ * alternative is telling someone their retainer has earned nothing.
+ */
+function feesEarnedToDate(
+  project: { billingType: string; feeCents: number | null; feeCadence: string | null; startsOn: string | null },
+  today: string
+): number {
+  const fee = project.feeCents ?? 0;
+  if (project.billingType !== "fixed_fee" || fee === 0) return 0;
+  if (project.feeCadence !== "monthly") return fee;
+  if (!project.startsOn) return fee;
+  if (today < project.startsOn) return 0;
+
+  const startYear = Number(project.startsOn.slice(0, 4));
+  const startMonth = Number(project.startsOn.slice(5, 7));
+  const nowYear = Number(today.slice(0, 4));
+  const nowMonth = Number(today.slice(5, 7));
+  const startDay = Number(project.startsOn.slice(8, 10));
+  const nowDay = Number(today.slice(8, 10));
+
+  let months = (nowYear - startYear) * 12 + (nowMonth - startMonth);
+  if (nowDay >= startDay) months += 1;  // the current month has come round
+  return Math.max(0, months) * fee;
 }
 
 /** The project page chart: cumulative value or hours per week. */

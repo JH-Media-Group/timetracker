@@ -104,6 +104,7 @@ async function editabilityContextFor(
 /* -------------------------------------------------------------------- read */
 
 export interface ExpenseQuery {
+  limit?: number;
   from?: IsoDate;
   to?: IsoDate;
   userId?: string;
@@ -128,7 +129,7 @@ export async function listExpenses(ctx: Ctx, q: ExpenseQuery = {}): Promise<Expe
     .leftJoin(s.invoices, eq(s.invoices.id, s.expenses.invoiceId))
     .where(and(...conditions))
     .orderBy(desc(s.expenses.spentOn), asc(s.expenses.createdAt))
-    .limit(5000);
+    .limit(q.limit ?? 5000);
 
   if (rows.length === 0) return [];
 
@@ -311,20 +312,42 @@ export async function updateExpense(
       if (!input.isReimbursable) patch.reimbursedAt = null;
     }
 
-    if (input.units !== undefined || input.totalCents !== undefined) {
+    // Recomputed whenever the category changes too, not only when units or the
+    // total do. Switching a flat expense to a unit-priced category and sending
+    // a total but no units used to fall straight through to the client's
+    // number, which is the hole `createExpense` was careful to close.
+    if (input.units !== undefined || input.totalCents !== undefined || input.categoryId !== undefined) {
       const categoryId = input.categoryId ?? before.categoryId;
       const [category] = await tx.db
-        .select({ unitPriceCents: s.expenseCategories.unitPriceCents })
+        .select({ unitPriceCents: s.expenseCategories.unitPriceCents, name: s.expenseCategories.name })
         .from(s.expenseCategories)
         .where(eq(s.expenseCategories.id, categoryId))
         .limit(1);
+      if (!category) throw validationFailed({ categoryId: ["That category does not exist."] });
 
       const units = input.units ?? (before.units == null ? null : Number(before.units));
-      patch.units = units == null ? null : String(units);
-      patch.totalCents =
-        category?.unitPriceCents != null && units != null
-          ? Math.round(units * category.unitPriceCents)
-          : (input.totalCents ?? before.totalCents);
+
+      if (category.unitPriceCents != null) {
+        // A unit-priced category computes its own total, always. Without units
+        // there is nothing to compute from, so ask for them rather than
+        // accepting whatever amount was sent.
+        if (units == null) {
+          throw validationFailed({
+            units: [`${category.name} is charged per unit, so it needs a number of units.`],
+          });
+        }
+        patch.units = String(units);
+        patch.totalCents = Math.round(units * category.unitPriceCents);
+      } else {
+        // Moving off a unit-priced category: the old unit count no longer means
+        // anything and would otherwise sit on the row implying a rate.
+        patch.units = input.units === undefined ? null : (units == null ? null : String(units));
+        patch.totalCents = input.totalCents ?? before.totalCents;
+      }
+
+      if ((patch.totalCents as number) < 0) {
+        throw validationFailed({ totalCents: ["An expense cannot be negative."] });
+      }
     }
 
     const [after] = await tx.db.update(s.expenses).set(patch as never).where(eq(s.expenses.id, id)).returning();

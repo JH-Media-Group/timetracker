@@ -14,14 +14,14 @@
  *     client has been told a number, and the number cannot move underneath it.
  */
 
-import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, exists, inArray, isNull, sql } from "drizzle-orm";
 import { assertCan, lockNamed, withTransaction, type Ctx } from "@/server/ctx";
 import * as s from "@/server/db/schema";
 import { newId, randomToken } from "@/server/db/ids";
 import { invoiceScope } from "@/server/auth/scope";
 import { AppError, notFound, validationFailed } from "@/server/errors";
 import { serializeInvoice, type InvoiceDto } from "@/server/serialize";
-import { computeInvoiceTotals, lineAmount, secondsToCents } from "@/domain/money";
+import { computeInvoiceTotals, lineAmount } from "@/domain/money";
 import {
   canDelete, canTransition, clientCodeFrom, displayState, renderInvoiceNumber,
   stateAfterPayment, type InvoiceState,
@@ -58,9 +58,11 @@ async function todayFor(ctx: Ctx): Promise<IsoDate> {
   return dayIn(settings.timezone, ctx.now());
 }
 
+export const LIST_LIMIT = 1000;
+
 export async function listInvoices(
   ctx: Ctx,
-  opts: { state?: string; clientId?: string } = {}
+  opts: { state?: string; clientId?: string; limit?: number } = {}
 ): Promise<InvoiceDto[]> {
   assertCan(ctx, "invoice:view");
 
@@ -75,7 +77,7 @@ export async function listInvoices(
     .from(s.invoices)
     .where(and(...conditions))
     .orderBy(desc(s.invoices.issueDate), desc(s.invoices.number))
-    .limit(1000);
+    .limit(opts.limit ?? LIST_LIMIT);
 
   if (rows.length === 0) return [];
 
@@ -278,6 +280,10 @@ export async function previewLines(
       )
     );
 
+  // Cent-seconds, not cents. Dividing per entry and summing afterwards drifts
+  // in one direction across thousands of rows, so the product is accumulated
+  // and divided exactly once, at the end.
+  const centSeconds = new Map<string, number>();
   const buckets = new Map<string, UninvoicedLine>();
 
   for (const e of entries) {
@@ -299,7 +305,7 @@ export async function previewLines(
     };
 
     bucket.quantity += e.seconds / 3600;
-    bucket.amountCents += secondsToCents(e.seconds, e.rate);
+    centSeconds.set(key, (centSeconds.get(key) ?? 0) + e.seconds * e.rate);
     bucket.timeEntryIds.push(e.entryId);
     buckets.set(key, bucket);
   }
@@ -345,9 +351,19 @@ export async function previewLines(
     };
     bucket.quantity += 1;
     bucket.amountCents += x.totalCents;
-    bucket.unitPriceCents = Math.round(bucket.amountCents / Math.max(1, bucket.quantity));
     bucket.expenseIds.push(x.expenseId);
     buckets.set(key, bucket);
+  }
+
+  for (const [key, bucket] of buckets) {
+    if (bucket.kind === "time") bucket.amountCents = Math.round((centSeconds.get(key) ?? 0) / 3600);
+    // The unit price is a display of the line, and the line's value is its
+    // amount. Deriving the amount back from a rounded price is what put the
+    // preview and the invoice a couple of dollars apart.
+    bucket.unitPriceCents =
+      bucket.kind === "expense"
+        ? Math.round(bucket.amountCents / Math.max(1, bucket.quantity))
+        : bucket.unitPriceCents;
   }
 
   return [...buckets.values()]
@@ -373,6 +389,14 @@ export interface InvoiceInput {
     description: string;
     quantity: number;
     unitPriceCents: number;
+    /**
+     * The line's value, when the caller knows it exactly.
+     *
+     * A time line is worth `sum(seconds x rate) / 3600`, which is not
+     * `hours x rate` once the hours have been rounded for display. When this is
+     * present it is authoritative and `quantity x unitPrice` is only a label.
+     */
+    amountCents?: number;
     isTaxed?: boolean;
     itemType?: string;
   }[];
@@ -442,7 +466,7 @@ export async function createInvoice(ctx: Ctx, input: InvoiceInput): Promise<Invo
       description: l.description,
       quantity: String(l.quantity),
       unitPriceCents: l.unitPriceCents,
-      amountCents: lineAmount(l.quantity, l.unitPriceCents),
+      amountCents: l.amountCents ?? lineAmount(l.quantity, l.unitPriceCents),
       isTaxed: l.isTaxed ?? true,
     }));
 
@@ -493,7 +517,7 @@ export async function createInvoice(ctx: Ctx, input: InvoiceInput): Promise<Invo
 
     // Claim the underlying work. This is what stops the same hour being billed
     // twice, and it is why deleting a draft has to release it again.
-    await attachRecords(tx, id, input.timeEntryIds ?? [], input.expenseIds ?? []);
+    await attachRecords(tx, id, input.clientId, input.timeEntryIds ?? [], input.expenseIds ?? []);
 
     tx.audit({
       action: "invoice.create",
@@ -508,14 +532,44 @@ export async function createInvoice(ctx: Ctx, input: InvoiceInput): Promise<Invo
   });
 }
 
-async function attachRecords(ctx: Ctx, invoiceId: string, timeEntryIds: string[], expenseIds: string[]) {
+/**
+ * Claims time and expenses for an invoice.
+ *
+ * Two guarantees, and both matter. The records must be *claimable*: unclaimed,
+ * billable, not billed elsewhere, not deleted, and belonging to this invoice's
+ * client. Without the client check any id at all could be attached, which
+ * quietly locks another client's work out of their own invoice. And the claim
+ * must be *atomic*: the conditional UPDATE takes row locks, and comparing the
+ * returned count to the requested one turns a partial claim into a rollback
+ * rather than a half-billed invoice.
+ */
+async function attachRecords(
+  ctx: Ctx,
+  invoiceId: string,
+  clientId: string,
+  timeEntryIds: string[],
+  expenseIds: string[]
+) {
   if (timeEntryIds.length) {
-    // Only claim what is genuinely unclaimed: a concurrent invoice may have
-    // taken some of these between the preview and the create.
+    const claimable = ctx.db
+      .select({ id: s.projects.id })
+      .from(s.projects)
+      .where(and(eq(s.projects.id, s.timeEntries.projectId), eq(s.projects.clientId, clientId)));
+
     const claimed = await ctx.db
       .update(s.timeEntries)
       .set({ invoiceId })
-      .where(and(inArray(s.timeEntries.id, timeEntryIds), isNull(s.timeEntries.invoiceId)))
+      .where(
+        and(
+          inArray(s.timeEntries.id, timeEntryIds),
+          isNull(s.timeEntries.invoiceId),
+          eq(s.timeEntries.isBillable, true),
+          eq(s.timeEntries.billedExternally, false),
+          isNull(s.timeEntries.deletedAt),
+          isNull(s.timeEntries.timerStartedAt),
+          exists(claimable)
+        )
+      )
       .returning({ id: s.timeEntries.id });
 
     if (claimed.length !== timeEntryIds.length) {
@@ -528,10 +582,24 @@ async function attachRecords(ctx: Ctx, invoiceId: string, timeEntryIds: string[]
   }
 
   if (expenseIds.length) {
+    const claimable = ctx.db
+      .select({ id: s.projects.id })
+      .from(s.projects)
+      .where(and(eq(s.projects.id, s.expenses.projectId), eq(s.projects.clientId, clientId)));
+
     const claimed = await ctx.db
       .update(s.expenses)
       .set({ invoiceId })
-      .where(and(inArray(s.expenses.id, expenseIds), isNull(s.expenses.invoiceId)))
+      .where(
+        and(
+          inArray(s.expenses.id, expenseIds),
+          isNull(s.expenses.invoiceId),
+          eq(s.expenses.isBillable, true),
+          eq(s.expenses.billedExternally, false),
+          isNull(s.expenses.deletedAt),
+          exists(claimable)
+        )
+      )
       .returning({ id: s.expenses.id });
 
     if (claimed.length !== expenseIds.length) {
@@ -542,6 +610,15 @@ async function attachRecords(ctx: Ctx, invoiceId: string, timeEntryIds: string[]
       );
     }
   }
+}
+
+/** Gives back everything an invoice was holding, so it can be billed again. */
+async function releaseRecords(ctx: Ctx, invoiceId: string) {
+  await ctx.db
+    .update(s.timeEntries)
+    .set({ invoiceId: null })
+    .where(eq(s.timeEntries.invoiceId, invoiceId));
+  await ctx.db.update(s.expenses).set({ invoiceId: null }).where(eq(s.expenses.invoiceId, invoiceId));
 }
 
 /* ------------------------------------------------------------------ update */
@@ -577,8 +654,12 @@ export async function updateInvoice(
     const dueDate = (input.dueDate ?? before.dueDate) as IsoDate;
     if (dueDate < issueDate) throw validationFailed({ dueDate: ["The due date is before the issue date."] });
 
-    // Replacing the lines means recomputing every stored intermediate.
     if (input.lines) {
+      // Detach what this draft was holding before the new lines claim their own
+      // records. Without it, deleting a line leaves its hours claimed against
+      // an invoice that no longer bills them: permanently uninvoiceable, and
+      // invisible to the next preview.
+      await releaseRecords(tx, id);
       await tx.db.delete(s.invoiceLineItems).where(eq(s.invoiceLineItems.invoiceId, id));
 
       const lines = input.lines.map((l, i) => ({
@@ -589,16 +670,34 @@ export async function updateInvoice(
         description: l.description,
         quantity: String(l.quantity),
         unitPriceCents: l.unitPriceCents,
-        amountCents: lineAmount(l.quantity, l.unitPriceCents),
+        amountCents: l.amountCents ?? lineAmount(l.quantity, l.unitPriceCents),
         isTaxed: l.isTaxed ?? true,
       }));
       if (lines.length) await tx.db.insert(s.invoiceLineItems).values(lines);
 
-      const taxPercent = input.taxPercent ?? numberOrNull(before.taxPercent);
-      const discountPercent = input.discountPercent ?? numberOrNull(before.discountPercent);
+      await attachRecords(tx, id, before.clientId, input.timeEntryIds ?? [], input.expenseIds ?? []);
+    }
+
+    // Totals are recomputed from whatever the lines now are, whether or not
+    // this request replaced them. Guarding this on `input.lines` meant a
+    // tax-only or discount-only edit returned 200 and changed nothing.
+    if (input.lines || input.taxPercent !== undefined || input.discountPercent !== undefined) {
+      const taxPercent = input.taxPercent === undefined ? numberOrNull(before.taxPercent) : input.taxPercent;
+      const discountPercent =
+        input.discountPercent === undefined ? numberOrNull(before.discountPercent) : input.discountPercent;
+
+      const stored = await tx.db
+        .select({
+          quantity: s.invoiceLineItems.quantity,
+          unitPriceCents: s.invoiceLineItems.unitPriceCents,
+          amountCents: s.invoiceLineItems.amountCents,
+          isTaxed: s.invoiceLineItems.isTaxed,
+        })
+        .from(s.invoiceLineItems)
+        .where(eq(s.invoiceLineItems.invoiceId, id));
 
       const totals = computeInvoiceTotals(
-        lines.map((l) => ({
+        stored.map((l) => ({
           quantity: Number(l.quantity),
           unitPriceCents: l.unitPriceCents,
           amountCents: l.amountCents,
@@ -614,6 +713,15 @@ export async function updateInvoice(
       patch.totalCents = totals.totalCents;
       patch.taxPercent = taxPercent == null ? null : String(taxPercent);
       patch.discountPercent = discountPercent == null ? null : String(discountPercent);
+
+      // A paid invoice edited upward is no longer paid. Leaving the state alone
+      // would drop it out of receivables while it is still owed.
+      const settled = await settledCents(tx, id, before.paidCents);
+      const state = stateAfterPayment(totals.totalCents, settled, before.state as InvoiceState);
+      if (state !== before.state) {
+        patch.state = state;
+        patch.paidAt = state === "paid" ? (before.paidAt ?? tx.now()) : null;
+      }
     }
 
     // Editing a sent invoice rotates the pay token: the old link showed
@@ -640,6 +748,24 @@ export async function updateInvoice(
 
 const numberOrNull = (v: string | null) => (v == null ? null : Number(v));
 
+/**
+ * What has actually settled the invoice.
+ *
+ * A retainer draw is money the client already handed over, so an invoice fully
+ * covered by one is paid. Counting only `invoice_payments` left such an invoice
+ * open forever: it aged into "Late" and sat in the receivables total at face
+ * value while its own detail page showed a zero balance.
+ */
+async function settledCents(ctx: Ctx, invoiceId: string, paidCents?: number): Promise<number> {
+  const paid = paidCents ?? (await sumPayments(ctx, invoiceId));
+  const [row] = await ctx.db
+    .select({ drawCents: s.invoices.retainerDrawCents })
+    .from(s.invoices)
+    .where(eq(s.invoices.id, invoiceId))
+    .limit(1);
+  return paid + (row?.drawCents ?? 0);
+}
+
 /* ------------------------------------------------------------ state machine */
 
 export async function markSent(ctx: Ctx, id: string): Promise<InvoiceDetail> {
@@ -655,6 +781,45 @@ export async function markSent(ctx: Ctx, id: string): Promise<InvoiceDetail> {
 
     if (!canTransition(before.state as InvoiceState, "mark_sent")) {
       throw new AppError("invoice_state_invalid", `A ${before.state} invoice has already been sent.`);
+    }
+
+    // Hold the row for the rest of the transaction. Two concurrent sends can
+    // otherwise both read `draft`, both pass the guard above, and both draw
+    // against the retainer.
+    await tx.db.execute(sql`SELECT 1 FROM invoices WHERE id = ${id} FOR UPDATE`);
+    const [locked] = await tx.db
+      .select({ state: s.invoices.state })
+      .from(s.invoices)
+      .where(eq(s.invoices.id, id))
+      .limit(1);
+    if (!locked || !canTransition(locked.state as InvoiceState, "mark_sent")) {
+      throw new AppError("invoice_state_invalid", "That invoice has already been sent.");
+    }
+
+    // Revalidate before locking anything. A draft can sit for a week, and in
+    // that week an attached entry can be deleted, un-billed, or moved onto
+    // another client's project. Sending is the moment the numbers become a
+    // promise to somebody, so it is the last chance to notice.
+    const [stale] = await tx.db
+      .select({ count: sql<string>`COUNT(*)::text` })
+      .from(s.timeEntries)
+      .innerJoin(s.projects, eq(s.projects.id, s.timeEntries.projectId))
+      .where(
+        and(
+          eq(s.timeEntries.invoiceId, id),
+          sql`(
+            ${s.timeEntries.deletedAt} IS NOT NULL
+            OR NOT ${s.timeEntries.isBillable}
+            OR ${s.projects.clientId} <> ${before.clientId}
+          )`
+        )
+      );
+    if (Number(stale?.count ?? 0) > 0) {
+      throw new AppError(
+        "attached_entries_changed",
+        "Some of the time on this invoice changed since the lines were generated. Regenerate them before sending.",
+        { meta: { staleEntries: Number(stale?.count ?? 0) } }
+      );
     }
 
     const sentAt = tx.now();
@@ -867,7 +1032,11 @@ export async function recordPayment(
     // Recomputed from the rows rather than incremented, so a voided payment and
     // a new one cannot drift the stored total away from the ledger.
     const paidCents = await sumPayments(tx, id);
-    const state = stateAfterPayment(before.totalCents, paidCents, before.state as InvoiceState);
+    const state = stateAfterPayment(
+      before.totalCents,
+      paidCents + before.retainerDrawCents,
+      before.state as InvoiceState
+    );
 
     await tx.db
       .update(s.invoices)
@@ -964,11 +1133,15 @@ async function sumPayments(ctx: Ctx, invoiceId: string): Promise<number> {
  * that might never be sent.
  */
 async function drawRetainer(ctx: Ctx, invoiceId: string, clientId: string) {
+  // FOR UPDATE, because what follows is read, compute, write on a money column.
+  // Two concurrent movements without the lock lose one of them: both write a
+  // ledger row, only one balance survives, and the two disagree forever.
   const [retainer] = await ctx.db
     .select()
     .from(s.retainers)
     .where(and(eq(s.retainers.clientId, clientId), isNull(s.retainers.projectId), isNull(s.retainers.archivedAt)))
-    .limit(1);
+    .limit(1)
+    .for("update");
 
   if (!retainer || retainer.balanceCents <= 0) return;
 
@@ -978,6 +1151,7 @@ async function drawRetainer(ctx: Ctx, invoiceId: string, clientId: string) {
     .where(eq(s.invoices.id, invoiceId))
     .limit(1);
   if (!invoice) return;
+
 
   const draw = Math.min(retainer.balanceCents, invoice.totalCents);
   if (draw <= 0) return;
@@ -997,6 +1171,17 @@ async function drawRetainer(ctx: Ctx, invoiceId: string, clientId: string) {
 
   await ctx.db.update(s.retainers).set({ balanceCents: balanceAfter }).where(eq(s.retainers.id, retainer.id));
   await ctx.db.update(s.invoices).set({ retainerDrawCents: draw }).where(eq(s.invoices.id, invoiceId));
+
+  // A draw is money settling the invoice, so an invoice it fully covers is paid
+  // the moment it is sent rather than sitting open against a balance of zero.
+  const paidCents = await sumPayments(ctx, invoiceId);
+  const state = stateAfterPayment(invoice.totalCents, paidCents + draw, "open");
+  if (state === "paid") {
+    await ctx.db
+      .update(s.invoices)
+      .set({ state, paidAt: ctx.now() })
+      .where(eq(s.invoices.id, invoiceId));
+  }
 
   ctx.audit({
     action: "retainer.draw",
@@ -1020,11 +1205,27 @@ async function reverseRetainerDraw(
 ) {
   if (drawCents <= 0) return;
 
+  // The credit goes back to the retainer that was actually drawn, which the
+  // draw recorded on its own ledger row. Looking the client up again returns
+  // whichever retainer matches today, and if the original was archived and
+  // replaced in between, that is the wrong one.
+  const [source] = await ctx.db
+    .select({ retainerId: s.retainerTransactions.retainerId })
+    .from(s.retainerTransactions)
+    .where(and(eq(s.retainerTransactions.invoiceId, invoiceId), eq(s.retainerTransactions.kind, "draw")))
+    .orderBy(desc(s.retainerTransactions.occurredAt))
+    .limit(1);
+
   const [retainer] = await ctx.db
     .select()
     .from(s.retainers)
-    .where(and(eq(s.retainers.clientId, clientId), isNull(s.retainers.projectId)))
-    .limit(1);
+    .where(
+      source
+        ? eq(s.retainers.id, source.retainerId)
+        : and(eq(s.retainers.clientId, clientId), isNull(s.retainers.projectId))
+    )
+    .limit(1)
+    .for("update");
   if (!retainer) return;
 
   const balanceAfter = retainer.balanceCents + drawCents;
@@ -1116,7 +1317,12 @@ export async function addRetainerTransaction(
   if (input.amountCents <= 0) throw validationFailed({ amountCents: ["An amount is required."] });
 
   return withTransaction(ctx, async (tx) => {
-    const [retainer] = await tx.db.select().from(s.retainers).where(eq(s.retainers.id, retainerId)).limit(1);
+    const [retainer] = await tx.db
+      .select()
+      .from(s.retainers)
+      .where(eq(s.retainers.id, retainerId))
+      .limit(1)
+      .for("update");
     if (!retainer) throw notFound("That retainer");
 
     const delta = input.kind === "draw" ? -input.amountCents : input.amountCents;

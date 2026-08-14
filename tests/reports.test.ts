@@ -169,6 +169,24 @@ describe("the time report", () => {
     expect(report.rows).toHaveLength(1);
     expect(report.totals.totalSeconds).toBe(7200);
   });
+
+  it("shows a Member their hours and not what those hours are worth", async () => {
+    await addEntry(member, ptTm, tmProject, { seconds: 7200, billableRate: 9000, costRate: 3000 });
+    const period = { from: "2026-08-01", to: "2026-08-31" } as const;
+
+    // Everybody holds report:view_own, so the gate cannot be what protects this.
+    // Two hours and a value of $180 is a billable rate of $90 stated to the
+    // cent, which is precisely what a Member is not supposed to be able to see.
+    const asMember = await timeReport(ctxFor(member, "member"), period);
+    expect(asMember.totals.totalSeconds).toBe(7200);
+    expect(asMember.totals.billableCents).toBe(0);
+    expect(asMember.rows.every((r) => r.billableCents === 0)).toBe(true);
+
+    // Same hours, same query, seen by somebody who holds the capability.
+    const asAdmin = await timeReport(ctxFor(admin, "administrator"), period);
+    expect(asAdmin.totals.totalSeconds).toBe(7200);
+    expect(asAdmin.totals.billableCents).toBe(18000);
+  });
 });
 
 /* ======================================================= profitability */
@@ -256,6 +274,27 @@ describe("the team report", () => {
     expect(row.billableShare).toBe(1);
   });
 
+  it("shows a team-scoped reviewer their team, not the company", async () => {
+    await addEntry(admin, ptTm, tmProject, { seconds: 3600, billableRate: 15000, costRate: 6000 });
+    await addEntry(member, ptTm, tmProject, { seconds: 3600, billableRate: 9000, costRate: 3000 });
+    const period = { from: "2026-08-10", to: "2026-08-16" } as const;
+
+    // A project manager reaches the people on the projects they manage. The
+    // member is on the T&M project, the admin manages it, so a manager who
+    // manages neither reaches only themselves.
+    const outsider = newId();
+    await db.insert(s.users).values({
+      id: outsider, email: "outsider@jhmediagroup.com", firstName: "Out", lastName: "Sider",
+      profileId: profiles.project_manager!, weeklyCapacitySeconds: 144000,
+    });
+
+    const report = await teamReport(ctxFor(outsider, "project_manager"), period);
+    expect(report.rows.map((r) => r.userId)).toEqual([outsider]);
+
+    const everyone = await teamReport(ctxFor(admin, "administrator"), period);
+    expect(everyone.rows.length).toBeGreaterThan(1);
+  });
+
   it("hides cost from anybody without the capability", async () => {
     await addEntry(admin, ptTm, tmProject, { seconds: 3600, billableRate: 15000, costRate: 6000 });
 
@@ -304,6 +343,39 @@ describe("the invoicing report", () => {
     expect(report.totals.issuedCents).toBe(100000 + 75000);
     expect(report.totals.outstandingCents).toBe(100000 + 30000);
     expect(report.totals.overdueCents).toBe(30000);
+  });
+
+  it("counts collections when the money arrived, not when the invoice was raised", async () => {
+    const ctx = ctxFor(admin, "administrator");
+    const [invoice] = await db.select().from(s.invoices).where(eq(s.invoices.number, "A-3"));
+    await db.insert(s.invoicePayments).values({
+      id: newId(),
+      invoiceId: invoice!.id,
+      amountCents: invoice!.totalCents,
+      paidAt: new Date("2026-08-05T12:00:00Z"),
+      recordedBy: admin,
+    });
+
+    // A-3 was issued in a different month. Reading paidCents against issueDate
+    // reported the cash in the month the invoice was raised.
+    const august = await invoicingReport(ctx, { from: "2026-08-01", to: "2026-08-31" });
+    expect(august.totals.collectedCents).toBe(invoice!.totalCents);
+    expect(august.monthly.find((m) => m.month === "2026-08")!.collectedCents).toBe(invoice!.totalCents);
+
+    const july = await invoicingReport(ctx, { from: "2026-07-01", to: "2026-07-31" });
+    expect(july.totals.collectedCents).toBe(0);
+  });
+
+  it("shows the period's invoices plus whatever is still open, and nothing else", async () => {
+    const ctx = ctxFor(admin, "administrator");
+    const narrow = await invoicingReport(ctx, { from: "2026-08-01", to: "2026-08-31" });
+
+    // A settled invoice from outside the window is not this month's business.
+    // An open one from outside it very much is.
+    for (const row of narrow.rows) {
+      const inPeriod = row.issueDate >= "2026-08-01" && row.issueDate <= "2026-08-31";
+      expect(inPeriod || row.state === "open").toBe(true);
+    }
   });
 
   it("derives late from the due date rather than storing it", async () => {

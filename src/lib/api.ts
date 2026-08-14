@@ -1,116 +1,633 @@
 /**
- * Mock API.
+ * The API client.
  *
- * An in-memory store seeded from `src/mock/seed.ts`, persisted to localStorage
- * so edits survive a reload while testing. Every function returns a Promise with
- * a little latency, so loading and optimistic states are exercised for real
- * rather than being theoretical.
+ * One module stands between the components and `/api/v1`. Every function here
+ * returns the domain types in `./types`, so nothing above this file knows the
+ * shape of a wire payload, and the whole front end was built and tested against
+ * an in-memory version of exactly these signatures.
  *
- * THIS IS THE ONLY FILE THAT KNOWS THE BACKEND DOES NOT EXIST YET. Swapping to
- * the real `/api/v1` means rewriting the bodies of these functions to `fetch`;
- * every signature and every component stays as it is.
+ * Three jobs, and only these three:
+ *
+ *   1. Speak HTTP. One `request()` unwraps the `{ data, meta }` envelope, turns
+ *      an `application/problem+json` body into an `ApiError` carrying its code
+ *      and field errors, and sends an unauthenticated caller to sign in.
+ *   2. Adapt. The server is deliberately explicit where the client is
+ *      convenient: it sends `null` where the UI wants `undefined`, an
+ *      `avatarKey` where the UI wants a `photo` src, and a `profileId` where a
+ *      badge wants the word "Accounting". The `from*` functions below are the
+ *      only place those two vocabularies meet.
+ *   3. Keep the signature. Each function looks the same as it did against the
+ *      mock, because a component that has to know whether its data came from
+ *      memory or from Postgres is a component that will be rewritten twice.
+ *
+ * What is NOT here: business logic. If something looks like a rule (which hours
+ * can be billed, what an invoice total is), it belongs on the server, and if it
+ * appears to be missing, it is because the server already did it.
  */
 
 "use client";
 
-import * as seed from "@/mock/seed";
 import type {
-  Client, Expense, ExpenseCategory, Invoice, InvoiceLineItem, Project, Settings, Task,
-  TimeEntry, TimesheetSubmission, User, ID, RecurringInvoice, Retainer,
+  Client, Expense, ExpenseCategory, Invoice, InvoiceLineItem, InvoicePayment, InvoiceEvent,
+  Project, Settings, Task, TimeEntry, TimesheetSubmission, User, ID, InvoiceState,
+  PermissionProfile, RecurringInvoice, Retainer, BillingType, BillBy, BudgetBy,
 } from "./types";
-import { addDays, isoDate, startOfWeek, toDate } from "./format";
-import { secondsToCents } from "./derive";
+import { startOfWeek } from "./format";
 
-const KEY = "tally-mock-db-v1";
-const LATENCY = 90;
+const BASE = "/api/v1";
 
-interface DB {
-  users: User[]; clients: Client[]; projects: Project[]; tasks: Task[];
-  timeEntries: TimeEntry[]; expenses: Expense[]; expenseCategories: ExpenseCategory[];
-  submissions: TimesheetSubmission[]; invoices: Invoice[];
-  recurringInvoices: RecurringInvoice[]; retainers: Retainer[];
-  settings: Settings; pinnedProjectIds: ID[];
+/* =================================================================== errors */
+
+/**
+ * A failed request, with the parts a form needs.
+ *
+ * `code` is the server's stable identifier (`record_locked`, `period_approved`,
+ * `timer_already_running`), which is what callers should branch on. `fields`
+ * maps a field name to its messages, so a validation failure can be shown
+ * against the input that caused it instead of as a banner.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+  readonly code: string;
+  readonly fields?: Record<string, string[]>;
+  readonly requestId?: string;
+  readonly meta?: Record<string, unknown>;
+
+  constructor(init: {
+    status: number; code: string; message: string;
+    fields?: Record<string, string[]>; requestId?: string; meta?: Record<string, unknown>;
+  }) {
+    super(init.message);
+    this.name = "ApiError";
+    this.status = init.status;
+    this.code = init.code;
+    this.fields = init.fields;
+    this.requestId = init.requestId;
+    this.meta = init.meta;
+  }
+
+  /** The first message for a field, for inline form errors. */
+  fieldError(name: string): string | undefined {
+    return this.fields?.[name]?.[0];
+  }
 }
 
-function fresh(): DB {
-  return {
-    users: seed.users, clients: seed.clients, projects: seed.projects, tasks: seed.tasks,
-    timeEntries: seed.timeEntries, expenses: seed.expenses,
-    expenseCategories: seed.expenseCategories, submissions: seed.submissions,
-    invoices: seed.invoices, recurringInvoices: seed.recurringInvoices,
-    retainers: seed.retainers, settings: seed.settings, pinnedProjectIds: [],
-  };
-}
+/** True when the failure is the server refusing, not the network falling over. */
+export const isApiError = (e: unknown): e is ApiError => e instanceof ApiError;
 
-let db: DB = fresh();
-let loaded = false;
+/* ================================================================ transport */
 
-function load() {
-  if (loaded || typeof window === "undefined") return;
-  loaded = true;
-  try {
-    const raw = localStorage.getItem(KEY);
-    if (raw) db = { ...fresh(), ...JSON.parse(raw) };
-  } catch { /* corrupt or blocked storage: fall back to the seed */ }
-}
-function save() {
-  if (typeof window === "undefined") return;
-  try { localStorage.setItem(KEY, JSON.stringify(db)); } catch { /* quota or private mode */ }
-}
-export function resetDatabase() {
-  db = fresh();
-  try { localStorage.removeItem(KEY); } catch { /* ignore */ }
+type Query = Record<string, string | number | boolean | null | undefined>;
+
+function withQuery(path: string, query?: Query): string {
+  if (!query) return BASE + path;
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value === undefined || value === null || value === "") continue;
+    params.set(key, String(value));
+  }
+  const qs = params.toString();
+  return BASE + path + (qs ? `?${qs}` : "");
 }
 
 /**
- * Every response is a copy.
+ * Sends the browser to sign in, once.
  *
- * This is not politeness, it is correctness. Returning `db.clients` directly
- * hands the caller a live reference into the store, so the next `unshift`
- * mutates the object already sitting in the React Query cache. Query
- * invalidation then refetches, structural sharing finds old and new identical
- * (they are literally the same array), keeps the previous reference, and every
- * `useMemo` keyed on it skips: a client you just created renders as "not
- * found". A real `fetch` always yields fresh objects, so the mock does too.
+ * A page can have a dozen queries in flight when a session expires, and without
+ * the latch each of their 401s would push another history entry. The `next`
+ * parameter is the current path so the person lands back where they were.
  */
-const clone = <T,>(value: T): T =>
-  typeof structuredClone === "function" ? structuredClone(value) : (JSON.parse(JSON.stringify(value)) as T);
+let redirecting = false;
+function toSignIn() {
+  if (typeof window === "undefined" || redirecting) return;
+  if (window.location.pathname.startsWith("/signin")) return;
+  redirecting = true;
+  const next = window.location.pathname + window.location.search;
+  window.location.href = `/signin?next=${encodeURIComponent(next)}`;
+}
 
-const delay = <T,>(value: T): Promise<T> =>
-  new Promise((r) => setTimeout(() => r(clone(value)), LATENCY + Math.random() * 60));
+async function request<T>(
+  method: string,
+  path: string,
+  options: { query?: Query; body?: unknown; idempotencyKey?: string } = {}
+): Promise<{ data: T; meta?: Record<string, unknown> }> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (options.body !== undefined) headers["Content-Type"] = "application/json";
+  if (options.idempotencyKey) headers["Idempotency-Key"] = options.idempotencyKey;
 
-const uid = (p: string) => `${p}${Math.random().toString(36).slice(2, 9)}`;
+  let response: Response;
+  try {
+    response = await fetch(withQuery(path, options.query), {
+      method,
+      headers,
+      credentials: "same-origin",
+      cache: "no-store",
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    });
+  } catch (cause) {
+    // A dropped connection is not a server error and must not be reported as
+    // one: "something went wrong" sends someone to check the logs for a request
+    // that never arrived.
+    throw new ApiError({
+      status: 0,
+      code: "network_error",
+      message: "Could not reach the server. Check your connection and try again.",
+      meta: { cause: String(cause) },
+    });
+  }
 
-/** The signed-in user. Real app reads this from the session. */
-export const CURRENT_USER_ID = seed.CURRENT_USER_ID;
-export const TODAY = seed.TODAY;
+  if (response.status === 401) {
+    toSignIn();
+    throw new ApiError({ status: 401, code: "unauthenticated", message: "Your session has ended. Sign in again." });
+  }
+
+  if (response.status === 204) return { data: null as T };
+
+  const text = await response.text();
+  let payload: unknown = null;
+  if (text) {
+    try { payload = JSON.parse(text); } catch { /* handled below */ }
+  }
+
+  if (!response.ok) {
+    const problem = (payload ?? {}) as {
+      detail?: string; title?: string; code?: string;
+      errors?: Record<string, string[]>; request_id?: string; meta?: Record<string, unknown>;
+    };
+    throw new ApiError({
+      status: response.status,
+      code: problem.code ?? "internal_error",
+      message: problem.detail ?? problem.title ?? `Request failed (${response.status}).`,
+      fields: problem.errors,
+      requestId: problem.request_id,
+      meta: problem.meta,
+    });
+  }
+
+  const envelope = (payload ?? {}) as { data: T; meta?: Record<string, unknown> };
+  return { data: envelope.data, meta: envelope.meta };
+}
+
+const get = async <T,>(path: string, query?: Query): Promise<T> => (await request<T>("GET", path, { query })).data;
+const post = async <T,>(path: string, body?: unknown, idempotencyKey?: string): Promise<T> =>
+  (await request<T>("POST", path, { body, idempotencyKey })).data;
+const patch = async <T,>(path: string, body: unknown): Promise<T> => (await request<T>("PATCH", path, { body })).data;
+const put = async <T,>(path: string, body: unknown): Promise<T> => (await request<T>("PUT", path, { body })).data;
+const del = async <T,>(path: string): Promise<T> => (await request<T>("DELETE", path)).data;
+
+/** A key for a money-moving POST, so a double click is one payment. */
+const idempotencyKey = () =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `k${Date.now()}${Math.random().toString(36).slice(2)}`;
+
+/* ================================================================= adapters */
+
+/** `null` on the wire, `undefined` in the UI. An optional field is absent. */
+const opt = <T,>(v: T | null | undefined): T | undefined => (v == null ? undefined : v);
+
+/**
+ * A stable colour for a project.
+ *
+ * The palette index is presentation, so it is not a column; it is derived from
+ * the id, which means the same project keeps the same colour in every session
+ * and on every device without anybody storing a choice nobody made.
+ */
+function colorIndexFor(id: string): number {
+  let hash = 0;
+  for (let i = 0; i < id.length; i++) hash = (hash * 31 + id.charCodeAt(i)) >>> 0;
+  return (hash % 12) + 1;
+}
+
+interface UserWire {
+  id: string; email: string; firstName: string; lastName: string;
+  avatarKey: string | null; employmentType: string; isOwner: boolean;
+  profileId: string; timezone: string; weeklyCapacitySeconds: number;
+  startedOn: string | null; archivedAt: string | null;
+  roles: string[]; departments: string[];
+  billableRateCents?: number; costRateCents?: number;
+}
+
+/**
+ * Profile id to base key.
+ *
+ * Populated from the bootstrap payload. A custom profile derived from
+ * "Project manager" reports the base it was cloned from, because the badge is
+ * telling you roughly what someone can do, not which row of a table they are.
+ */
+let profileKeyById = new Map<string, PermissionProfile>();
+
+function fromUser(u: UserWire): User {
+  return {
+    id: u.id,
+    firstName: u.firstName,
+    lastName: u.lastName,
+    email: u.email,
+    photo: opt(u.avatarKey),
+    employmentType: u.employmentType === "contractor" ? "contractor" : "employee",
+    profile: profileKeyById.get(u.profileId) ?? "member",
+    isOwner: u.isOwner,
+    roles: u.roles ?? [],
+    departments: u.departments ?? [],
+    weeklyCapacitySeconds: u.weeklyCapacitySeconds,
+    timezone: u.timezone,
+    // Absent means "you may not see this", which is not the same as zero. The
+    // UI renders a dash for undefined and "$0.00" for zero, so the difference
+    // has to survive the adapter.
+    billableRateCents: u.billableRateCents ?? 0,
+    costRateCents: u.costRateCents ?? 0,
+    archivedAt: opt(u.archivedAt),
+    startedOn: opt(u.startedOn),
+  };
+}
+
+interface ClientWire {
+  id: string; name: string; address: string | null; currency: string;
+  paymentTerm: string; paymentTermDays: number | null;
+  taxPercent: number | null; discountPercent: number | null;
+  invoicePrefix: string | null; archivedAt: string | null;
+  contacts: {
+    id: string; clientId: string; firstName: string | null; lastName: string | null;
+    title: string | null; email: string | null; phone: string | null; isPrimary: boolean;
+  }[];
+}
+
+function fromClient(c: ClientWire): Client {
+  return {
+    id: c.id,
+    name: c.name,
+    address: opt(c.address),
+    currency: c.currency,
+    paymentTerm: (c.paymentTerm === "custom" ? "net_30" : c.paymentTerm) as Client["paymentTerm"],
+    taxPercent: opt(c.taxPercent),
+    discountPercent: opt(c.discountPercent),
+    archivedAt: opt(c.archivedAt),
+    contacts: (c.contacts ?? []).map((k) => ({
+      id: k.id,
+      clientId: k.clientId,
+      firstName: k.firstName ?? "",
+      lastName: k.lastName ?? "",
+      title: opt(k.title),
+      email: opt(k.email),
+      phone: opt(k.phone),
+      isPrimary: k.isPrimary,
+    })),
+  };
+}
+
+interface ProjectWire {
+  id: string; clientId: string; name: string; code: string | null;
+  billingType: string; billBy: string; budgetBy: string;
+  budgetSeconds: number | null; budgetResetsMonthly: boolean; budgetAlertPercent: number | null;
+  startsOn: string | null; endsOn: string | null; notes: string | null;
+  reportVisibility: string; archivedAt: string | null;
+  tags: string[]; taskIds: string[]; memberIds: string[]; managerIds: string[];
+  hourlyRateCents?: number; feeCents?: number; feeCadence?: string | null; budgetFeeCents?: number | null;
+}
+
+function fromProject(p: ProjectWire): Project {
+  return {
+    id: p.id,
+    clientId: p.clientId,
+    name: p.name,
+    code: opt(p.code),
+    billingType: p.billingType as BillingType,
+    billBy: p.billBy as BillBy,
+    hourlyRateCents: opt(p.hourlyRateCents),
+    feeCents: opt(p.feeCents),
+    feeCadence: opt(p.feeCadence) as Project["feeCadence"],
+    budgetBy: p.budgetBy as BudgetBy,
+    budgetSeconds: opt(p.budgetSeconds),
+    budgetFeeCents: opt(p.budgetFeeCents),
+    budgetResetsMonthly: p.budgetResetsMonthly,
+    budgetAlertPercent: opt(p.budgetAlertPercent),
+    notes: opt(p.notes),
+    tags: p.tags ?? [],
+    startsOn: opt(p.startsOn),
+    endsOn: opt(p.endsOn),
+    colorIndex: colorIndexFor(p.id),
+    archivedAt: opt(p.archivedAt),
+    taskIds: p.taskIds ?? [],
+    memberIds: p.memberIds ?? [],
+    managerIds: p.managerIds ?? [],
+  };
+}
+
+interface TaskWire {
+  id: string; name: string; defaultBillable: boolean; isCommon: boolean;
+  defaultHourlyRateCents?: number | null; archivedAt?: string | null;
+}
+
+const fromTask = (t: TaskWire): Task => ({
+  id: t.id,
+  name: t.name,
+  defaultBillable: t.defaultBillable,
+  isCommon: t.isCommon,
+  defaultRateCents: opt(t.defaultHourlyRateCents),
+  archivedAt: opt(t.archivedAt),
+});
+
+interface TimeEntryWire {
+  id: string; userId: string; projectId: string; projectTaskId: string; taskId: string | null;
+  spentOn: string; startedAt: string | null; endedAt: string | null;
+  durationSeconds: number; timerStartedAt: string | null; notes: string | null;
+  isBillable: boolean; invoiceId: string | null; approvalId: string | null;
+  billedExternally: boolean; needsReview: boolean;
+  locked: boolean; lockReasons: string[];
+  billableRateCents?: number; costRateCents?: number;
+}
+
+/** The wire entry plus the two fields the grid reads but the mock never had. */
+export interface TimeEntryView extends TimeEntry {
+  locked: boolean;
+  lockReasons: string[];
+  needsReview: boolean;
+}
+
+function fromTimeEntry(e: TimeEntryWire): TimeEntryView {
+  return {
+    id: e.id,
+    userId: e.userId,
+    projectId: e.projectId,
+    taskId: e.taskId ?? e.projectTaskId,
+    spentOn: e.spentOn,
+    startedAt: opt(e.startedAt),
+    endedAt: opt(e.endedAt),
+    durationSeconds: e.durationSeconds,
+    timerStartedAt: opt(e.timerStartedAt),
+    notes: opt(e.notes),
+    isBillable: e.isBillable,
+    billableRateCents: e.billableRateCents ?? 0,
+    costRateCents: e.costRateCents ?? 0,
+    invoiceId: opt(e.invoiceId),
+    billedExternally: e.billedExternally,
+    approvalId: opt(e.approvalId),
+    locked: e.locked,
+    lockReasons: e.lockReasons ?? [],
+    needsReview: e.needsReview,
+  };
+}
+
+interface ExpenseWire {
+  id: string; userId: string; projectId: string; categoryId: string; spentOn: string;
+  units: number | null; totalCents: number; notes: string | null;
+  isBillable: boolean; isReimbursable: boolean; reimbursementState: string | null;
+  reimbursedAt: string | null; receiptFilename: string | null; invoiceId: string | null;
+  billedExternally: boolean; locked: boolean; lockReasons: string[];
+}
+
+export interface ExpenseView extends Expense {
+  locked: boolean;
+  lockReasons: string[];
+}
+
+const fromExpense = (x: ExpenseWire): ExpenseView => ({
+  id: x.id,
+  userId: x.userId,
+  projectId: x.projectId,
+  categoryId: x.categoryId,
+  spentOn: x.spentOn,
+  units: opt(x.units),
+  totalCents: x.totalCents,
+  notes: opt(x.notes),
+  isBillable: x.isBillable,
+  isReimbursable: x.isReimbursable,
+  reimbursementState: opt(x.reimbursementState) as Expense["reimbursementState"],
+  receiptName: opt(x.receiptFilename),
+  invoiceId: opt(x.invoiceId),
+  locked: x.locked,
+  lockReasons: x.lockReasons ?? [],
+});
+
+interface CategoryWire {
+  id: string; name: string; unitName: string | null; unitPriceCents: number | null; archivedAt: string | null;
+}
+
+const fromCategory = (c: CategoryWire): ExpenseCategory => ({
+  id: c.id,
+  name: c.name,
+  unitName: opt(c.unitName),
+  unitPriceCents: opt(c.unitPriceCents),
+  archivedAt: opt(c.archivedAt),
+});
+
+interface SubmissionWire {
+  id: string; userId: string; periodStart: string; periodEnd: string; state: string;
+  submittedAt: string | null; reviewedBy: string | null; reviewedAt: string | null;
+  reviewNote: string | null; totalSeconds: number; flags: string[]; amended: boolean;
+}
+
+export interface SubmissionView extends TimesheetSubmission {
+  amended: boolean;
+}
+
+const fromSubmission = (s: SubmissionWire): SubmissionView => ({
+  id: s.id,
+  userId: s.userId,
+  periodStart: s.periodStart,
+  periodEnd: s.periodEnd,
+  state: s.state as TimesheetSubmission["state"],
+  submittedAt: opt(s.submittedAt),
+  reviewedBy: opt(s.reviewedBy),
+  reviewedAt: opt(s.reviewedAt),
+  reviewNote: opt(s.reviewNote),
+  totalSeconds: s.totalSeconds,
+  flags: s.flags ?? [],
+  amended: s.amended,
+});
+
+interface InvoiceWire {
+  id: string; clientId: string; number: string; subject: string | null; notes: string | null;
+  poNumber: string | null; currency: string; issueDate: string; dueDate: string;
+  state: string; displayState: string;
+  subtotalCents: number; discountPercent: number | null; discountCents: number;
+  taxPercent: number | null; taxCents: number; totalCents: number;
+  paidCents: number; balanceCents: number; retainerDrawCents: number;
+  sentAt: string | null; paidAt: string | null; projectIds: string[];
+  lineItems?: {
+    id: string; position: number; projectId: string | null; description: string;
+    quantity: number; unitPriceCents: number; amountCents: number; isTaxed: boolean;
+  }[];
+  payments?: {
+    id: string; amountCents: number; paidAt: string; method: string | null;
+    reference: string | null; voidedAt: string | null;
+  }[];
+  events?: { id: string; kind: string; label: string; actorId: string | null; at: string; amountCents: number | null }[];
+}
+
+export interface InvoiceView extends Invoice {
+  /** The state as a person reads it: a sent invoice past its due date is late. */
+  displayState: InvoiceState;
+  balanceCents: number;
+  retainerDrawCents: number;
+}
+
+function fromInvoice(i: InvoiceWire): InvoiceView {
+  const lineItems: InvoiceLineItem[] = (i.lineItems ?? []).map((l) => ({
+    id: l.id,
+    invoiceId: i.id,
+    position: l.position,
+    itemType: l.isTaxed ? "Service" : "Expense",
+    projectId: opt(l.projectId),
+    description: l.description,
+    quantity: l.quantity,
+    unitPriceCents: l.unitPriceCents,
+    amountCents: l.amountCents,
+    isTaxed: l.isTaxed,
+  }));
+
+  // A voided payment is kept on the ledger but must not be counted as money in
+  // the door, so it never reaches the payments list the UI totals.
+  const payments: InvoicePayment[] = (i.payments ?? [])
+    .filter((p) => !p.voidedAt)
+    .map((p) => ({
+      id: p.id,
+      invoiceId: i.id,
+      amountCents: p.amountCents,
+      paidAt: p.paidAt,
+      method: opt(p.method),
+      reference: opt(p.reference),
+      recordedBy: "",
+    }));
+
+  const events: InvoiceEvent[] = (i.events ?? []).map((e) => ({
+    id: e.id,
+    invoiceId: i.id,
+    kind: e.kind,
+    label: e.label,
+    actorId: opt(e.actorId),
+    at: e.at,
+    amountCents: opt(e.amountCents),
+  }));
+
+  return {
+    id: i.id,
+    clientId: i.clientId,
+    number: i.number,
+    subject: opt(i.subject),
+    notes: opt(i.notes),
+    poNumber: opt(i.poNumber),
+    currency: i.currency,
+    issueDate: i.issueDate,
+    dueDate: i.dueDate,
+    state: i.displayState as InvoiceState,
+    displayState: i.displayState as InvoiceState,
+    subtotalCents: i.subtotalCents,
+    taxPercent: opt(i.taxPercent),
+    taxCents: i.taxCents,
+    discountPercent: opt(i.discountPercent),
+    discountCents: i.discountCents,
+    totalCents: i.totalCents,
+    paidCents: i.paidCents,
+    balanceCents: i.balanceCents,
+    retainerDrawCents: i.retainerDrawCents,
+    sentAt: opt(i.sentAt),
+    paidAt: opt(i.paidAt),
+    projectIds: i.projectIds ?? [],
+    lineItems,
+    payments,
+    events,
+  };
+}
+
+interface SettingsWire {
+  companyName: string; companyAddress: string | null; baseCurrency: string; timezone: string;
+  weekStartsOn: number; fiscalYearStartMonth: number; timerMode: string; timeDisplay: string;
+  roundingMinutes: number; roundingMode: string; requireNotes: string; allowFutureDates: boolean;
+  flagMissingBelowSeconds: number | null; lockTimesheetsAfterDays: number | null;
+  projectNotesVisibility: string; modules: Record<string, boolean>; invoiceNumberPattern: string;
+}
+
+const fromSettings = (s: SettingsWire): Settings => ({
+  companyName: s.companyName,
+  companyAddress: s.companyAddress ?? "",
+  baseCurrency: s.baseCurrency,
+  timezone: s.timezone,
+  weekStartsOn: (s.weekStartsOn === 0 ? 0 : 1) as 0 | 1,
+  timerMode: s.timerMode as Settings["timerMode"],
+  timeDisplay: s.timeDisplay as Settings["timeDisplay"],
+  roundingMinutes: s.roundingMinutes,
+  requireNotes: s.requireNotes as Settings["requireNotes"],
+  allowFutureDates: s.allowFutureDates,
+  flagMissingBelowSeconds: opt(s.flagMissingBelowSeconds),
+  modules: s.modules ?? {},
+});
 
 /* =============================================================== reference */
 
-export async function getBootstrap() {
-  load();
-  return delay({
-    me: db.users.find((u) => u.id === CURRENT_USER_ID)!,
-    users: db.users,
-    clients: db.clients,
-    projects: db.projects,
-    tasks: db.tasks,
-    settings: db.settings,
-    pinnedProjectIds: db.pinnedProjectIds,
-    expenseCategories: db.expenseCategories,
-  });
+/** Local midnight today. Every calendar comparison in the UI is against this. */
+export const TODAY = (() => {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
+})();
+
+interface BootstrapWire {
+  me: UserWire;
+  users: UserWire[];
+  clients: ClientWire[];
+  projects: ProjectWire[];
+  tasks: TaskWire[];
+  settings: SettingsWire;
+  expenseCategories: CategoryWire[];
+  pinnedProjectIds: string[];
+  profiles: { id: string; name: string; baseKey: string | null }[];
+  capabilities: string[];
+  baseKey: string | null;
 }
 
-export const listUsers = async () => { load(); return delay(db.users); };
-export const getUser = async (id: ID) => { load(); return delay(db.users.find((u) => u.id === id) ?? null); };
-export const listClients = async () => { load(); return delay(db.clients); };
-export const listProjects = async () => { load(); return delay(db.projects); };
-export const listTasks = async () => { load(); return delay(db.tasks); };
-export const getSettings = async () => { load(); return delay(db.settings); };
+/**
+ * Everything the shell needs, in one request.
+ *
+ * The profile table is applied before any user is adapted, because `fromUser`
+ * reads it to turn a profile id into a badge. Populating it here rather than
+ * lazily means there is no order in which a user can be adapted against an
+ * empty map.
+ */
+export async function getBootstrap() {
+  const b = await get<BootstrapWire>("/bootstrap");
 
-export async function updateSettings(patch: Partial<Settings>) {
-  load(); db.settings = { ...db.settings, ...patch }; save();
-  return delay(db.settings);
+  profileKeyById = new Map(
+    (b.profiles ?? []).map((p) => [p.id, (p.baseKey ?? "member") as PermissionProfile])
+  );
+
+  return {
+    me: fromUser(b.me),
+    users: (b.users ?? []).map(fromUser),
+    clients: (b.clients ?? []).map(fromClient),
+    projects: (b.projects ?? []).map(fromProject),
+    tasks: (b.tasks ?? []).map(fromTask),
+    settings: fromSettings(b.settings),
+    pinnedProjectIds: b.pinnedProjectIds ?? [],
+    expenseCategories: (b.expenseCategories ?? []).map(fromCategory),
+    capabilities: b.capabilities ?? [],
+  };
+}
+
+export const listUsers = async (): Promise<User[]> =>
+  (await get<UserWire[]>("/users", { status: "all" })).map(fromUser);
+
+export const getUser = async (id: ID): Promise<User | null> => {
+  try {
+    return fromUser(await get<UserWire>(`/users/${id}`));
+  } catch (e) {
+    if (isApiError(e) && e.status === 404) return null;
+    throw e;
+  }
+};
+
+export const listClients = async (): Promise<Client[]> =>
+  (await get<ClientWire[]>("/clients", { status: "all" })).map(fromClient);
+
+export const listProjects = async (): Promise<Project[]> =>
+  (await get<ProjectWire[]>("/projects", { status: "all" })).map(fromProject);
+
+export const listTasks = async (): Promise<Task[]> =>
+  (await get<TaskWire[]>("/tasks", { status: "all" })).map(fromTask);
+
+export const getSettings = async (): Promise<Settings> => fromSettings(await get<SettingsWire>("/settings"));
+
+export async function updateSettings(input: Partial<Settings>): Promise<Settings> {
+  return fromSettings(await patch<SettingsWire>("/settings", input));
 }
 
 /* ============================================================ time entries */
@@ -119,24 +636,17 @@ export interface TimeQuery {
   from?: string; to?: string; userId?: ID; projectId?: ID; clientId?: ID; taskId?: ID;
 }
 
-export async function listTimeEntries(q: TimeQuery = {}) {
-  load();
-  const clientProjects = q.clientId ? new Set(db.projects.filter((p) => p.clientId === q.clientId).map((p) => p.id)) : null;
-  const rows = db.timeEntries.filter((e) => {
-    if (q.from && e.spentOn < q.from) return false;
-    if (q.to && e.spentOn > q.to) return false;
-    if (q.userId && e.userId !== q.userId) return false;
-    if (q.projectId && e.projectId !== q.projectId) return false;
-    if (q.taskId && e.taskId !== q.taskId) return false;
-    if (clientProjects && !clientProjects.has(e.projectId)) return false;
-    return true;
+export async function listTimeEntries(q: TimeQuery = {}): Promise<TimeEntryView[]> {
+  const rows = await get<TimeEntryWire[]>("/time-entries", {
+    from: q.from, to: q.to,
+    user_id: q.userId, project_id: q.projectId, client_id: q.clientId, task_id: q.taskId,
   });
-  return delay(rows);
+  return rows.map(fromTimeEntry);
 }
 
-export async function getRunningEntry(userId: ID = CURRENT_USER_ID) {
-  load();
-  return delay(db.timeEntries.find((e) => e.userId === userId && e.timerStartedAt) ?? null);
+export async function getRunningEntry(userId?: ID): Promise<TimeEntryView | null> {
+  const row = await get<TimeEntryWire | null>("/time-entries/running", { user_id: userId });
+  return row ? fromTimeEntry(row) : null;
 }
 
 export interface TimeEntryInput {
@@ -145,255 +655,441 @@ export interface TimeEntryInput {
   notes?: string; isBillable?: boolean; start?: boolean;
 }
 
+interface CreateWire { entry: TimeEntryWire; stopped: TimeEntryWire | null }
+
+/** Returns the new entry and whatever timer was stopped to make room for it. */
 export async function createTimeEntry(input: TimeEntryInput) {
-  load();
-  const userId = input.userId ?? CURRENT_USER_ID;
-  const user = db.users.find((u) => u.id === userId)!;
-  const project = db.projects.find((p) => p.id === input.projectId)!;
-  const task = db.tasks.find((t) => t.id === input.taskId)!;
-  const billable = input.isBillable ?? (project.billingType !== "non_billable" && task.defaultBillable);
-
-  // One running timer per user: stop whatever is running before starting a new one.
-  let stopped: TimeEntry | null = null;
-  if (input.start) stopped = stopTimerSync(userId);
-
-  const entry: TimeEntry = {
-    id: uid("te"), userId, projectId: input.projectId, taskId: input.taskId,
+  const result = await post<CreateWire>("/time-entries", {
+    userId: input.userId,
+    projectId: input.projectId,
+    taskId: input.taskId,
     spentOn: input.spentOn,
-    startedAt: input.startedAt, endedAt: input.endedAt,
-    durationSeconds: input.durationSeconds ?? 0,
-    timerStartedAt: input.start ? new Date().toISOString() : undefined,
-    notes: input.notes, isBillable: billable,
-    billableRateCents: billable ? user.billableRateCents : 0,
-    costRateCents: user.costRateCents,
+    durationSeconds: input.durationSeconds,
+    startedAt: input.startedAt ?? null,
+    endedAt: input.endedAt ?? null,
+    notes: input.notes ?? null,
+    isBillable: input.isBillable,
+    start: input.start,
+  });
+  return {
+    entry: fromTimeEntry(result.entry),
+    stopped: result.stopped ? fromTimeEntry(result.stopped) : null,
   };
-  db.timeEntries.push(entry);
-  save();
-  return delay({ entry, stopped });
 }
 
-export async function updateTimeEntry(id: ID, patch: Partial<TimeEntry>) {
-  load();
-  const i = db.timeEntries.findIndex((e) => e.id === id);
-  if (i < 0) throw new Error("Entry not found");
-  db.timeEntries[i] = { ...db.timeEntries[i]!, ...patch };
-  save();
-  return delay(db.timeEntries[i]!);
-}
-
-export async function deleteTimeEntry(id: ID) {
-  load();
-  const i = db.timeEntries.findIndex((e) => e.id === id);
-  const removed = i >= 0 ? db.timeEntries.splice(i, 1)[0]! : null;
-  save();
-  return delay(removed);
-}
-
-/** Restores a deleted entry, for the Undo toast. */
-export async function restoreTimeEntry(entry: TimeEntry) {
-  load(); db.timeEntries.push(entry); save(); return delay(entry);
-}
-
-function stopTimerSync(userId: ID): TimeEntry | null {
-  const running = db.timeEntries.find((e) => e.userId === userId && e.timerStartedAt);
-  if (!running) return null;
-  const elapsed = Math.round((Date.now() - new Date(running.timerStartedAt!).getTime()) / 1000);
-  running.durationSeconds += Math.max(0, elapsed);
-  running.endedAt = new Date().toISOString();
-  running.timerStartedAt = undefined;
-  return running;
-}
-
-export async function stopTimer(userId: ID = CURRENT_USER_ID) {
-  load(); const e = stopTimerSync(userId); save(); return delay(e);
-}
-
-export async function startTimerFrom(entryId: ID) {
-  load();
-  const src = db.timeEntries.find((e) => e.id === entryId)!;
-  return createTimeEntry({
-    userId: src.userId, projectId: src.projectId, taskId: src.taskId,
-    spentOn: isoDate(TODAY), notes: src.notes, start: true,
-    startedAt: new Date().toISOString(),
-  });
-}
-
-export async function copyDay(fromDate: string, toDateStr: string, userId: ID = CURRENT_USER_ID, withDurations = false) {
-  load();
-  const src = db.timeEntries.filter((e) => e.userId === userId && e.spentOn === fromDate);
-  const made = src.map((e) => {
-    const copy: TimeEntry = {
-      ...e, id: uid("te"), spentOn: toDateStr,
-      durationSeconds: withDurations ? e.durationSeconds : 0,
-      timerStartedAt: undefined, startedAt: undefined, endedAt: undefined, invoiceId: undefined,
-    };
-    db.timeEntries.push(copy);
-    return copy;
-  });
-  save();
-  return delay(made);
-}
-
-/** Bulk upsert of a week grid row. One round trip instead of thirty. */
-export async function saveWeekCell(args: {
-  userId: ID; projectId: ID; taskId: ID; notes?: string; spentOn: string; seconds: number;
-}) {
-  load();
-  const match = db.timeEntries.find(
-    (e) => e.userId === args.userId && e.projectId === args.projectId &&
-      e.taskId === args.taskId && e.spentOn === args.spentOn && (e.notes ?? "") === (args.notes ?? "")
-  );
-  if (args.seconds <= 0) {
-    if (match) db.timeEntries.splice(db.timeEntries.indexOf(match), 1);
-    save(); return delay(null);
-  }
-  if (match) { match.durationSeconds = args.seconds; save(); return delay(match); }
-  return createTimeEntry({
-    userId: args.userId, projectId: args.projectId, taskId: args.taskId,
-    spentOn: args.spentOn, durationSeconds: args.seconds, notes: args.notes,
-  }).then((r) => r.entry);
-}
-
-/* ================================================================ expenses */
-
-export async function listExpenses(q: { from?: string; to?: string; userId?: ID; projectId?: ID } = {}) {
-  load();
-  return delay(db.expenses.filter((e) => {
-    if (q.from && e.spentOn < q.from) return false;
-    if (q.to && e.spentOn > q.to) return false;
-    if (q.userId && e.userId !== q.userId) return false;
-    if (q.projectId && e.projectId !== q.projectId) return false;
-    return true;
+export async function updateTimeEntry(id: ID, p: Partial<TimeEntry>): Promise<TimeEntryView> {
+  return fromTimeEntry(await patch<TimeEntryWire>(`/time-entries/${id}`, {
+    projectId: p.projectId,
+    taskId: p.taskId,
+    spentOn: p.spentOn,
+    durationSeconds: p.durationSeconds,
+    startedAt: p.startedAt ?? undefined,
+    endedAt: p.endedAt ?? undefined,
+    notes: p.notes === undefined ? undefined : (p.notes ?? null),
+    isBillable: p.isBillable,
   }));
 }
 
-export async function createExpense(input: Omit<Expense, "id">) {
-  load(); const e: Expense = { ...input, id: uid("ex") }; db.expenses.push(e); save(); return delay(e);
+export async function deleteTimeEntry(id: ID): Promise<{ id: ID }> {
+  await del(`/time-entries/${id}`);
+  return { id };
 }
-export async function updateExpense(id: ID, patch: Partial<Expense>) {
-  load(); const i = db.expenses.findIndex((e) => e.id === id);
-  db.expenses[i] = { ...db.expenses[i]!, ...patch }; save(); return delay(db.expenses[i]!);
+
+/**
+ * Puts a deleted entry back, for the Undo toast.
+ *
+ * The argument is the whole entry rather than an id because that is what the
+ * toast is holding, but only the id is sent: the server restores the row it
+ * soft-deleted, so the rates and the invoice link come back as they were rather
+ * than as the client last saw them.
+ */
+export async function restoreTimeEntry(entry: { id: ID }): Promise<TimeEntryView> {
+  return fromTimeEntry(await post<TimeEntryWire>(`/time-entries/${entry.id}/restore`));
 }
-export async function deleteExpense(id: ID) {
-  load(); const i = db.expenses.findIndex((e) => e.id === id);
-  const removed = i >= 0 ? db.expenses.splice(i, 1)[0]! : null; save(); return delay(removed);
+
+export async function stopTimer(userId?: ID): Promise<TimeEntryView | null> {
+  const row = await post<TimeEntryWire | null>(`/time-entries/current/stop`, { userId });
+  return row ? fromTimeEntry(row) : null;
+}
+
+export async function startTimerFrom(entryId: ID) {
+  const result = await post<CreateWire>(`/time-entries/${entryId}/start`);
+  return {
+    entry: fromTimeEntry(result.entry),
+    stopped: result.stopped ? fromTimeEntry(result.stopped) : null,
+  };
+}
+
+export async function copyDay(
+  fromDate: string, toDateStr: string, userId?: ID, withDurations = false
+): Promise<TimeEntryView[]> {
+  const rows = await post<TimeEntryWire[]>("/timesheet/copy-day", {
+    from: fromDate, to: toDateStr, includeDurations: withDurations, userId,
+  });
+  return rows.map(fromTimeEntry);
+}
+
+/**
+ * One cell of the week grid.
+ *
+ * Sent through the week endpoint as a single row carrying a single day. The
+ * endpoint writes only the days present in the payload, so saving Tuesday does
+ * not disturb the rest of the row, and a zero deletes rather than storing an
+ * empty entry.
+ */
+export async function saveWeekCell(args: {
+  userId: ID; projectId: ID; taskId: ID; notes?: string; spentOn: string; seconds: number;
+}): Promise<TimeEntryView | null> {
+  const weekStart = isoLocal(startOfWeek(new Date(`${args.spentOn}T00:00:00`)));
+  const result = await request<TimeEntryWire[]>("PUT", "/timesheet/week", {
+    body: {
+      userId: args.userId,
+      weekStart,
+      rows: [{
+        projectId: args.projectId,
+        taskId: args.taskId,
+        notes: args.notes ?? null,
+        days: { [args.spentOn]: Math.max(0, Math.round(args.seconds)) },
+      }],
+    },
+  });
+
+  // A lock can refuse one cell while the rest of the week saves. Say so rather
+  // than letting the grid show a value the server did not keep.
+  const skipped = (result.meta?.skipped ?? []) as { reasons: string[] }[];
+  if (skipped.length > 0) {
+    throw new ApiError({
+      status: 409,
+      code: "record_locked",
+      message: reasonText(skipped[0]!.reasons),
+      meta: { reasons: skipped[0]!.reasons },
+    });
+  }
+
+  const match = result.data.find(
+    (e) => e.spentOn === args.spentOn && e.projectId === args.projectId &&
+      (e.taskId ?? e.projectTaskId) === args.taskId
+  );
+  return match ? fromTimeEntry(match) : null;
+}
+
+/** Turns a lock reason code into the sentence the toast shows. */
+function reasonText(reasons: string[]): string {
+  const first = reasons[0] ?? "locked";
+  const text: Record<string, string> = {
+    period_approved: "That week has been approved. Ask an approver to reopen it.",
+    invoiced: "That time is on an invoice and cannot be changed.",
+    invoice_sent: "That time is on an invoice that has been sent.",
+    billed_externally: "That time was marked as billed outside Tally.",
+    timesheet_locked: "That timesheet is past the lock window.",
+    not_yours: "That entry belongs to somebody else.",
+  };
+  return text[first] ?? "That entry cannot be changed.";
+}
+
+const isoLocal = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+/* ================================================================ expenses */
+
+export async function listExpenses(
+  q: { from?: string; to?: string; userId?: ID; projectId?: ID } = {}
+): Promise<ExpenseView[]> {
+  const rows = await get<ExpenseWire[]>("/expenses", {
+    from: q.from, to: q.to, user_id: q.userId, project_id: q.projectId,
+  });
+  return rows.map(fromExpense);
+}
+
+export async function createExpense(input: Omit<Expense, "id">): Promise<ExpenseView> {
+  return fromExpense(await post<ExpenseWire>("/expenses", {
+    userId: input.userId,
+    projectId: input.projectId,
+    categoryId: input.categoryId,
+    spentOn: input.spentOn,
+    units: input.units ?? null,
+    totalCents: input.totalCents,
+    notes: input.notes ?? null,
+    isBillable: input.isBillable,
+    isReimbursable: input.isReimbursable,
+    receiptFilename: input.receiptName ?? null,
+  }));
+}
+
+export async function updateExpense(id: ID, p: Partial<Expense>): Promise<ExpenseView> {
+  return fromExpense(await patch<ExpenseWire>(`/expenses/${id}`, {
+    projectId: p.projectId,
+    categoryId: p.categoryId,
+    spentOn: p.spentOn,
+    units: p.units === undefined ? undefined : (p.units ?? null),
+    totalCents: p.totalCents,
+    notes: p.notes === undefined ? undefined : (p.notes ?? null),
+    isBillable: p.isBillable,
+    isReimbursable: p.isReimbursable,
+    receiptFilename: p.receiptName === undefined ? undefined : (p.receiptName ?? null),
+  }));
+}
+
+export async function deleteExpense(id: ID): Promise<{ id: ID }> {
+  await del(`/expenses/${id}`);
+  return { id };
+}
+
+/** Moves a batch of reimbursements along: pending, approved, then paid. */
+export async function setReimbursementState(
+  ids: ID[], state: "pending" | "approved" | "paid", paidAt?: string
+): Promise<number> {
+  const result = await post<{ updated: number }>("/expenses/reimbursements", { ids, state, paidAt });
+  return result.updated;
 }
 
 /* ============================================================== approvals */
 
-export async function listSubmissions() { load(); return delay(db.submissions); }
+export const listSubmissions = async (): Promise<SubmissionView[]> =>
+  (await get<SubmissionWire[]>("/approvals", { state: "all" })).map(fromSubmission);
 
-export async function submitTimesheet(userId: ID, periodStart: string) {
-  load();
-  const end = isoDate(addDays(toDate(periodStart), 6));
-  const total = db.timeEntries
-    .filter((e) => e.userId === userId && e.spentOn >= periodStart && e.spentOn <= end)
-    .reduce((a, b) => a + b.durationSeconds, 0);
-  const existing = db.submissions.find((s) => s.userId === userId && s.periodStart === periodStart);
-  const sub: TimesheetSubmission = existing ?? {
-    id: uid("sub"), userId, periodStart, periodEnd: end, state: "submitted",
-    totalSeconds: total, flags: [],
-  };
-  sub.state = "submitted"; sub.submittedAt = new Date().toISOString(); sub.totalSeconds = total;
-  if (!existing) db.submissions.push(sub);
-  save();
-  return delay(sub);
+export async function submitTimesheet(userId: ID, periodStart: string): Promise<SubmissionView> {
+  return fromSubmission(await post<SubmissionWire>("/approvals/submit", { periodStart, userId }));
 }
 
-export async function reviewSubmission(id: ID, state: "approved" | "changes_requested", note?: string) {
-  load();
-  const s = db.submissions.find((x) => x.id === id)!;
-  s.state = state; s.reviewedAt = new Date().toISOString(); s.reviewedBy = CURRENT_USER_ID; s.reviewNote = note;
-  save();
-  return delay(s);
+export async function reviewSubmission(
+  id: ID, state: "approved" | "changes_requested", note?: string
+): Promise<SubmissionView> {
+  const path = state === "approved" ? `/approvals/${id}/approve` : `/approvals/${id}/request-changes`;
+  return fromSubmission(await post<SubmissionWire>(path, { note }));
+}
+
+export async function approveMany(ids: ID[]): Promise<number> {
+  const result = await post<{ approved: number }>("/approvals/approve-many", { ids });
+  return result.approved;
+}
+
+export async function remindToSubmit(periodStart: string, userIds?: ID[]): Promise<number> {
+  const result = await post<{ reminded: number }>("/approvals/remind", { periodStart, userIds });
+  return result.reminded;
 }
 
 /* ================================================================ projects */
 
-export async function getProject(id: ID) { load(); return delay(db.projects.find((p) => p.id === id) ?? null); }
+export async function getProject(id: ID): Promise<Project | null> {
+  try {
+    return fromProject(await get<ProjectWire>(`/projects/${id}`));
+  } catch (e) {
+    if (isApiError(e) && e.status === 404) return null;
+    throw e;
+  }
+}
 
-export async function createProject(input: Partial<Project> & { name: string; clientId: ID }) {
-  load();
-  const p: Project = {
-    id: uid("p"), billingType: "time_and_materials", billBy: "people",
-    budgetBy: "none", budgetResetsMonthly: false, tags: [],
-    colorIndex: (db.projects.length % 12) + 1,
-    taskIds: db.tasks.filter((t) => t.isCommon).map((t) => t.id),
-    memberIds: [CURRENT_USER_ID], managerIds: [CURRENT_USER_ID],
-    ...input,
+export async function createProject(input: Partial<Project> & { name: string; clientId: ID }): Promise<Project> {
+  return fromProject(await post<ProjectWire>("/projects", projectBody(input, true)));
+}
+
+export async function updateProject(id: ID, p: Partial<Project>): Promise<Project> {
+  return fromProject(await patch<ProjectWire>(`/projects/${id}`, projectBody(p, false)));
+}
+
+function projectBody(p: Partial<Project>, creating: boolean): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    clientId: p.clientId,
+    name: p.name,
+    code: p.code === undefined ? undefined : (p.code || null),
+    billingType: p.billingType ?? (creating ? "time_and_materials" : undefined),
+    billBy: p.billBy,
+    hourlyRateCents: p.hourlyRateCents === undefined ? undefined : (p.hourlyRateCents ?? null),
+    feeCents: p.feeCents === undefined ? undefined : (p.feeCents ?? null),
+    feeCadence: p.feeCadence === undefined ? undefined : (p.feeCadence ?? null),
+    budgetBy: p.budgetBy,
+    budgetSeconds: p.budgetSeconds === undefined ? undefined : (p.budgetSeconds ?? null),
+    budgetFeeCents: p.budgetFeeCents === undefined ? undefined : (p.budgetFeeCents ?? null),
+    budgetResetsMonthly: p.budgetResetsMonthly,
+    budgetAlertPercent: p.budgetAlertPercent === undefined ? undefined : (p.budgetAlertPercent ?? null),
+    startsOn: p.startsOn === undefined ? undefined : (p.startsOn || null),
+    endsOn: p.endsOn === undefined ? undefined : (p.endsOn || null),
+    notes: p.notes === undefined ? undefined : (p.notes || null),
+    tags: p.tags,
+    taskIds: p.taskIds,
+    memberIds: p.memberIds,
+    managerIds: p.managerIds,
   };
-  db.projects.unshift(p); save(); return delay(p);
+  for (const key of Object.keys(body)) if (body[key] === undefined) delete body[key];
+  return body;
 }
 
-export async function updateProject(id: ID, patch: Partial<Project>) {
-  load(); const i = db.projects.findIndex((p) => p.id === id);
-  db.projects[i] = { ...db.projects[i]!, ...patch }; save(); return delay(db.projects[i]!);
+export async function archiveProject(id: ID, archived = true): Promise<Project> {
+  const path = archived ? `/projects/${id}/archive` : `/projects/${id}/restore`;
+  return fromProject(await post<ProjectWire>(path));
 }
 
-export async function archiveProject(id: ID, archived = true) {
-  return updateProject(id, { archivedAt: archived ? new Date().toISOString() : undefined });
-}
-
-export async function togglePin(id: ID) {
-  load();
-  const i = db.pinnedProjectIds.indexOf(id);
-  if (i >= 0) db.pinnedProjectIds.splice(i, 1); else db.pinnedProjectIds.push(id);
-  save(); return delay(db.pinnedProjectIds);
+export async function togglePin(id: ID): Promise<ID[]> {
+  const result = await post<{ pinned: boolean; pinnedProjectIds: string[] }>(`/projects/${id}/pin`);
+  return result.pinnedProjectIds;
 }
 
 /* ================================================================= clients */
 
-export async function createClient(input: Partial<Client> & { name: string }) {
-  load();
-  const c: Client = { id: uid("c"), currency: "USD", paymentTerm: "net_15", contacts: [], ...input };
-  db.clients.unshift(c); save(); return delay(c);
+export async function createClient(input: Partial<Client> & { name: string }): Promise<Client> {
+  return fromClient(await post<ClientWire>("/clients", clientBody(input, true)));
 }
-export async function updateClient(id: ID, patch: Partial<Client>) {
-  load(); const i = db.clients.findIndex((c) => c.id === id);
-  db.clients[i] = { ...db.clients[i]!, ...patch }; save(); return delay(db.clients[i]!);
+
+export async function updateClient(id: ID, p: Partial<Client>): Promise<Client> {
+  return fromClient(await patch<ClientWire>(`/clients/${id}`, clientBody(p, false)));
+}
+
+function clientBody(c: Partial<Client>, creating: boolean): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    name: c.name,
+    address: c.address === undefined ? undefined : (c.address || null),
+    currency: c.currency ?? (creating ? "USD" : undefined),
+    paymentTerm: c.paymentTerm,
+    taxPercent: c.taxPercent === undefined ? undefined : (c.taxPercent ?? null),
+    discountPercent: c.discountPercent === undefined ? undefined : (c.discountPercent ?? null),
+    contacts: c.contacts?.map((k) => ({
+      id: k.id?.startsWith("new-") ? undefined : k.id,
+      firstName: k.firstName || null,
+      lastName: k.lastName || null,
+      title: k.title || null,
+      email: k.email || null,
+      phone: k.phone || null,
+      isPrimary: k.isPrimary ?? false,
+    })),
+  };
+  for (const key of Object.keys(body)) if (body[key] === undefined) delete body[key];
+  return body;
 }
 
 /* =================================================================== tasks */
 
-export async function createTask(input: Partial<Task> & { name: string }) {
-  load();
-  const t: Task = { id: uid("t"), defaultBillable: true, isCommon: false, ...input };
-  db.tasks.push(t); save(); return delay(t);
-}
-export async function updateTask(id: ID, patch: Partial<Task>) {
-  load(); const i = db.tasks.findIndex((t) => t.id === id);
-  db.tasks[i] = { ...db.tasks[i]!, ...patch }; save(); return delay(db.tasks[i]!);
+export async function createTask(input: Partial<Task> & { name: string }): Promise<Task> {
+  return fromTask(await post<TaskWire>("/tasks", {
+    name: input.name,
+    defaultBillable: input.defaultBillable ?? true,
+    isCommon: input.isCommon ?? false,
+    defaultHourlyRateCents: input.defaultRateCents ?? null,
+  }));
 }
 
-/* ==================================================================== people */
+export async function updateTask(id: ID, p: Partial<Task>): Promise<Task> {
+  const body: Record<string, unknown> = {
+    name: p.name,
+    defaultBillable: p.defaultBillable,
+    isCommon: p.isCommon,
+    defaultHourlyRateCents: p.defaultRateCents === undefined ? undefined : (p.defaultRateCents ?? null),
+  };
+  if ("archivedAt" in p) body.archived = p.archivedAt != null;
+  for (const key of Object.keys(body)) if (body[key] === undefined) delete body[key];
+  return fromTask(await patch<TaskWire>(`/tasks/${id}`, body));
+}
 
-export async function updateUser(id: ID, patch: Partial<User>) {
-  load(); const i = db.users.findIndex((u) => u.id === id);
-  db.users[i] = { ...db.users[i]!, ...patch }; save(); return delay(db.users[i]!);
+/* ================================================================== people */
+
+export async function updateUser(id: ID, p: Partial<User>): Promise<User> {
+  const body: Record<string, unknown> = {
+    firstName: p.firstName,
+    lastName: p.lastName,
+    email: p.email,
+    timezone: p.timezone,
+    weeklyCapacitySeconds: p.weeklyCapacitySeconds,
+    employmentType: p.employmentType,
+    startedOn: p.startedOn === undefined ? undefined : (p.startedOn || null),
+    roles: p.roles,
+    departments: p.departments,
+  };
+  for (const key of Object.keys(body)) if (body[key] === undefined) delete body[key];
+  return fromUser(await patch<UserWire>(`/users/${id}`, body));
+}
+
+export async function archiveUser(id: ID, archived = true): Promise<User> {
+  const path = archived ? `/users/${id}/archive` : `/users/${id}/restore`;
+  return fromUser(await post<UserWire>(path));
 }
 
 /* ================================================================ invoices */
 
-export async function listInvoices() { load(); return delay(db.invoices); }
-export async function getInvoice(id: ID) { load(); return delay(db.invoices.find((i) => i.id === id) ?? null); }
-export async function listRecurringInvoices() { load(); return delay(db.recurringInvoices); }
-export async function listRetainers() { load(); return delay(db.retainers); }
+export const listInvoices = async (): Promise<InvoiceView[]> =>
+  (await get<InvoiceWire[]>("/invoices", { state: "all" })).map(fromInvoice);
 
-export async function updateInvoice(id: ID, patch: Partial<Invoice>) {
-  load(); const i = db.invoices.findIndex((x) => x.id === id);
-  db.invoices[i] = { ...db.invoices[i]!, ...patch }; save(); return delay(db.invoices[i]!);
+export async function getInvoice(id: ID): Promise<InvoiceView | null> {
+  try {
+    return fromInvoice(await get<InvoiceWire>(`/invoices/${id}`));
+  } catch (e) {
+    if (isApiError(e) && e.status === 404) return null;
+    throw e;
+  }
 }
 
-export async function recordPayment(id: ID, amountCents: number, paidAt: string) {
-  load();
-  const inv = db.invoices.find((x) => x.id === id)!;
-  inv.payments.push({ id: uid("pay"), invoiceId: id, amountCents, paidAt, recordedBy: CURRENT_USER_ID });
-  inv.paidCents += amountCents;
-  inv.state = inv.paidCents >= inv.totalCents ? "paid" : "partial";
-  if (inv.state === "paid") inv.paidAt = paidAt;
-  inv.events.unshift({ id: uid("ev"), invoiceId: id, kind: "payment", label: "Payment received.", actorId: CURRENT_USER_ID, at: new Date().toISOString(), amountCents });
-  save();
-  return delay(inv);
+export const listRecurringInvoices = async (): Promise<RecurringInvoice[]> => {
+  const rows = await get<{
+    id: string; clientId: string; subject: string; frequency: string; interval: number;
+    nextIssueOn: string | null; state: string; amountCents: number;
+  }[]>("/recurring-invoices");
+  return rows.map((r) => ({
+    id: r.id,
+    clientId: r.clientId,
+    subject: r.subject,
+    frequency: r.frequency as RecurringInvoice["frequency"],
+    intervalMonths: r.interval,
+    nextIssueOn: opt(r.nextIssueOn),
+    amountCents: r.amountCents,
+    state: r.state as RecurringInvoice["state"],
+  }));
+};
+
+export const listRetainers = async (): Promise<Retainer[]> => {
+  const rows = await get<{
+    id: string; clientId: string; projectId: string | null; balanceCents: number;
+    transactions: { id: string; kind: string; amountCents: number; invoiceId: string | null; note: string | null; at: string }[];
+  }[]>("/retainers");
+  return rows.map((r) => ({
+    id: r.id,
+    clientId: r.clientId,
+    projectId: opt(r.projectId),
+    balanceCents: r.balanceCents,
+    transactions: r.transactions.map((t) => ({
+      id: t.id,
+      kind: t.kind as "add" | "draw" | "adjust",
+      amountCents: t.amountCents,
+      at: t.at,
+      note: opt(t.note),
+      invoiceId: opt(t.invoiceId),
+    })),
+  }));
+};
+
+/**
+ * Edits a draft, or moves an invoice along its state machine.
+ *
+ * Write-off and close are not field edits, they are transitions with their own
+ * consequences (a retainer draw gets reversed, an event is written), so they go
+ * to their own endpoints rather than through a PATCH of `state`.
+ */
+export async function updateInvoice(id: ID, p: Partial<Invoice>): Promise<InvoiceView> {
+  if (p.state === "written_off") return fromInvoice(await post<InvoiceWire>(`/invoices/${id}/write-off`));
+  if (p.state === "paid") return fromInvoice(await post<InvoiceWire>(`/invoices/${id}/close`));
+
+  const body: Record<string, unknown> = {
+    subject: p.subject === undefined ? undefined : (p.subject || null),
+    notes: p.notes === undefined ? undefined : (p.notes || null),
+    poNumber: p.poNumber === undefined ? undefined : (p.poNumber || null),
+    issueDate: p.issueDate,
+    dueDate: p.dueDate,
+    taxPercent: p.taxPercent === undefined ? undefined : (p.taxPercent ?? null),
+    discountPercent: p.discountPercent === undefined ? undefined : (p.discountPercent ?? null),
+  };
+  for (const key of Object.keys(body)) if (body[key] === undefined) delete body[key];
+  return fromInvoice(await patch<InvoiceWire>(`/invoices/${id}`, body));
+}
+
+export async function recordPayment(id: ID, amountCents: number, paidAt: string): Promise<InvoiceView> {
+  // A payment is money moving, so a retried request must not become two.
+  return fromInvoice(await post<InvoiceWire>(
+    `/invoices/${id}/payments`,
+    { amountCents, paidAt: new Date(paidAt).toISOString() },
+    idempotencyKey()
+  ));
+}
+
+export async function voidPayment(invoiceId: ID, paymentId: ID): Promise<InvoiceView> {
+  return fromInvoice(await post<InvoiceWire>(`/invoices/${invoiceId}/payments/${paymentId}/void`));
 }
 
 /** What could go on an invoice for a client: billable time and billable expenses
@@ -411,69 +1107,35 @@ export interface UninvoicedLine {
   expenseIds: ID[];
 }
 
+interface UninvoicedWire {
+  key: string; projectId: string; kind: "time" | "expense";
+  label: string; sublabel: string; quantity: number;
+  unitPriceCents: number; amountCents: number;
+  timeEntryIds: string[]; expenseIds: string[];
+}
+
 export async function getUninvoiced(
   clientId: ID,
   opts: { from?: string; to?: string; groupBy?: "project" | "task" | "person" } = {}
 ): Promise<UninvoicedLine[]> {
-  load();
-  const groupBy = opts.groupBy ?? "project";
-  const projects = db.projects.filter((p) => p.clientId === clientId);
-  const projectIds = new Set(projects.map((p) => p.id));
-
-  const buckets = new Map<string, UninvoicedLine>();
-
-  for (const e of db.timeEntries) {
-    if (!projectIds.has(e.projectId)) continue;
-    if (!e.isBillable || e.invoiceId || e.billedExternally || e.timerStartedAt) continue;
-    if (opts.from && e.spentOn < opts.from) continue;
-    if (opts.to && e.spentOn > opts.to) continue;
-
-    const project = db.projects.find((p) => p.id === e.projectId)!;
-    const detail =
-      groupBy === "task" ? db.tasks.find((t) => t.id === e.taskId)?.name ?? "Task"
-      : groupBy === "person" ? (() => { const u = db.users.find((x) => x.id === e.userId); return u ? `${u.firstName} ${u.lastName}` : "Person"; })()
-      : "";
-    const key = `time:${e.projectId}:${groupBy === "project" ? "" : detail}:${e.billableRateCents}`;
-
-    const cur = buckets.get(key) ?? {
-      key, projectId: e.projectId, kind: "time" as const,
-      label: project.name,
-      sublabel: detail || "Billable time",
-      quantity: 0, unitPriceCents: e.billableRateCents, amountCents: 0,
-      entryIds: [], expenseIds: [],
-    };
-    cur.quantity += e.durationSeconds / 3600;
-    cur.amountCents += secondsToCents(e.durationSeconds, e.billableRateCents);
-    cur.entryIds.push(e.id);
-    buckets.set(key, cur);
-  }
-
-  for (const x of db.expenses) {
-    if (!projectIds.has(x.projectId)) continue;
-    if (!x.isBillable || x.invoiceId) continue;
-    if (opts.from && x.spentOn < opts.from) continue;
-    if (opts.to && x.spentOn > opts.to) continue;
-
-    const project = db.projects.find((p) => p.id === x.projectId)!;
-    const category = db.expenseCategories.find((c) => c.id === x.categoryId)?.name ?? "Expense";
-    const key = `expense:${x.projectId}:${x.categoryId}`;
-    const cur = buckets.get(key) ?? {
-      key, projectId: x.projectId, kind: "expense" as const,
-      label: project.name, sublabel: category,
-      quantity: 0, unitPriceCents: 0, amountCents: 0,
-      entryIds: [], expenseIds: [],
-    };
-    cur.quantity += 1;
-    cur.amountCents += x.totalCents;
-    cur.unitPriceCents = cur.amountCents / Math.max(1, cur.quantity);
-    cur.expenseIds.push(x.id);
-    buckets.set(key, cur);
-  }
-
-  const lines = [...buckets.values()]
-    .map((l) => ({ ...l, quantity: Math.round(l.quantity * 100) / 100 }))
-    .sort((a, b) => a.label.localeCompare(b.label) || a.sublabel.localeCompare(b.sublabel));
-  return delay(lines);
+  const rows = await post<UninvoicedWire[]>("/invoices/preview-lines", {
+    clientId,
+    from: opts.from,
+    to: opts.to,
+    grouping: opts.groupBy ?? "project",
+  });
+  return rows.map((l) => ({
+    key: l.key,
+    projectId: l.projectId,
+    kind: l.kind,
+    label: l.label,
+    sublabel: l.sublabel,
+    quantity: l.quantity,
+    unitPriceCents: l.unitPriceCents,
+    amountCents: l.amountCents,
+    entryIds: l.timeEntryIds,
+    expenseIds: l.expenseIds,
+  }));
 }
 
 export interface CreateInvoiceInput {
@@ -488,109 +1150,119 @@ export interface CreateInvoiceInput {
   lines: UninvoicedLine[];
 }
 
-export async function createInvoice(input: CreateInvoiceInput) {
-  load();
-  const client = db.clients.find((c) => c.id === input.clientId)!;
-  const seq = db.invoices.length + 1;
-  const id = uid("inv");
-  const code = client.name.slice(0, 3).toUpperCase().replace(/[^A-Z]/g, "X");
+export async function createInvoice(input: CreateInvoiceInput): Promise<InvoiceView> {
+  return fromInvoice(await post<InvoiceWire>(
+    "/invoices",
+    {
+      clientId: input.clientId,
+      subject: input.subject?.trim() || null,
+      notes: input.notes?.trim() || null,
+      poNumber: input.poNumber?.trim() || null,
+      issueDate: input.issueDate,
+      dueDate: input.dueDate,
+      taxPercent: input.taxPercent ?? null,
+      discountPercent: input.discountPercent ?? null,
+      lines: input.lines.map((l) => ({
+        projectId: l.projectId,
+        description:
+          l.sublabel && l.sublabel !== "Billable time" ? `${l.label}: ${l.sublabel}` : l.label,
+        quantity: l.quantity,
+        unitPriceCents: Math.round(l.unitPriceCents),
+        isTaxed: l.kind !== "expense",
+        itemType: l.kind === "expense" ? "Expense" : "Service",
+      })),
+      projectIds: [...new Set(input.lines.map((l) => l.projectId))],
+      timeEntryIds: input.lines.flatMap((l) => l.entryIds),
+      expenseIds: input.lines.flatMap((l) => l.expenseIds),
+    },
+    idempotencyKey()
+  ));
+}
 
-  const lineItems: InvoiceLineItem[] = input.lines.map((l, i) => ({
-    id: uid("il"), invoiceId: id, position: i,
-    itemType: l.kind === "expense" ? "Expense" : "Service",
-    projectId: l.projectId,
-    description: l.sublabel && l.sublabel !== "Billable time" ? `${l.label}: ${l.sublabel}` : l.label,
-    quantity: l.quantity,
-    unitPriceCents: Math.round(l.unitPriceCents),
-    amountCents: Math.round(l.amountCents),
-    isTaxed: l.kind !== "expense",
-  }));
+export async function deleteInvoice(id: ID): Promise<boolean> {
+  await del(`/invoices/${id}`);
+  return true;
+}
 
-  const subtotal = lineItems.reduce((a, b) => a + b.amountCents, 0);
-  const discountCents = Math.round(subtotal * ((input.discountPercent ?? 0) / 100));
-  const taxable = lineItems.filter((l) => l.isTaxed).reduce((a, b) => a + b.amountCents, 0) - discountCents;
-  const taxCents = Math.round(Math.max(0, taxable) * ((input.taxPercent ?? 0) / 100));
+export async function markInvoiceSent(id: ID): Promise<InvoiceView> {
+  return fromInvoice(await post<InvoiceWire>(`/invoices/${id}/mark-sent`));
+}
 
-  const invoice: Invoice = {
-    id, clientId: input.clientId,
-    number: `${71300 + seq}-${code}-${seq}`,
-    subject: input.subject?.trim() || undefined,
-    notes: input.notes?.trim() || undefined,
-    poNumber: input.poNumber?.trim() || undefined,
-    currency: client.currency,
-    issueDate: input.issueDate, dueDate: input.dueDate,
-    state: "draft",
-    subtotalCents: subtotal,
-    taxPercent: input.taxPercent, taxCents,
-    discountPercent: input.discountPercent, discountCents,
-    totalCents: subtotal - discountCents + taxCents,
-    paidCents: 0,
-    projectIds: [...new Set(input.lines.map((l) => l.projectId))],
-    lineItems, payments: [],
-    events: [{ id: uid("ev"), invoiceId: id, kind: "created", label: "Invoice created.", actorId: CURRENT_USER_ID, at: new Date().toISOString() }],
+export async function sendInvoice(
+  id: ID, message: { to: string[]; cc?: string[]; bcc?: string[]; subject?: string; body?: string }
+): Promise<InvoiceView> {
+  return fromInvoice(await post<InvoiceWire>(`/invoices/${id}/send`, message));
+}
+
+/* ================================================================= reports */
+
+export interface ReportRow {
+  key: string;
+  label: string;
+  sub?: string | null;
+  seconds: number;
+  billableSeconds: number;
+  amountCents: number | null;
+  costCents: number | null;
+  [extra: string]: unknown;
+}
+
+export interface ReportResult<Row = ReportRow> {
+  rows: Row[];
+  totals: Record<string, number | null>;
+  meta: Record<string, unknown>;
+}
+
+async function report<Row>(path: string, query: Query): Promise<ReportResult<Row>> {
+  const { data, meta } = await request<Row[]>("GET", path, { query });
+  return {
+    rows: data ?? [],
+    totals: (meta?.totals ?? {}) as Record<string, number | null>,
+    meta: meta ?? {},
   };
-
-  // Claim the underlying records so the same hour cannot be billed twice.
-  const entryIds = new Set(input.lines.flatMap((l) => l.entryIds));
-  const expenseIds = new Set(input.lines.flatMap((l) => l.expenseIds));
-  for (const e of db.timeEntries) if (entryIds.has(e.id)) e.invoiceId = id;
-  for (const x of db.expenses) if (expenseIds.has(x.id)) x.invoiceId = id;
-
-  db.invoices.unshift(invoice);
-  save();
-  return delay(invoice);
 }
 
-export async function deleteInvoice(id: ID) {
-  load();
-  for (const e of db.timeEntries) if (e.invoiceId === id) e.invoiceId = undefined;
-  for (const x of db.expenses) if (x.invoiceId === id) x.invoiceId = undefined;
-  db.invoices = db.invoices.filter((i) => i.id !== id);
-  save();
-  return delay(true);
-}
+export const timeReport = (q: {
+  from: string; to: string; groupBy?: "client" | "project" | "task" | "user";
+  userId?: ID; projectId?: ID; clientId?: ID;
+}) => report<ReportRow>("/reports/time", {
+  from: q.from, to: q.to, group_by: q.groupBy ?? "client",
+  user_id: q.userId, project_id: q.projectId, client_id: q.clientId,
+});
 
-export async function markInvoiceSent(id: ID) {
-  load();
-  const inv = db.invoices.find((x) => x.id === id)!;
-  inv.state = "sent"; inv.sentAt = new Date().toISOString();
-  inv.events.unshift({ id: uid("ev"), invoiceId: id, kind: "sent", label: "Invoice marked as sent.", actorId: CURRENT_USER_ID, at: inv.sentAt });
-  save();
-  return delay(inv);
-}
+export const profitabilityReport = (q: { from: string; to: string; groupBy?: "project" | "client" }) =>
+  report<ReportRow>("/reports/profitability", { from: q.from, to: q.to, group_by: q.groupBy ?? "project" });
 
-/* ================================================================ search */
+export const teamReport = (q: { from: string; to: string; employmentType?: "employee" | "contractor" }) =>
+  report<ReportRow>("/reports/team", { from: q.from, to: q.to, employment_type: q.employmentType });
+
+export const invoicingReport = (q: { from: string; to: string }) =>
+  report<ReportRow>("/reports/invoicing", { from: q.from, to: q.to });
+
+export const getProjectSummary = (id: ID) => get<Record<string, unknown>>(`/projects/${id}/summary`);
+
+/* ================================================================== search */
 
 export interface SearchHit { type: "project" | "client" | "person" | "invoice" | "task"; id: ID; label: string; sub?: string }
 
 export async function search(q: string): Promise<SearchHit[]> {
-  load();
-  const s = q.trim().toLowerCase();
-  if (!s) return [];
-  const match = (t: string) => t.toLowerCase().includes(s);
-  const out: SearchHit[] = [];
-  for (const p of db.projects) {
-    if (p.archivedAt) continue;
-    const c = db.clients.find((x) => x.id === p.clientId);
-    if (match(p.name) || (c && match(c.name)) || (p.code && match(p.code))) {
-      out.push({ type: "project", id: p.id, label: p.name, sub: c?.name });
-    }
-  }
-  for (const c of db.clients) if (match(c.name)) out.push({ type: "client", id: c.id, label: c.name });
-  for (const u of db.users) if (match(`${u.firstName} ${u.lastName}`) || match(u.email)) {
-    out.push({ type: "person", id: u.id, label: `${u.firstName} ${u.lastName}`, sub: u.roles.join(", ") });
-  }
-  for (const i of db.invoices) if (match(i.number) || match(i.subject ?? "")) {
-    const c = db.clients.find((x) => x.id === i.clientId);
-    out.push({ type: "invoice", id: i.id, label: i.number, sub: c?.name });
-  }
-  for (const t of db.tasks) if (match(t.name)) out.push({ type: "task", id: t.id, label: t.name });
-  return delay(out.slice(0, 40));
+  const term = q.trim();
+  if (!term) return [];
+  const result = await get<{ hits: (SearchHit & { sub?: string | null })[] }>("/search", { q: term });
+  return (result.hits ?? []).map((h) => ({ ...h, sub: opt(h.sub) }));
 }
 
-/* ============================================================== the store */
+/* ==================================================================== auth */
 
-/** Escape hatch for computed views that need the whole dataset at once
- *  (reports, project summaries). The real app computes these server-side. */
-export function snapshot(): DB { load(); return db; }
+export async function signIn(email: string, password: string): Promise<void> {
+  await request("POST", "/auth/signin", { body: { email, password } });
+}
+
+export async function signOut(): Promise<void> {
+  await request("POST", "/auth/signout", { body: {} });
+}
+
+export const authProviders = () =>
+  get<{ password: boolean; google: boolean }>("/auth/providers");
+
 export { startOfWeek };
