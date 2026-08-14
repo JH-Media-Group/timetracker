@@ -367,7 +367,10 @@ export function LineChart({
           <>
             <line x1={PAD.l} x2={W - PAD.r} y1={y(threshold.value)} y2={y(threshold.value)} stroke="var(--danger)" strokeWidth={1} strokeDasharray="4 3" />
             <rect x={PAD.l} y={y(threshold.value) - 9} width={Math.max(80, threshold.label.length * 6)} height={16} rx={3} fill="var(--danger)" />
-            <text x={PAD.l + 6} y={y(threshold.value) + 2.5} style={{ fontSize: 10, fill: "#fff" }}>{threshold.label}</text>
+            {/* On a --danger fill, which is a dark red in light mode and a light
+                red in dark mode, so the label has to flip with it. A literal
+                white was unreadable on the dark-mode badge. */}
+            <text x={PAD.l + 6} y={y(threshold.value) + 2.5} style={{ fontSize: 10, fill: "var(--text-inverse)" }}>{threshold.label}</text>
           </>
         )}
         {under.length > 1 && <polyline points={under.join(" ")} fill="none" stroke="var(--viz-1)" strokeWidth={2} />}
