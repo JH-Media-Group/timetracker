@@ -136,6 +136,18 @@ export default function ProjectDetailPage() {
       .sort((a, b) => b.seconds - a.seconds);
   }, [entries]);
 
+  // The server reports the budget as a number and a unit; the health band and
+  // the "hours or fees" label are presentation, so they stay here.
+  const b = React.useMemo(() => {
+    const raw = summary?.budget;
+    if (!raw) return undefined;
+    return {
+      ...raw,
+      kind: raw.by.endsWith("_hours") ? ("hours" as const) : raw.by === "none" ? ("none" as const) : ("fees" as const),
+      health: budgetHealth(raw.percentUsed),
+    };
+  }, [summary]);
+
   const byPerson = React.useMemo(() => {
     const m = new Map<string, TimeEntry[]>();
     for (const e of entries) { const l = m.get(e.userId); if (l) l.push(e); else m.set(e.userId, [e]); }
@@ -165,17 +177,6 @@ export default function ProjectDetailPage() {
   }
 
   const client = clientById.get(project.clientId);
-  // The server reports the budget as a number and a unit; the health band and
-  // the "hours or fees" label are presentation, so they stay here.
-  const b = React.useMemo(() => {
-    const raw = summary?.budget;
-    if (!raw) return undefined;
-    return {
-      ...raw,
-      kind: raw.by.endsWith("_hours") ? ("hours" as const) : raw.by === "none" ? ("none" as const) : ("fees" as const),
-      health: budgetHealth(raw.percentUsed),
-    };
-  }, [summary]);
   const typeLabel = project.billingType === "fixed_fee" ? "Fixed Fee" : project.billingType === "non_billable" ? "Non-Billable" : "Time & Materials";
 
   return (
