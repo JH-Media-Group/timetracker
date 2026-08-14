@@ -15,6 +15,7 @@
  */
 
 import { config } from "dotenv";
+import { ledgerDelta } from "@/server/services/retainers";
 config({ path: ".env.local", quiet: true });
 
 import { sql as raw } from "drizzle-orm";
@@ -483,7 +484,7 @@ async function main() {
     const transactions = mock.retainers.flatMap((r) => {
       let balance = 0;
       return r.transactions.map((t) => {
-        balance += t.kind === "draw" ? -t.amountCents : t.amountCents;
+        balance += ledgerDelta(t.kind, t.amountCents);
         return {
           id: idFor(t.id),
           retainerId: idFor(r.id),

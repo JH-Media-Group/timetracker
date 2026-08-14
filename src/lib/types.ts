@@ -228,7 +228,13 @@ export interface RecurringInvoice {
 
 export interface Retainer {
   id: ID; clientId: ID; projectId?: ID; balanceCents: number;
-  transactions: { id: ID; kind: "add" | "draw" | "adjust"; amountCents: number; at: string; note?: string; invoiceId?: ID }[];
+  archivedAt?: string;
+  transactions: {
+    id: ID; kind: "add" | "draw" | "adjust"; amountCents: number;
+    /** The balance the movement left behind, so the ledger reads as a running total. */
+    balanceAfterCents: number;
+    at: string; note?: string; invoiceId?: ID;
+  }[];
 }
 
 export interface Settings {

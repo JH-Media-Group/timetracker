@@ -22,6 +22,7 @@
  */
 
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { ledgerDelta } from "@/server/services/retainers";
 import { closeDb, db, resetDb, s } from "./helpers";
 import { eq } from "drizzle-orm";
 import { newId } from "@/server/db/ids";
@@ -302,7 +303,7 @@ const ledgerBalance = async (retainerId: string) => {
     .select({ kind: s.retainerTransactions.kind, amountCents: s.retainerTransactions.amountCents })
     .from(s.retainerTransactions)
     .where(eq(s.retainerTransactions.retainerId, retainerId));
-  return rows.reduce((a, r) => a + (r.kind === "draw" ? -r.amountCents : r.amountCents), 0);
+  return rows.reduce((a, r) => a + ledgerDelta(r.kind, r.amountCents), 0);
 };
 
 const seedRetainer = async (balanceCents: number) => {

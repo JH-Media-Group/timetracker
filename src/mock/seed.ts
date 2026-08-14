@@ -404,8 +404,8 @@ export const recurringInvoices: RecurringInvoice[] = [
 
 export const retainers: Retainer[] = [
   { id: "r1", clientId: clientId("Example Client 04"), balanceCents: 420000, transactions: [
-    { id: "rt1", kind: "add", amountCents: 1000000, at: "2026-03-01T12:00:00Z", note: "Q2 retainer" },
-    { id: "rt2", kind: "draw", amountCents: 580000, at: "2026-06-01T12:00:00Z", invoiceId: "inv2" },
+    { id: "rt1", kind: "add", amountCents: 1000000, balanceAfterCents: 1000000, at: "2026-03-01T12:00:00Z", note: "Q2 retainer" },
+    { id: "rt2", kind: "draw", amountCents: 580000, balanceAfterCents: 420000, at: "2026-06-01T12:00:00Z", invoiceId: "inv2" },
   ] },
 ];
 

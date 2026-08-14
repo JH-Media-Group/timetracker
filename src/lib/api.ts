@@ -1233,26 +1233,83 @@ export const deleteRecurringInvoice = async (id: ID): Promise<void> => {
   await del(`/recurring-invoices/${id}`);
 };
 
-export const listRetainers = async (): Promise<Retainer[]> => {
-  const rows = await get<{
-    id: string; clientId: string; projectId: string | null; balanceCents: number;
-    transactions: { id: string; kind: string; amountCents: number; invoiceId: string | null; note: string | null; at: string }[];
-  }[]>("/retainers");
-  return rows.map((r) => ({
-    id: r.id,
-    clientId: r.clientId,
-    projectId: opt(r.projectId),
-    balanceCents: r.balanceCents,
-    transactions: r.transactions.map((t) => ({
-      id: t.id,
-      kind: t.kind as "add" | "draw" | "adjust",
-      amountCents: t.amountCents,
-      at: t.at,
-      note: opt(t.note),
-      invoiceId: opt(t.invoiceId),
-    })),
-  }));
-};
+interface RetainerWire {
+  id: string; clientId: string; projectId: string | null; balanceCents: number;
+  archivedAt: string | null;
+  transactions: {
+    id: string; kind: string; amountCents: number; balanceAfterCents: number;
+    invoiceId: string | null; note: string | null; at: string;
+  }[];
+}
+
+const fromRetainer = (r: RetainerWire): Retainer => ({
+  id: r.id,
+  clientId: r.clientId,
+  projectId: opt(r.projectId),
+  balanceCents: r.balanceCents,
+  archivedAt: opt(r.archivedAt),
+  transactions: r.transactions.map((t) => ({
+    id: t.id,
+    kind: t.kind as "add" | "draw" | "adjust",
+    amountCents: t.amountCents,
+    balanceAfterCents: t.balanceAfterCents,
+    at: t.at,
+    note: opt(t.note),
+    invoiceId: opt(t.invoiceId),
+  })),
+});
+
+export const listRetainers = async (): Promise<Retainer[]> =>
+  (await get<RetainerWire[]>("/retainers")).map(fromRetainer);
+
+export interface CreateRetainerInput {
+  clientId: ID;
+  projectId?: ID | null;
+  openingCents?: number;
+  note?: string | null;
+}
+
+export const createRetainer = async (input: CreateRetainerInput): Promise<Retainer> =>
+  fromRetainer(
+    await post<RetainerWire>("/retainers", input, idempotencyKey("retainer-create", input))
+  );
+
+/**
+ * Money in, and the key is derived rather than random.
+ *
+ * A fresh UUID per call would make the mechanism inert: a double click sends
+ * two different keys, the server matches neither, and the client is credited
+ * twice. Derived from the amount and note, so pressing the button twice is the
+ * same request. Two genuinely separate payments of the same amount differ by
+ * their note, and if they do not, the second is almost certainly the accident
+ * this is here to stop.
+ */
+export const addRetainerFunds = async (
+  id: ID,
+  input: { amountCents: number; note?: string | null }
+): Promise<Retainer> =>
+  fromRetainer(
+    await post<RetainerWire>(
+      `/retainers/${id}/funds`,
+      input,
+      idempotencyKey("retainer-funds", { id, ...input })
+    )
+  );
+
+export const adjustRetainer = async (
+  id: ID,
+  input: { deltaCents: number; note: string }
+): Promise<Retainer> =>
+  fromRetainer(
+    await post<RetainerWire>(
+      `/retainers/${id}/adjust`,
+      input,
+      idempotencyKey("retainer-adjust", { id, ...input })
+    )
+  );
+
+export const archiveRetainer = async (id: ID): Promise<Retainer> =>
+  fromRetainer(await del<RetainerWire>(`/retainers/${id}`));
 
 /**
  * Edits a draft, or moves an invoice along its state machine.

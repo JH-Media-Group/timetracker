@@ -18,7 +18,9 @@ import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatDateUS, formatDueIn, formatMoney } from "@/lib/format";
 import type { Invoice, InvoiceState, RecurringInvoice, Retainer } from "@/lib/types";
-import { Badge, Button, Card, EmptyState, Select, Spinner, Tabs } from "@/components/ui/primitives";
+import {
+  Badge, Button, Card, Dialog, DialogContent, EmptyState, Field, Input, Select, Spinner, Tabs,
+} from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { PageBody, PageHeader, useUrlState } from "@/components/app/page-chrome";
 import { DataGrid } from "@/components/app/data-grid";
@@ -466,51 +468,218 @@ function RecurringList() {
 
 /* -------------------------------------------------------------- retainers */
 
+/**
+ * Retainers, and the two things you do with one: open it and put money in.
+ *
+ * The ledger was built and tested before any of this existed, so every retainer
+ * in the system was there because the seed wrote it. Nothing here computes a
+ * balance: the server moves it under a row lock and sends back the result,
+ * because a balance the browser worked out is a balance that can disagree with
+ * the ledger behind it.
+ */
 function RetainerList() {
   const { clientById, projectById } = useApp();
+  const can = useCan();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [opening, setOpening] = React.useState(false);
+  const [funding, setFunding] = React.useState<Retainer | null>(null);
+
   const { data: retainers = [] } = useQuery({ queryKey: ["retainers"], queryFn: api.listRetainers });
   const list = retainers as Retainer[];
+  const manage = can("invoice:manage");
+
+  const refresh = () => qc.invalidateQueries({ queryKey: ["retainers"] });
+
+  const newButton = manage && (
+    <Button variant="primary" onClick={() => setOpening(true)}>
+      <Plus className="size-4" />New retainer
+    </Button>
+  );
+
+  const dialogs = (
+    <>
+      {opening && (
+        <RetainerDialog
+          title="New retainer"
+          submitLabel="Open retainer"
+          onClose={() => setOpening(false)}
+          onDone={refresh}
+        />
+      )}
+      {funding && (
+        <RetainerDialog
+          title={`Add funds: ${clientById.get(funding.clientId)?.name ?? "retainer"}`}
+          submitLabel="Add funds"
+          retainer={funding}
+          onClose={() => setFunding(null)}
+          onDone={refresh}
+        />
+      )}
+    </>
+  );
 
   if (!list.length) {
-    return <Card><EmptyState title="No retainers.">A retainer holds a balance that invoices draw down.</EmptyState></Card>;
+    return (
+      <>
+        <Card>
+          <EmptyState title="No retainers." action={newButton}>
+            A retainer holds a balance that invoices draw down.
+          </EmptyState>
+        </Card>
+        {dialogs}
+      </>
+    );
   }
 
   return (
-    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-      {list.map((r) => {
-        const added = r.transactions.filter((t) => t.kind === "add").reduce((a, t) => a + t.amountCents, 0);
-        const drawn = r.transactions.filter((t) => t.kind === "draw").reduce((a, t) => a + t.amountCents, 0);
-        const pct = added ? Math.max(0, Math.min(1, r.balanceCents / added)) : 0;
-        return (
-          <Card key={r.id} className="flex flex-col gap-2">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <Link href={`/clients/${r.clientId}`} className="block truncate font-medium text-ink hover:underline">
-                  {clientById.get(r.clientId)?.name}
-                </Link>
-                <div className="truncate text-sm text-ink-tertiary">
-                  {r.projectId ? projectById.get(r.projectId)?.name : "All projects"}
+    <>
+      {manage && <div className="mb-3 flex justify-end">{newButton}</div>}
+      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        {list.map((r) => {
+          const added = r.transactions.filter((t) => t.kind === "add").reduce((a, t) => a + t.amountCents, 0);
+          const drawn = r.transactions.filter((t) => t.kind === "draw").reduce((a, t) => a + t.amountCents, 0);
+          const pct = added ? Math.max(0, Math.min(1, r.balanceCents / added)) : 0;
+          return (
+            <Card key={r.id} className="flex flex-col gap-2">
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <Link href={`/clients/${r.clientId}`} className="block truncate font-medium text-ink hover:underline">
+                    {clientById.get(r.clientId)?.name}
+                  </Link>
+                  <div className="truncate text-sm text-ink-tertiary">
+                    {r.projectId ? projectById.get(r.projectId)?.name : "All projects"}
+                  </div>
                 </div>
+                <Badge variant={r.balanceCents > 0 ? "success" : "warning"}>
+                  {r.balanceCents > 0 ? "In credit" : "Exhausted"}
+                </Badge>
               </div>
-              <Badge variant={r.balanceCents > 0 ? "success" : "warning"}>
-                {r.balanceCents > 0 ? "In credit" : "Exhausted"}
-              </Badge>
-            </div>
 
-            <div className="text-3xl font-semibold tracking-(--ls-tighter) text-ink">{formatMoney(r.balanceCents)}</div>
+              <div className="text-3xl font-semibold tracking-(--ls-tighter) text-ink">{formatMoney(r.balanceCents)}</div>
 
-            <div className="h-2 overflow-hidden rounded-full bg-bg-strong">
-              <div className="h-full rounded-full bg-accent" style={{ width: `${pct * 100}%` }} />
-            </div>
+              <div className="h-2 overflow-hidden rounded-full bg-bg-strong">
+                <div className="h-full rounded-full bg-accent" style={{ width: `${pct * 100}%` }} />
+              </div>
 
-            <div className="flex items-center justify-between text-sm text-ink-secondary">
-              <span>{formatMoney(added)} added</span>
-              <span>{formatMoney(drawn)} drawn</span>
-            </div>
-          </Card>
-        );
-      })}
-    </div>
+              <div className="flex items-center justify-between text-sm text-ink-secondary">
+                <span>{formatMoney(added)} added</span>
+                <span>{formatMoney(drawn)} drawn</span>
+              </div>
+
+              {manage && (
+                <div className="mt-1 flex justify-end">
+                  <Button size="sm" variant="secondary" onClick={() => setFunding(r)}>
+                    Add funds
+                  </Button>
+                </div>
+              )}
+            </Card>
+          );
+        })}
+      </div>
+      {dialogs}
+    </>
+  );
+}
+
+/**
+ * Opening a retainer and funding one are the same form.
+ *
+ * Both take an amount and a note; opening also takes a client. Keeping them one
+ * component means the money field, its parsing and its validation exist once,
+ * and cents never get divided by a hundred in two slightly different places.
+ */
+function RetainerDialog({
+  title,
+  submitLabel,
+  retainer,
+  onClose,
+  onDone,
+}: {
+  title: string;
+  submitLabel: string;
+  retainer?: Retainer;
+  onClose: () => void;
+  onDone: () => void;
+}) {
+  const { clients } = useApp();
+  const toast = useToast();
+  const [clientId, setClientId] = React.useState("");
+  const [amount, setAmount] = React.useState("");
+  const [note, setNote] = React.useState("");
+
+  const cents = Math.round((Number(amount) || 0) * 100);
+
+  const submit = useMutation({
+    mutationFn: () =>
+      retainer
+        ? api.addRetainerFunds(retainer.id, { amountCents: cents, note: note.trim() || null })
+        : api.createRetainer({ clientId, openingCents: cents, note: note.trim() || null }),
+    onSuccess: () => {
+      toast.push({ tone: "success", title: retainer ? "Funds added." : "Retainer opened." });
+      onDone();
+      onClose();
+    },
+    onError: (e: unknown) =>
+      toast.push({
+        tone: "danger",
+        title: e instanceof Error ? e.message : "That did not work.",
+      }),
+  });
+
+  const canSubmit = retainer ? cents > 0 : clientId !== "" && cents >= 0;
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent
+        title={title}
+        footer={
+          <>
+            <Button variant="ghost" type="button" onClick={onClose}>Cancel</Button>
+            <Button
+              variant="primary"
+              disabled={!canSubmit}
+              loading={submit.isPending}
+              onClick={() => canSubmit && submit.mutate()}
+            >
+              {submitLabel}
+            </Button>
+          </>
+        }
+      >
+      <div className="flex flex-col gap-4">
+        {!retainer && (
+          <Field label="Client" required>
+            <Select value={clientId} onChange={(e) => setClientId(e.target.value)}>
+              <option value="">Choose a client</option>
+              {clients.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </Select>
+          </Field>
+        )}
+
+        <Field
+          label={retainer ? "Amount to add" : "Opening amount"}
+          required={!!retainer}
+          help={retainer ? undefined : "Leave at zero to open an empty retainer and fund it later."}
+        >
+          <Input
+            inputMode="decimal"
+            value={amount}
+            placeholder="0.00"
+            onChange={(e) => setAmount(e.target.value)}
+          />
+        </Field>
+
+        <Field label="Note" help="What this payment was, for the ledger.">
+          <Input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Q3 retainer" />
+        </Field>
+
+      </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 

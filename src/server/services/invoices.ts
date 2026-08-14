@@ -31,6 +31,7 @@ import { roundGroup } from "@/domain/rounding";
 import { getSettings, roundingRule } from "./settings";
 import { resolveDefaults } from "@/domain/invoice-config";
 import { defaultItemTypeId } from "./item-types";
+import { ledgerDelta, moveBalance } from "./retainers";
 
 /* -------------------------------------------------------------------- read */
 
@@ -1448,20 +1449,19 @@ async function drawRetainer(ctx: Ctx, invoiceId: string, clientId: string) {
   const draw = Math.min(retainer.balanceCents, invoice.totalCents);
   if (draw <= 0) return;
 
-  const balanceAfter = retainer.balanceCents - draw;
-
-  await ctx.db.insert(s.retainerTransactions).values({
-    id: newId(),
+  // Through `moveBalance`, like every other change to a retainer balance. It
+  // takes the lock again, which is free inside this transaction and means the
+  // rule about never going below zero is enforced in one place rather than
+  // trusted at each call site.
+  const balanceAfter = await moveBalance(ctx, {
     retainerId: retainer.id,
     kind: "draw",
-    amountCents: draw,
-    balanceAfterCents: balanceAfter,
+    deltaCents: -draw,
     invoiceId,
     note: "Applied to invoice",
-    createdBy: ctx.actor.userId,
   });
+  if (balanceAfter === null) return;
 
-  await ctx.db.update(s.retainers).set({ balanceCents: balanceAfter }).where(eq(s.retainers.id, retainer.id));
   await ctx.db.update(s.invoices).set({ retainerDrawCents: draw }).where(eq(s.invoices.id, invoiceId));
 
   // A draw is money settling the invoice, so an invoice it fully covers is paid
@@ -1475,12 +1475,6 @@ async function drawRetainer(ctx: Ctx, invoiceId: string, clientId: string) {
       .where(eq(s.invoices.id, invoiceId));
   }
 
-  ctx.audit({
-    action: "retainer.draw",
-    entityType: "retainer",
-    entityId: retainer.id,
-    after: { invoiceId, amountCents: draw, balanceAfter },
-  });
 }
 
 /**
@@ -1520,20 +1514,13 @@ async function reverseRetainerDraw(
     .for("update");
   if (!retainer) return;
 
-  const balanceAfter = retainer.balanceCents + drawCents;
-
-  await ctx.db.insert(s.retainerTransactions).values({
-    id: newId(),
+  await moveBalance(ctx, {
     retainerId: retainer.id,
     kind: "adjust",
-    amountCents: drawCents,
-    balanceAfterCents: balanceAfter,
+    deltaCents: drawCents,
     invoiceId,
     note: `Draw reversed: ${reason}`,
-    createdBy: ctx.actor.userId,
   });
-
-  await ctx.db.update(s.retainers).set({ balanceCents: balanceAfter }).where(eq(s.retainers.id, retainer.id));
 
   // Subtract what was returned rather than zeroing, because an edit can return
   // part of a draw while the rest of it still applies.
@@ -1551,46 +1538,7 @@ async function reverseRetainerDraw(
  * what a schedule is. `listRecurring` used to live here.
  */
 
-export async function listRetainers(ctx: Ctx) {
-  assertCan(ctx, "invoice:view");
 
-  const rows = await ctx.db
-    .select()
-    .from(s.retainers)
-    .where(isNull(s.retainers.archivedAt))
-    .orderBy(desc(s.retainers.balanceCents));
-
-  if (rows.length === 0) return [];
-
-  const transactions = await ctx.db
-    .select()
-    .from(s.retainerTransactions)
-    .where(inArray(s.retainerTransactions.retainerId, rows.map((r) => r.id)))
-    .orderBy(desc(s.retainerTransactions.occurredAt));
-
-  const byRetainer = new Map<string, typeof transactions>();
-  for (const t of transactions) {
-    const list = byRetainer.get(t.retainerId);
-    if (list) list.push(t);
-    else byRetainer.set(t.retainerId, [t]);
-  }
-
-  return rows.map((r) => ({
-    id: r.id,
-    clientId: r.clientId,
-    projectId: r.projectId,
-    balanceCents: r.balanceCents,
-    transactions: (byRetainer.get(r.id) ?? []).map((t) => ({
-      id: t.id,
-      kind: t.kind,
-      amountCents: t.amountCents,
-      balanceAfterCents: t.balanceAfterCents,
-      invoiceId: t.invoiceId,
-      note: t.note,
-      at: t.occurredAt.toISOString(),
-    })),
-  }));
-}
 
 export async function addRetainerTransaction(
   ctx: Ctx,
@@ -1609,7 +1557,7 @@ export async function addRetainerTransaction(
       .for("update");
     if (!retainer) throw notFound("That retainer");
 
-    const delta = input.kind === "draw" ? -input.amountCents : input.amountCents;
+    const delta = ledgerDelta(input.kind, input.amountCents);
     const balanceAfter = retainer.balanceCents + delta;
 
     if (balanceAfter < 0) {

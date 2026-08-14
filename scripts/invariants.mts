@@ -41,11 +41,11 @@ const checks: Check[] = [
     why: "The ledger is the truth and the balance column is a convenience. They must agree.",
     query: sql`
       SELECT r.id, r.balance_cents,
-             COALESCE(SUM(CASE WHEN t.kind = 'draw' THEN -t.amount_cents ELSE t.amount_cents END), 0) AS ledger
+             COALESCE(SUM(CASE WHEN t.kind IN ('draw', 'reduce') THEN -t.amount_cents ELSE t.amount_cents END), 0) AS ledger
       FROM retainers r
       LEFT JOIN retainer_transactions t ON t.retainer_id = r.id
       GROUP BY r.id, r.balance_cents
-      HAVING r.balance_cents <> COALESCE(SUM(CASE WHEN t.kind = 'draw' THEN -t.amount_cents ELSE t.amount_cents END), 0)
+      HAVING r.balance_cents <> COALESCE(SUM(CASE WHEN t.kind IN ('draw', 'reduce') THEN -t.amount_cents ELSE t.amount_cents END), 0)
     `,
   },
   {
