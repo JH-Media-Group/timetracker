@@ -166,16 +166,13 @@ the same commit.
 Deliberate, measured, and left as they are because the fix is available when the
 number moves rather than because nobody noticed.
 
-- **The four report pages compute their figures in the browser from the raw
-  entries for the period.** The server has correct grouped endpoints for all
-  four (`/api/v1/reports/*`), and the client's arithmetic was changed to match
-  the server's exactly (aggregate the products, divide once), so the two agree
-  to the cent. What the client version costs is bandwidth: measured on the
-  seeded data, one month is 176 entries and 105 KB, a full year is 2,057 entries
-  and 1.2 MB. That is fine for eleven people over broadband and it is not fine
-  in 2031. Switching `TimeReport`, `ProfitabilityReport`, `TeamReport` and
-  `InvoicingReport` to the endpoints that already exist is the fix, and it is a
-  contained one because the row shapes were designed to match.
+- ~~The four report pages compute their figures in the browser.~~ **Fixed.**
+  They read `/api/v1/reports/*`. It began as a bandwidth note (a year of entries
+  was 1.2 MB against 7 to 11 KB for the grouped answer) and became a correctness
+  one: three of the four disagreed with the server, most seriously profitability,
+  which showed $[private total removed] profit for August where the API said $[private total removed], because the
+  client treated a fixed fee as its full value rather than recognising it across
+  the project window.
 
 - **Collections are capped rather than paginated.** Invoices at 1,000, expenses
   at 5,000, approvals at 500. Each route fetches one row past its cap and
