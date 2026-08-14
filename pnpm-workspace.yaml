@@ -1,0 +1,4 @@
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+  - "@node-rs/argon2"

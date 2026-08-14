@@ -1,0 +1,48 @@
+# Local development stack.
+#
+# The ports are deliberately not the defaults: this machine already runs
+# Postgres on 5432 and 5433 and Redis on 6379, 6380, and 6381 for other
+# projects. Picking 5434 and 6382 means Tally can come up without stopping
+# anything else.
+name: tally-dev
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: tally-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tally
+      POSTGRES_PASSWORD: tally_dev_password
+      POSTGRES_DB: tally
+      # Deterministic collation, so `lower(name)` unique indexes and ORDER BY
+      # behave the same here as on the droplet.
+      POSTGRES_INITDB_ARGS: "--locale=C --encoding=UTF8"
+    ports:
+      - "5434:5432"
+    volumes:
+      - tally_pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tally -d tally"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: tally-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6382:6379"
+    volumes:
+      - tally_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  tally_pg:
+  tally_redis:

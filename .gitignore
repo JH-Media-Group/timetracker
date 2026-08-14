@@ -1,9 +1,50 @@
+# dependencies
 node_modules/
+.pnp
+.pnp.*
+
+# next
 .next/
 out/
 build/
-.env*.local
-*.tsbuildinfo
 next-env.d.ts
+
+# production
+dist/
+
+# testing
+coverage/
+test-results/
+playwright-report/
+.vitest/
+
+# env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# database volumes and dumps
+docker/data/
+*.dump
+*.sql.gz
+
+# editors
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+
+# os
 .DS_Store
-.claude/scheduled_tasks.lock
+Thumbs.db
+desktop.ini
+
+# logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# misc
+.turbo/
+tsconfig.tsbuildinfo

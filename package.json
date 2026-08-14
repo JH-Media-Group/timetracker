@@ -9,9 +9,20 @@
     "start": "next start -p 3200",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
-    "validate:palette": "node scripts/validate-palette.mjs \"#2a78d6,#eb6834,#1baf7a,#eda100,#e87ba4,#008300,#4a3aa7,#e34948\" --mode light --surface \"#FFFFFF\" && node scripts/validate-palette.mjs \"#3987e5,#d95926,#199e70,#c98500,#d55181,#008300,#9085e9,#e66767\" --mode dark --surface \"#111113\""
+    "validate:palette": "node scripts/validate-palette.mjs \"#2a78d6,#eb6834,#1baf7a,#eda100,#e87ba4,#008300,#4a3aa7,#e34948\" --mode light --surface \"#FFFFFF\" && node scripts/validate-palette.mjs \"#3987e5,#d95926,#199e70,#c98500,#d55181,#008300,#9085e9,#e66767\" --mode dark --surface \"#111113\"",
+    "db:up": "docker compose -f docker/compose.dev.yml up -d",
+    "db:down": "docker compose -f docker/compose.dev.yml down",
+    "db:generate": "drizzle-kit generate",
+    "db:migrate": "tsx src/server/db/migrate.ts",
+    "db:migrate:test": "tsx src/server/db/migrate.ts --test",
+    "db:seed": "tsx src/server/db/seed.ts",
+    "db:reset": "tsx src/server/db/reset.ts",
+    "db:studio": "drizzle-kit studio",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
+    "@node-rs/argon2": "^2.1.0",
     "@radix-ui/react-checkbox": "^1.1.4",
     "@radix-ui/react-dialog": "^1.1.6",
     "@radix-ui/react-dropdown-menu": "^2.1.6",
@@ -28,19 +39,29 @@
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.1.0",
+    "drizzle-orm": "^0.45.2",
+    "ioredis": "^6.0.0",
     "lucide-react": "^0.475.0",
     "next": "^15.1.7",
+    "postgres": "^3.4.9",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "tailwind-merge": "^3.0.1"
+    "tailwind-merge": "^3.0.1",
+    "uuid": "^14.0.1",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.6",
     "@types/node": "^22.13.1",
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
+    "@vitejs/plugin-react": "^6.0.5",
+    "dotenv": "^17.4.2",
+    "drizzle-kit": "^0.31.10",
     "tailwindcss": "^4.0.6",
-    "typescript": "^5.7.3"
+    "tsx": "^4.23.12",
+    "typescript": "^5.7.3",
+    "vitest": "^4.1.10"
   },
   "packageManager": "pnpm@10.33.0"
 }
