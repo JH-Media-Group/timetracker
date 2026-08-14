@@ -1248,8 +1248,11 @@ export interface SearchHit { type: "project" | "client" | "person" | "invoice" |
 export async function search(q: string): Promise<SearchHit[]> {
   const term = q.trim();
   if (!term) return [];
-  const result = await get<{ hits: (SearchHit & { sub?: string | null })[] }>("/search", { q: term });
-  return (result.hits ?? []).map((h) => ({ ...h, sub: opt(h.sub) }));
+  // The hits are the collection, so they arrive as `data`; the per-type counts
+  // are the meta. Reading a `hits` key off the envelope returns undefined and
+  // the palette silently shows nothing for every query.
+  const hits = await get<(SearchHit & { sub?: string | null })[]>("/search", { q: term });
+  return (hits ?? []).map((h) => ({ ...h, sub: opt(h.sub) }));
 }
 
 /* ==================================================================== auth */
