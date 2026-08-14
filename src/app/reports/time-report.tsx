@@ -52,7 +52,7 @@ export function TimeReport({
       total += e.durationSeconds;
       if (e.isBillable) {
         billable += e.durationSeconds;
-        value.add(e.durationSeconds, e.billableRateCents);
+        value.add(e.durationSeconds, e.billableRateCents ?? 0);
       }
     }
     return { total, billable, nonBillable: total - billable, amount: value.cents };
@@ -83,7 +83,7 @@ export function TimeReport({
       cur.total += e.durationSeconds;
       if (e.isBillable) {
         cur.billable += e.durationSeconds;
-        cur.value.add(e.durationSeconds, e.billableRateCents);
+        cur.value.add(e.durationSeconds, e.billableRateCents ?? 0);
       }
       buckets.set(key, cur);
     }
@@ -207,7 +207,6 @@ export function TimeReport({
         totals={gridTotals}
         height={560}
         onRowOpen={groupBy === "task" ? undefined : open}
-        onExport={() => toast.push({ title: "Export queued. You will get an email when it is ready." })}
         filters={
           <Segmented
             value={groupBy}

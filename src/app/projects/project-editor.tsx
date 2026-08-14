@@ -114,10 +114,19 @@ function ProjectForm({ existing }: { existing?: Project }) {
       return existing ? api.updateProject(existing.id, body) : api.createProject(body);
     },
     // Awaited, so the detail page we land on already has the record.
-    onSuccess: async (p) => {
-      await qc.invalidateQueries({ queryKey: ["bootstrap"] });
+    onSuccess: (p) => {
+      // Same reason as the client editor: seed the cache, then navigate, then
+      // reconcile. See the comment there.
+      qc.setQueryData(["bootstrap"], (old: { projects?: Project[] } | undefined) => {
+        if (!old?.projects) return old;
+        const projects = existing
+          ? old.projects.map((x) => (x.id === p.id ? p : x))
+          : [p, ...old.projects];
+        return { ...old, projects };
+      });
       toast.push({ tone: "success", title: existing ? "Project updated." : "Project created." });
       router.push(`/projects/${p.id}`);
+      qc.invalidateQueries({ queryKey: ["bootstrap"] });
     },
   });
 

@@ -27,8 +27,9 @@ export interface User {
   departments: string[];
   weeklyCapacitySeconds: number;
   timezone: string;
-  billableRateCents: number;
-  costRateCents: number;
+  /** Absent means "you may not see this", which is not the same as zero. */
+  billableRateCents?: number;
+  costRateCents?: number;
   archivedAt?: string;
   startedOn?: string;
 }
@@ -103,8 +104,9 @@ export interface TimeEntry {
   timerStartedAt?: string;      // non-null means running
   notes?: string;
   isBillable: boolean;
-  billableRateCents: number;
-  costRateCents: number;
+  /** Absent means "you may not see this", which is not the same as zero. */
+  billableRateCents?: number;
+  costRateCents?: number;
   invoiceId?: ID;
   billedExternally?: boolean;
   approvalId?: ID;

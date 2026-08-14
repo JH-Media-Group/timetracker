@@ -26,7 +26,7 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 import { and, eq } from "drizzle-orm";
-import { AppError, fromDatabaseError, toProblem, unauthenticated, validationFailed } from "./errors";
+import { AppError, forbidden, fromDatabaseError, toProblem, unauthenticated, validationFailed } from "./errors";
 import { assertCan, createCtx, flush, type Ctx } from "./ctx";
 import { resolveSession } from "./auth/session";
 import { enforce, type RouteClass } from "./auth/rate-limit";
@@ -72,6 +72,8 @@ export interface RouteOptions {
    */
   transactional?: boolean;
   cacheControl?: string;
+  /** Ends the caller's own session by clearing the cookie on the way out. */
+  clearSessionCookie?: boolean;
 }
 
 const MUTATING = new Set(["POST", "PATCH", "PUT", "DELETE"]);
@@ -84,6 +86,15 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
 
     try {
       const ctx = options.public ? publicCtx(req, requestId) : await authenticatedCtx(req, requestId);
+
+      // Cross-site write protection.
+      //
+      // The session cookie is SameSite=Lax, so a cross-site form POST does not
+      // carry it, and a JSON content type forces a preflight that this app
+      // never answers for another origin. That is already two locks. This is
+      // the third, and it is the only one that does not depend on a browser
+      // getting the first two right.
+      if (mutating && !options.public) assertSameOrigin(req);
 
       // Rate limit before anything expensive happens.
       const bucket = options.rateLimit ?? (mutating ? "write" : "read");
@@ -131,6 +142,11 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
         },
       });
 
+      if (options.clearSessionCookie) {
+        const { clearedCookieOptions } = await import("./auth/session");
+        response.cookies.set(clearedCookieOptions());
+      }
+
       // Recording the response must never turn a committed mutation into a
       // failure: the write already happened, and a 500 here would have the
       // offline client replay it.
@@ -145,6 +161,33 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
       return problemResponse(error, requestId);
     }
   };
+}
+
+/**
+ * Refuses a state-changing request that came from somewhere else.
+ *
+ * `Origin` is set by every browser on a cross-origin request and on every
+ * same-origin request that is not a plain navigation, which covers all of ours.
+ * A request with no Origin at all is a non-browser caller (curl, a job, a
+ * health check) and is allowed: there is no ambient cookie to abuse there,
+ * because a script that has a session cookie already had to be given one.
+ */
+function assertSameOrigin(req: NextRequest): void {
+  const origin = req.headers.get("origin");
+  if (!origin) return;
+
+  const host = req.headers.get("host");
+  let originHost: string;
+  try {
+    originHost = new URL(origin).host;
+  } catch {
+    throw forbidden("That request did not come from Tally.");
+  }
+
+  if (host && originHost === host) return;
+  if (originHost === new URL(env.APP_URL).host) return;
+
+  throw forbidden("That request did not come from Tally.");
 }
 
 export function problemResponse(error: unknown, requestId: string): NextResponse {

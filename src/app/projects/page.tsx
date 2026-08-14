@@ -32,7 +32,7 @@ export default function ProjectsPage() {
   const qc = useQueryClient();
   const toast = useToast();
   const { params, set } = useUrlState();
-  const { projects, clientById, userById } = useApp();
+  const { projects, clientById, userById, projectById } = useApp();
   const can = useCan();
 
   const status = (params.get("status") as Status) || "active";
@@ -77,7 +77,7 @@ export default function ProjectsPage() {
       for (const p of list2.sort((a, b) => a.name.localeCompare(b.name))) {
         const mine = byProject.get(p.id) ?? [];
         const b = projectBudget(p, mine);
-        const costs = sumValue(mine, (e) => e.durationSeconds, (e) => e.costRateCents);
+        const costs = sumValue(mine, (e) => e.durationSeconds, (e) => e.costRateCents ?? 0);
         out.push({
           _id: p.id, _kind: "data", id: p.id, name: p.name, client,
           type: p.billingType === "fixed_fee" ? "Fixed Fee" : p.billingType === "non_billable" ? "Non-Billable" : "Time & Materials",
@@ -164,7 +164,9 @@ export default function ProjectsPage() {
                 <Plus className="size-4" />New project
               </Button>
             )}
-            <Button variant="secondary"><Upload className="size-3.5" />Import</Button>
+            <Button variant="secondary" onClick={() => router.push("/settings?tab=data")}>
+              <Upload className="size-3.5" />Import
+            </Button>
           </>
         }
       />
@@ -179,7 +181,6 @@ export default function ProjectsPage() {
           height={620}
           selectable={can("project:manage")}
           onRowOpen={(r) => r.id && router.push(`/projects/${r.id}`)}
-          onExport={() => toast.push({ title: "Export queued. You will get an email when it is ready." })}
           filters={
             <>
               <Select value={status} onChange={(e) => set({ status: e.target.value })} className="w-[200px]" aria-label="Project status">
@@ -196,8 +197,21 @@ export default function ProjectsPage() {
             </>
           }
           bulkActions={[
-            { key: "tags", label: "Add tags", input: "modal", run: () => { toast.push({ title: "Add tags opens a modal: more than one control does not fit the action row." }); } },
-            { key: "billable", label: "Set tasks billable", input: "inline", inlineLabel: "Set billable", inlinePlaceholder: "yes / no", run: (rows) => { toast.push({ tone: "success", title: `Updated ${rows.length} projects.` }); } },
+            {
+              key: "tags", label: "Add tags", input: "inline",
+              inlineLabel: "Tags", inlinePlaceholder: "retainer, priority",
+              run: async (sel, value) => {
+                const added = (value ?? "").split(",").map((t) => t.trim()).filter(Boolean);
+                if (!added.length) { toast.push({ tone: "danger", title: "Type one or more tags, separated by commas." }); return; }
+                const ids = (sel as Row[]).map((r) => r.id!).filter(Boolean);
+                for (const id of ids) {
+                  const current = projectById.get(id)?.tags ?? [];
+                  await api.updateProject(id, { tags: [...new Set([...current, ...added])] });
+                }
+                qc.invalidateQueries({ queryKey: ["bootstrap"] });
+                toast.push({ tone: "success", title: `Tagged ${ids.length} ${ids.length === 1 ? "project" : "projects"}.` });
+              },
+            },
             { key: "archive", label: "Archive", input: "immediate", end: true, run: async (sel) => {
               const ids = (sel as Row[]).map((r) => r.id!).filter(Boolean);
               for (const id of ids) await api.archiveProject(id, true);
@@ -207,8 +221,22 @@ export default function ProjectsPage() {
                 undo: async () => { for (const id of ids) await api.archiveProject(id, false); qc.invalidateQueries({ queryKey: ["bootstrap"] }); },
               });
             }},
-            { key: "delete", label: "Delete", intent: "danger", input: "modal", end: true,
-              run: () => { toast.push({ tone: "danger", title: "Delete requires typed confirmation." }); } },
+            {
+              key: "delete", label: "Delete", intent: "danger", input: "modal", end: true,
+              // Archive, not delete: a project carries tracked hours and
+              // invoices, and removing it would take the history of work that
+              // was really done and really billed with it.
+              run: async (sel) => {
+                const ids = (sel as Row[]).map((r) => r.id!).filter(Boolean);
+                for (const id of ids) await api.archiveProject(id, true);
+                qc.invalidateQueries({ queryKey: ["bootstrap"] });
+                toast.push({
+                  tone: "danger",
+                  title: `Archived ${ids.length} ${ids.length === 1 ? "project" : "projects"}. Projects are archived rather than deleted, because their hours and invoices are real.`,
+                  undo: async () => { for (const id of ids) await api.archiveProject(id, false); qc.invalidateQueries({ queryKey: ["bootstrap"] }); },
+                });
+              },
+            },
           ]}
           empty={
             <EmptyState title="No projects here." action={<Button variant="primary" onClick={() => router.push("/projects/new")}>New project</Button>}>

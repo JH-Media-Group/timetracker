@@ -3,11 +3,11 @@
 import * as React from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Pencil, Info } from "lucide-react";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { projectSummary, sumValue } from "@/lib/derive";
+import { budgetHealth, sumValue } from "@/lib/derive";
 import {
   addDays, formatDuration, formatHours, formatMoney, formatMoneyShort, formatPercent,
   isoDate, startOfWeek, toDate,
@@ -19,14 +19,18 @@ import {
 } from "@/components/ui/primitives";
 import { PageBody, PageHeader } from "@/components/app/page-chrome";
 import { BarChart, LineChart, Legend } from "@/components/app/charts";
+import { useToast } from "@/components/ui/toast";
 import { useApp, useCan } from "@/components/app/providers";
 import { InvoiceBadge, Kpi, KpiRow } from "@/components/app/kpi";
 
 export default function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { projectById, clientById, taskById, userById, settings, ready } = useApp();
+  const { projectById, clientById, taskById, userById, settings, ready, pinnedProjectIds } = useApp();
   const can = useCan();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const pinned = pinnedProjectIds.includes(id);
   const [chart, setChart] = React.useState<"progress" | "hours">("progress");
   const [tab, setTab] = React.useState<"tasks" | "team" | "invoices">("tasks");
   const [expanded, setExpanded] = React.useState<string | null>(null);
@@ -40,10 +44,40 @@ export default function ProjectDetailPage() {
   const { data: expenses = [] } = useQuery({ queryKey: ["expenses", "project", id], queryFn: () => api.listExpenses({ projectId: id }) });
   const { data: invoices = [] } = useQuery({ queryKey: ["invoices"], queryFn: api.listInvoices });
 
-  const summary = React.useMemo(
-    () => (project ? projectSummary(project, entries, expenses, invoices) : null),
-    [project, entries, expenses, invoices]
-  );
+  // From the server, not from the entries in hand. The two used to compute
+  // "invoiced" and "left to invoice" by different rules, and the project page
+  // is where somebody decides whether to send a bill.
+  const { data: summary } = useQuery({
+    queryKey: ["project-summary", id],
+    queryFn: () => api.getProjectSummary(id),
+    enabled: !!id,
+  });
+
+  const pin = useMutation({
+    mutationFn: () => api.togglePin(id, !pinned),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["bootstrap"] });
+      toast.push({ title: pinned ? "Unpinned." : "Pinned to the top of your project list." });
+    },
+  });
+
+  const archive = useMutation({
+    mutationFn: () => api.archiveProject(id, !project?.archivedAt),
+    onSuccess: async (updated) => {
+      await qc.invalidateQueries({ queryKey: ["bootstrap"] });
+      toast.push({
+        tone: updated.archivedAt ? "danger" : "success",
+        title: updated.archivedAt
+          ? "Project archived. It stays in reports and on invoices."
+          : "Project restored.",
+        undo: async () => {
+          await api.archiveProject(id, !updated.archivedAt);
+          qc.invalidateQueries({ queryKey: ["bootstrap"] });
+        },
+      });
+    },
+    onError: (e) => toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not archive that project." }),
+  });
 
   // Weekly series for both charts, over the project's tracked window.
   const weekly = React.useMemo(() => {
@@ -63,7 +97,7 @@ export default function ProjectDetailPage() {
       const idx = Math.round((wk.getTime() - first.getTime()) / (7 * 86400000));
       if (buckets[idx]) {
         buckets[idx].seconds += e.durationSeconds;
-        buckets[idx].centSeconds += e.durationSeconds * e.billableRateCents;
+        buckets[idx].centSeconds += e.durationSeconds * (e.billableRateCents ?? 0);
       }
     }
     return buckets;
@@ -89,8 +123,8 @@ export default function ProjectDetailPage() {
       .map(([taskId, list]) => ({
         taskId, list,
         seconds: list.reduce((a, e) => a + e.durationSeconds, 0),
-        billable: sumValue(list, (e) => e.durationSeconds, (e) => e.billableRateCents),
-        cost: sumValue(list, (e) => e.durationSeconds, (e) => e.costRateCents),
+        billable: sumValue(list, (e) => e.durationSeconds, (e) => e.billableRateCents ?? 0),
+        cost: sumValue(list, (e) => e.durationSeconds, (e) => e.costRateCents ?? 0),
       }))
       .sort((a, b) => b.seconds - a.seconds);
   }, [entries]);
@@ -102,8 +136,8 @@ export default function ProjectDetailPage() {
       .map(([userId, list]) => ({
         userId, list,
         seconds: list.reduce((a, e) => a + e.durationSeconds, 0),
-        billable: sumValue(list, (e) => e.durationSeconds, (e) => e.billableRateCents),
-        cost: sumValue(list, (e) => e.durationSeconds, (e) => e.costRateCents),
+        billable: sumValue(list, (e) => e.durationSeconds, (e) => e.billableRateCents ?? 0),
+        cost: sumValue(list, (e) => e.durationSeconds, (e) => e.costRateCents ?? 0),
       }))
       .sort((a, b) => b.seconds - a.seconds);
   }, [entries]);
@@ -124,7 +158,17 @@ export default function ProjectDetailPage() {
   }
 
   const client = clientById.get(project.clientId);
-  const b = summary?.budget;
+  // The server reports the budget as a number and a unit; the health band and
+  // the "hours or fees" label are presentation, so they stay here.
+  const b = React.useMemo(() => {
+    const raw = summary?.budget;
+    if (!raw) return undefined;
+    return {
+      ...raw,
+      kind: raw.by.endsWith("_hours") ? ("hours" as const) : raw.by === "none" ? ("none" as const) : ("fees" as const),
+      health: budgetHealth(raw.percentUsed),
+    };
+  }, [summary]);
   const typeLabel = project.billingType === "fixed_fee" ? "Fixed Fee" : project.billingType === "non_billable" ? "Non-Billable" : "Time & Materials";
 
   return (
@@ -143,8 +187,15 @@ export default function ProjectDetailPage() {
             <Menu trigger={<Button variant="secondary">Actions<ChevronDown className="size-3.5" /></Button>}>
               <MenuItem onSelect={() => router.push(`/reports?by=project&project=${id}`)}>View time report</MenuItem>
               <MenuItem onSelect={() => router.push(`/invoices?project=${id}`)}>New invoice</MenuItem>
+              <MenuItem onSelect={() => pin.mutate()}>{pinned ? "Unpin" : "Pin"}</MenuItem>
               <MenuSeparator />
-              <MenuItem>Archive</MenuItem>
+              <MenuItem
+                danger
+                disabled={!can("project:manage") || archive.isPending}
+                onSelect={() => archive.mutate()}
+              >
+                {project.archivedAt ? "Restore" : "Archive"}
+              </MenuItem>
             </Menu>
           </>
         }
@@ -242,6 +293,12 @@ export default function ProjectDetailPage() {
 
           <Kpi label="Uninvoiced amount" value={formatMoney(summary?.uninvoicedCents ?? 0)}>
             {project.feeCents != null && <KpiRow label="Total project fees" value={formatMoney(project.feeCents)} />}
+            {summary?.feesToDateCents != null && summary.feesToDateCents !== project.feeCents && (
+              <KpiRow label="Earned so far" value={formatMoney(summary.feesToDateCents)} />
+            )}
+            {(summary?.overbilledCents ?? 0) > 0 && (
+              <KpiRow label="Billed ahead" value={formatMoney(summary!.overbilledCents)} />
+            )}
             <Link href={`/invoices?project=${id}`} className="text-base text-link underline">New invoice</Link>
           </Kpi>
         </div>

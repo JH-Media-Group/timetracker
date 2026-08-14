@@ -101,12 +101,21 @@ function ClientForm({ existing }: { existing?: Client }) {
       };
       return existing ? api.updateClient(existing.id, body) : api.createClient(body);
     },
-    // Awaited, so the detail page we land on already has the record. Without
-    // this the new client renders as "not found" for a beat.
-    onSuccess: async (c) => {
-      await qc.invalidateQueries({ queryKey: ["bootstrap"] });
+    onSuccess: (c) => {
+      // Put the record into the cached bootstrap before navigating, so the
+      // detail page has it on its first render. Awaiting a refetch instead
+      // works, but it makes the redirect wait on six queries, and a new client
+      // rendering as "not found" for a beat is exactly what this avoids.
+      qc.setQueryData(["bootstrap"], (old: { clients?: Client[] } | undefined) => {
+        if (!old?.clients) return old;
+        const clients = existing
+          ? old.clients.map((x) => (x.id === c.id ? c : x))
+          : [c, ...old.clients];
+        return { ...old, clients };
+      });
       toast.push({ tone: "success", title: existing ? "Client updated." : "Client created." });
       router.push(`/clients/${c.id}`);
+      qc.invalidateQueries({ queryKey: ["bootstrap"] });
     },
   });
 

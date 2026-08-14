@@ -26,6 +26,14 @@ interface TimerCtx {
   stop: () => Promise<void>;
   restart: (entryId: string) => Promise<void>;
   isBusy: boolean;
+  /**
+   * True when the running-timer query is failing.
+   *
+   * Absent data and unreachable data look identical in a widget that shows
+   * "Start timer" for both, and somebody who believes no timer is running will
+   * start a second one over the top of the first.
+   */
+  unreachable: boolean;
 }
 
 const Ctx = React.createContext<TimerCtx | null>(null);
@@ -47,7 +55,7 @@ export function TimerProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const anonymous = pathname.startsWith("/signin");
 
-  const { data: running = null } = useQuery({
+  const { data: running = null, isError: timerUnreachable } = useQuery({
     queryKey: ["running"],
     queryFn: () => api.getRunningEntry(),
     enabled: !anonymous,
@@ -128,6 +136,7 @@ export function TimerProvider({ children }: { children: React.ReactNode }) {
     stop: async () => { await stopM.mutateAsync(); },
     restart: async (id) => { await restartM.mutateAsync(id); },
     isBusy: startM.isPending || stopM.isPending || restartM.isPending,
+    unreachable: timerUnreachable,
   }), [running, elapsed, startM, stopM, restartM]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

@@ -34,8 +34,10 @@ export default function ReportsPage() {
   const tabs = [
     { value: "time", label: "Time" },
     ...(financial ? [{ value: "profitability", label: "Profitability" }] : []),
-    ...(can("time:view_others") ? [{ value: "team", label: "Team" }] : []),
-    ...(can("invoice:manage") || financial ? [{ value: "invoicing", label: "Invoicing" }] : []),
+    // Gated on what the endpoint actually requires, not on something adjacent:
+    // a tab that 403s is worse than a tab that is not there.
+    ...(can("report:view_team") || can("report:view_all") ? [{ value: "team", label: "Team" }] : []),
+    ...(can("report:view_financial") ? [{ value: "invoicing", label: "Invoicing" }] : []),
   ];
 
   const allowed = tabs.some((t) => t.value === report) ? report : "time";

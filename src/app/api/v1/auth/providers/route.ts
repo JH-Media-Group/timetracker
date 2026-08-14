@@ -13,7 +13,12 @@ export function GET() {
   return NextResponse.json(
     {
       data: {
-        google: Boolean(env.google),
+        // False until the callback route exists, whatever the environment says.
+        // Reporting a provider whose sign-in link 404s is worse than not
+        // offering it: the person clicks the button they were told to use and
+        // lands on an error page.
+        google: false,
+        googleConfigured: Boolean(env.google),
         password: true,
         hostedDomain: env.google ? env.GOOGLE_HOSTED_DOMAIN : null,
       },

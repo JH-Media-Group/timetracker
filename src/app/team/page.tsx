@@ -10,13 +10,13 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
 import { Plus } from "lucide-react";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { utilization } from "@/lib/derive";
-import { formatDuration, formatPercent } from "@/lib/format";
+import { formatDuration, formatPercent, isoDate, startOfWeek } from "@/lib/format";
 import type { TimeEntry } from "@/lib/types";
 import { PROFILE_LABEL } from "@/lib/labels";
 import { Avatar, Badge, Button, EmptyState, Meter, Select } from "@/components/ui/primitives";
@@ -32,10 +32,11 @@ interface Row {
   photo?: string; firstName: string; lastName: string;
   profile: string; type: string; roles: string;
   tracked: number; billable: number; capacity: number; util: number;
-  billableRate: number; costRate: number; archived: boolean;
+  billableRate?: number; costRate?: number; archived: boolean;
 }
 
 export default function TeamPage() {
+  const qc = useQueryClient();
   const router = useRouter();
   const toast = useToast();
   const { params, set } = useUrlState();
@@ -138,7 +139,7 @@ export default function TeamPage() {
       <PageHeader
         title="Team"
         actions={can("people:manage") && (
-          <Button variant="primary" onClick={() => toast.push({ title: "Invites are sent from Settings, People." })}>
+          <Button variant="primary" onClick={() => router.push("/settings?tab=people")}>
             <Plus className="size-4" />Invite people
           </Button>
         )}
@@ -162,7 +163,6 @@ export default function TeamPage() {
           height={620}
           selectable={can("people:manage")}
           onRowOpen={(r) => router.push(`/team/${r.id}`)}
-          onExport={() => toast.push({ title: "Export queued. You will get an email when it is ready." })}
           filters={
             <>
               <Select value={status} onChange={(e) => set({ status: e.target.value })} className="w-[170px]" aria-label="Person status">
@@ -180,15 +180,45 @@ export default function TeamPage() {
             {
               key: "capacity", label: "Set capacity", input: "inline",
               inlineLabel: "Hours / week", inlinePlaceholder: "40",
-              run: (sel, v) => { toast.push({ tone: "success", title: `Capacity set to ${v ?? "40"} hours a week for ${sel.length} people.` }); },
+              run: async (sel, v) => {
+                const hours = Number((v ?? "").trim());
+                if (!Number.isFinite(hours) || hours < 0 || hours > 168) {
+                  toast.push({ tone: "danger", title: "Capacity is a number of hours between 0 and 168." });
+                  return;
+                }
+                const ids = (sel as Row[]).map((r) => r.id);
+                for (const id of ids) await api.updateUser(id, { weeklyCapacitySeconds: Math.round(hours * 3600) });
+                qc.invalidateQueries({ queryKey: ["bootstrap"] });
+                toast.push({ tone: "success", title: `Capacity set to ${hours} hours a week for ${ids.length} ${ids.length === 1 ? "person" : "people"}.` });
+              },
             },
             {
               key: "remind", label: "Send reminder", input: "immediate",
-              run: (sel) => { toast.push({ tone: "success", title: `Reminder sent to ${sel.length} ${sel.length === 1 ? "person" : "people"}.` }); },
+              run: async (sel) => {
+                // The reminder is about an unsubmitted timesheet, so it needs a
+                // week. Last week is the one people are chased about.
+                const monday = startOfWeek(new Date());
+                monday.setDate(monday.getDate() - 7);
+                const count = await api.remindToSubmit(isoDate(monday), (sel as Row[]).map((r) => r.id));
+                toast.push({
+                  title: count
+                    ? `Reminded ${count} ${count === 1 ? "person" : "people"} about the week of ${isoDate(monday)}.`
+                    : "Everybody selected has already submitted that week.",
+                });
+              },
             },
             {
               key: "archive", label: "Archive", input: "immediate", end: true,
-              run: (sel) => { toast.push({ tone: "success", title: `Archived ${sel.length} ${sel.length === 1 ? "person" : "people"}. Their tracked time is kept.` }); },
+              run: async (sel) => {
+                const ids = (sel as Row[]).map((r) => r.id);
+                for (const id of ids) await api.archiveUser(id, true);
+                qc.invalidateQueries({ queryKey: ["bootstrap"] });
+                toast.push({
+                  tone: "danger",
+                  title: `Archived ${ids.length} ${ids.length === 1 ? "person" : "people"}. Their tracked time is kept.`,
+                  undo: async () => { for (const id of ids) await api.archiveUser(id, false); qc.invalidateQueries({ queryKey: ["bootstrap"] }); },
+                });
+              },
             },
           ]}
           empty={<EmptyState title="Nobody here.">Invite people from Settings, People.</EmptyState>}

@@ -53,10 +53,10 @@ export default function PersonDetailPage() {
     const revenueAcc = new ValueAccumulator();
     for (const e of list) {
       seconds += e.durationSeconds;
-      costAcc.add(e.durationSeconds, e.costRateCents);
+      costAcc.add(e.durationSeconds, e.costRateCents ?? 0);
       if (e.isBillable) {
         billableSeconds += e.durationSeconds;
-        revenueAcc.add(e.durationSeconds, e.billableRateCents);
+        revenueAcc.add(e.durationSeconds, e.billableRateCents ?? 0);
       }
     }
     const cost = costAcc.cents;

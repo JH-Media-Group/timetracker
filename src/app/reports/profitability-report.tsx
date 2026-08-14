@@ -213,7 +213,6 @@ export function ProfitabilityReport({
         totals={gridTotals}
         height={560}
         onRowOpen={(r) => router.push(groupBy === "project" ? `/projects/${r.id}` : `/clients/${r.id}`)}
-        onExport={() => toast.push({ title: "Export queued. You will get an email when it is ready." })}
         filters={
           <Segmented
             value={groupBy}

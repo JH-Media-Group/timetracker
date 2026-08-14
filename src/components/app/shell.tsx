@@ -34,12 +34,12 @@ const SECTIONS: NavSection[] = [
   ]},
   { label: "Organize", items: [
     { href: "/team", label: "Team", icon: Users },
-    { href: "/clients", label: "Clients", icon: Building2, cap: "client:manage" },
+    { href: "/clients", label: "Clients", icon: Building2, cap: "client:view" },
     { href: "/projects", label: "Projects", icon: FolderOpen },
     { href: "/tasks", label: "Tasks", icon: ListChecks, cap: "task:manage" },
   ]},
   { label: "Bill", items: [
-    { href: "/invoices", label: "Invoices", icon: FileText, cap: "invoice:manage" },
+    { href: "/invoices", label: "Invoices", icon: FileText, cap: "invoice:view" },
   ]},
   { label: "Review", items: [
     { href: "/reports", label: "Reports", icon: BarChart3 },
@@ -112,13 +112,26 @@ function Sidebar({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => 
 /* ------------------------------------------------------------- top bar */
 
 function TimerWidget() {
-  const { running, elapsed, stop, isBusy } = useTimer();
+  const { running, elapsed, stop, isBusy, unreachable } = useTimer();
   const { projectById, taskById, clientById } = useApp();
   const [open, setOpen] = React.useState(false);
 
   const project = running ? projectById.get(running.projectId) : undefined;
   const task = running ? taskById.get(running.taskId) : undefined;
   const client = project ? clientById.get(project.clientId) : undefined;
+
+  if (unreachable) {
+    // Not "no timer": we do not know. Saying so is the difference between
+    // somebody starting a second timer over the first and somebody retrying.
+    return (
+      <Tooltip content="Cannot reach the server, so the timer state is unknown. It will reconnect on its own.">
+        <span className={timerPillVariants({ state: "idle" })} data-testid="timer-unreachable">
+          <Clock className="size-3.5" aria-hidden />
+          Timer unavailable
+        </span>
+      </Tooltip>
+    );
+  }
 
   if (!running) {
     return (

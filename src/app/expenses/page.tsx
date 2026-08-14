@@ -9,6 +9,7 @@
  */
 
 import * as React from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
 import { Paperclip, Plus } from "lucide-react";
@@ -196,7 +197,6 @@ export default function ExpensesPage() {
           totals={totals}
           height={600}
           selectable={can("expense:manage")}
-          onExport={() => toast.push({ title: "Export queued. You will get an email when it is ready." })}
           filters={
             <Select
               value={view}
@@ -289,7 +289,7 @@ function ExpenseHeader({
 
 function CategoryList({ expenses }: { expenses: Expense[] }) {
   const { expenseCategories } = useApp();
-  const toast = useToast();
+  const router = useRouter();
 
   const stats = React.useMemo(() => {
     const m = new Map<string, { count: number; total: number }>();
@@ -310,7 +310,7 @@ function CategoryList({ expenses }: { expenses: Expense[] }) {
             A category with a unit price bills by quantity, like mileage. Everything else takes a plain amount.
           </p>
         </div>
-        <Button variant="secondary" size="sm" onClick={() => toast.push({ title: "Categories are managed in Settings, Expense categories." })}>
+        <Button variant="secondary" size="sm" onClick={() => router.push("/settings?tab=expenses")}>
           <Plus className="size-3.5" />New category
         </Button>
       </div>

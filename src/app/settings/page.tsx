@@ -380,6 +380,28 @@ function PeopleSection() {
 function ExpenseCategoriesSection({ readOnly }: { readOnly: boolean }) {
   const { expenseCategories } = useApp();
   const toast = useToast();
+  const qc = useQueryClient();
+  const [creating, setCreating] = React.useState(false);
+  const [draft, setDraft] = React.useState({ name: "", unitName: "", unitPrice: "" });
+
+  const create = useMutation({
+    mutationFn: () =>
+      api.createExpenseCategory({
+        name: draft.name.trim(),
+        unitName: draft.unitName.trim() || undefined,
+        // A unit price is entered in dollars and stored in cents, like every
+        // other amount in the app.
+        unitPriceCents: draft.unitPrice.trim() ? Math.round(Number(draft.unitPrice) * 100) : undefined,
+      }),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["bootstrap"] });
+      setCreating(false);
+      setDraft({ name: "", unitName: "", unitPrice: "" });
+      toast.push({ tone: "success", title: "Category added." });
+    },
+    onError: (e) =>
+      toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not add that category." }),
+  });
 
   return (
     <Card padded={false}>
@@ -389,11 +411,50 @@ function ExpenseCategoriesSection({ readOnly }: { readOnly: boolean }) {
           <p className="text-base text-ink-secondary">A unit price turns a category into a quantity, like mileage.</p>
         </div>
         {!readOnly && (
-          <Button variant="secondary" size="sm" onClick={() => toast.push({ title: "Category editing arrives with the real backend." })}>
+          <Button variant="secondary" size="sm" onClick={() => setCreating((c) => !c)}>
             New category
           </Button>
         )}
       </div>
+
+      {creating && (
+        <div className="flex flex-wrap items-end gap-3 border-t border-border bg-bg-subtle px-4 py-3">
+          <Field label="Name" className="min-w-[200px] flex-1">
+            <Input
+              value={draft.name}
+              autoFocus
+              placeholder="Mileage"
+              onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+            />
+          </Field>
+          <Field label="Unit" help="Blank for a plain amount." className="w-[140px]">
+            <Input
+              value={draft.unitName}
+              placeholder="mile"
+              onChange={(e) => setDraft({ ...draft, unitName: e.target.value })}
+            />
+          </Field>
+          <Field label="Price per unit" className="w-[140px]">
+            <Input
+              value={draft.unitPrice}
+              inputMode="decimal"
+              placeholder="0.67"
+              onChange={(e) => setDraft({ ...draft, unitPrice: e.target.value })}
+            />
+          </Field>
+          <div className="flex gap-2 pb-0.5">
+            <Button variant="ghost" onClick={() => setCreating(false)}>Cancel</Button>
+            <Button
+              variant="primary"
+              disabled={!draft.name.trim()}
+              loading={create.isPending}
+              onClick={() => create.mutate()}
+            >
+              Add category
+            </Button>
+          </div>
+        </div>
+      )}
       <div className="flex items-center border-y border-border bg-bg-muted px-4 py-2 text-xs font-semibold uppercase tracking-[0.04em] text-ink-tertiary">
         <span className="flex-1">Category</span>
         <span className="w-32">Unit</span>
@@ -418,6 +479,19 @@ function SecuritySection() {
   const { me } = useApp();
   const toast = useToast();
 
+  const signOutAll = useMutation({
+    mutationFn: api.signOutEverywhere,
+    // The caller's own session is revoked too, so the next request 401s and the
+    // client's redirect takes them to sign in. Doing it here is faster and says
+    // why they are leaving.
+    onSuccess: (r) => {
+      toast.push({ tone: "danger", title: `${r.revoked} sessions ended. Everyone will sign in again.` });
+      window.location.href = "/signin";
+    },
+    onError: (e) =>
+      toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not end those sessions." }),
+  });
+
   return (
     <div className="flex flex-col gap-4">
       <Card>
@@ -437,7 +511,16 @@ function SecuritySection() {
         <p className="mb-3 text-base text-ink-secondary">
           Sessions last 30 days. Signing everyone out is the fastest response to a lost laptop.
         </p>
-        <Button variant="danger-ghost" onClick={() => toast.push({ tone: "danger", title: "Everyone will be asked to sign in again." })}>
+        <Button
+          variant="danger-ghost"
+          loading={signOutAll.isPending}
+          onClick={() => {
+            // No confirmation dialog and no undo, because there is nothing to
+            // undo: signing back in is the recovery. The typed confirmation is
+            // reserved for actions that destroy data.
+            if (window.confirm("Sign every device out, including this one?")) signOutAll.mutate();
+          }}
+        >
           Sign all devices out
         </Button>
       </Card>
@@ -468,12 +551,14 @@ function DataSection() {
           Large exports are emailed when they are ready.
         </p>
         <div className="flex flex-wrap gap-2">
-          <Button variant="secondary" onClick={() => toast.push({ title: "Export queued. You will get an email when it is ready." })}>
-            Export everything
-          </Button>
-          <Button variant="ghost" onClick={() => toast.push({ title: "Time export queued." })}>Time only</Button>
-          <Button variant="ghost" onClick={() => toast.push({ title: "Invoice export queued." })}>Invoices only</Button>
+          <Button variant="secondary" disabled>Export everything</Button>
+          <Button variant="ghost" disabled>Time only</Button>
+          <Button variant="ghost" disabled>Invoices only</Button>
         </div>
+        <p className="mt-2 text-sm text-ink-tertiary">
+          Not built yet. Until it is, every list has an Export button that writes what is on screen
+          to CSV, which covers most of what a full export is used for.
+        </p>
       </Card>
 
       <Card>
@@ -483,9 +568,10 @@ function DataSection() {
           first, so you see exactly what would change before anything is written.
         </p>
         <Dropzone
-          label="Drop a CSV, or click to choose"
-          hint="Up to 50 MB. Harvest exports are recognised automatically."
-          onFiles={(files) => toast.push({ title: `Previewing ${files[0]?.name}. Nothing has been imported yet.` })}
+          label="Importing is not built yet"
+          hint="The Harvest migration runs from the command line for now."
+          state="invalid"
+          onFiles={() => {}}
         />
       </Card>
 
@@ -526,7 +612,7 @@ function IntegrationsSection() {
             variant={i.state === "Connected" ? "ghost" : "secondary"}
             size="sm"
             className="self-start"
-            onClick={() => toast.push({ title: `${i.name} ${i.state === "Connected" ? "disconnected" : "connected"}.` })}
+            disabled
           >
             {i.state === "Connected" ? "Disconnect" : "Connect"}
           </Button>

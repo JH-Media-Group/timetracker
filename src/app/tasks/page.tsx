@@ -156,7 +156,6 @@ export default function TasksPage() {
           totals={totals}
           height={560}
           selectable={can("task:manage")}
-          onExport={() => toast.push({ title: "Export queued. You will get an email when it is ready." })}
           filters={
             <Select value={status} onChange={(e) => set({ status: e.target.value })} className="w-[190px]" aria-label="Task status">
               <option value="active">Active tasks ({counts.active})</option>

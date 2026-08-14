@@ -11,7 +11,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Download, Send } from "lucide-react";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
@@ -43,6 +43,39 @@ export default function InvoiceDetailPage() {
     qc.invalidateQueries({ queryKey: ["invoice", id] });
     qc.invalidateQueries({ queryKey: ["invoices"] });
   };
+
+  const invoiceClient = invoice ? clientById.get(invoice.clientId) : undefined;
+  const primaryEmail =
+    invoiceClient?.contacts.find((c) => c.isPrimary)?.email ??
+    invoiceClient?.contacts.find((c) => c.email)?.email ??
+    null;
+
+  const reminder = useMutation({
+    mutationFn: () => api.sendReminder(id, primaryEmail ? [primaryEmail] : []),
+    onSuccess: (r) => {
+      refresh();
+      // Says what happened, not what was hoped for. With no mail transport
+      // configured the row is written and nothing leaves the building, and the
+      // person chasing a payment needs to know which of those it was.
+      toast.push({
+        tone: r.delivered ? "success" : undefined,
+        title: r.delivered
+          ? `Reminder sent to ${primaryEmail}.`
+          : "Reminder recorded on the timeline. No email was sent: mail delivery is not configured yet.",
+      });
+    },
+    onError: (e) => toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not send that reminder." }),
+  });
+
+  const duplicate = useMutation({
+    mutationFn: () => api.duplicateInvoice(id),
+    onSuccess: (copy) => {
+      qc.invalidateQueries({ queryKey: ["invoices"] });
+      toast.push({ tone: "success", title: `Duplicated as ${copy.number}.` });
+      router.push(`/invoices/${copy.id}`);
+    },
+    onError: (e) => toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not duplicate that invoice." }),
+  });
 
   if (isLoading) {
     return (
@@ -83,12 +116,14 @@ export default function InvoiceDetailPage() {
             {balance > 0 && !editable && (
               <Button variant="primary" onClick={() => setPaying(true)}>Record payment</Button>
             )}
-            <Button variant="secondary" onClick={() => toast.push({ title: "PDF queued. It will download when it is ready." })}>
-              <Download className="size-3.5" />PDF
+            <Button variant="secondary" onClick={() => window.print()}>
+              <Download className="size-3.5" />Print or save as PDF
             </Button>
             <Menu trigger={<Button variant="secondary">Actions</Button>}>
-              <MenuItem onSelect={() => toast.push({ title: "Reminder emailed to the primary contact." })}>Email reminder</MenuItem>
-              <MenuItem onSelect={() => toast.push({ title: "Invoice duplicated as a new draft." })}>Duplicate</MenuItem>
+              <MenuItem disabled={reminder.isPending || !primaryEmail} onSelect={() => reminder.mutate()}>
+                {primaryEmail ? "Email reminder" : "Email reminder (no contact email)"}
+              </MenuItem>
+              <MenuItem disabled={duplicate.isPending} onSelect={() => duplicate.mutate()}>Duplicate</MenuItem>
               <MenuItem onSelect={async () => { await api.updateInvoice(inv.id, { state: "written_off" }); refresh(); toast.push({ title: "Invoice written off." }); }}>
                 Write off
               </MenuItem>

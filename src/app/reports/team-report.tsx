@@ -186,7 +186,6 @@ export function TeamReport({ entries, period }: { entries: TimeEntry[]; period: 
         totals={gridTotals}
         height={560}
         onRowOpen={(r) => router.push(`/team/${r.id}`)}
-        onExport={() => toast.push({ title: "Export queued. You will get an email when it is ready." })}
         filters={
           <Segmented
             value={scope}

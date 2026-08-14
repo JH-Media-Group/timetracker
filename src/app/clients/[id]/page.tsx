@@ -11,7 +11,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Mail, Pencil, Phone, Plus } from "lucide-react";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
@@ -31,6 +31,7 @@ export default function ClientDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const toast = useToast();
+  const qc = useQueryClient();
   const { clientById, projects, ready } = useApp();
   const can = useCan();
   const client = clientById.get(id);
@@ -48,6 +49,20 @@ export default function ClientDetailPage() {
     () => projects.filter((p) => p.clientId === id),
     [projects, id]
   );
+
+  const archive = useMutation({
+    mutationFn: () => api.archiveClient(id),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: ["bootstrap"] });
+      toast.push({
+        tone: "danger",
+        title: "Client archived. Their history stays in reports and on invoices.",
+      });
+      router.push("/clients");
+    },
+    onError: (e) =>
+      toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not archive that client." }),
+  });
   const clientInvoices = React.useMemo(
     () => (invoices as Invoice[]).filter((i) => i.clientId === id).sort((a, b) => b.issueDate.localeCompare(a.issueDate)),
     [invoices, id]
@@ -60,10 +75,10 @@ export default function ClientDetailPage() {
     const costAcc = new ValueAccumulator();
     for (const e of list) {
       seconds += e.durationSeconds;
-      costAcc.add(e.durationSeconds, e.costRateCents);
+      costAcc.add(e.durationSeconds, e.costRateCents ?? 0);
       if (e.isBillable) {
         billableSeconds += e.durationSeconds;
-        if (!e.invoiceId && !e.billedExternally) uninvoicedAcc.add(e.durationSeconds, e.billableRateCents);
+        if (!e.invoiceId && !e.billedExternally) uninvoicedAcc.add(e.durationSeconds, e.billableRateCents ?? 0);
       }
     }
     const uninvoiced = uninvoicedAcc.cents;
@@ -138,10 +153,12 @@ export default function ClientDetailPage() {
             <Menu trigger={<Button variant="secondary">Actions</Button>}>
               <MenuItem onSelect={() => router.push("/projects/new")}>New project</MenuItem>
               <MenuItem onSelect={() => router.push(`/invoices/new?client=${client.id}`)}>New invoice</MenuItem>
-              <MenuItem onSelect={() => toast.push({ title: "Statement queued. You will get an email when it is ready." })}>
-                Email statement
-              </MenuItem>
-              <MenuItem danger onSelect={() => toast.push({ tone: "danger", title: "Archiving hides the client everywhere except reports." })}>
+              <MenuItem disabled>Email statement (needs email delivery)</MenuItem>
+              <MenuItem
+                danger
+                disabled={!can("client:manage") || archive.isPending || !!client.archivedAt}
+                onSelect={() => archive.mutate()}
+              >
                 Archive client
               </MenuItem>
             </Menu>
@@ -240,7 +257,7 @@ export default function ClientDetailPage() {
                   const b = projectBudget(p, mine);
                   const seconds = mine.reduce((a, e) => a + e.durationSeconds, 0);
                   const uninvoiced = mine.reduce(
-                    (a, e) => a + (e.isBillable && !e.invoiceId && !e.billedExternally ? e.durationSeconds * e.billableRateCents : 0), 0
+                    (a, e) => a + (e.isBillable && !e.invoiceId && !e.billedExternally ? e.durationSeconds * (e.billableRateCents ?? 0) : 0), 0
                   ) / 3600  /* summed as products, divided once */;
                   return (
                     <Link

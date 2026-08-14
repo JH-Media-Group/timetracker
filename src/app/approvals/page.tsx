@@ -92,7 +92,16 @@ export default function ApprovalsPage() {
   [all, state, userById]);
 
   const review = React.useCallback(async (ids: string[], next: "approved" | "changes_requested", note?: string) => {
-    for (const id of ids) await api.reviewSubmission(id, next, note);
+    // Sending something back without a reason is a message that says only
+    // "no", so the server refuses it and so does this.
+    if (next === "changes_requested" && !note?.trim()) {
+      toast.push({ tone: "danger", title: "Say what needs to change before sending it back." });
+      return;
+    }
+    for (const id of ids) {
+      if (next === "approved") await api.reviewSubmission(id, "approved", note);
+      else await api.reviewSubmission(id, "changes_requested", note!.trim());
+    }
     qc.invalidateQueries({ queryKey: ["submissions"] });
     toast.push({
       tone: next === "approved" ? "success" : "default",
@@ -207,7 +216,6 @@ export default function ApprovalsPage() {
           height={520}
           selectable
           onRowOpen={(r) => setExpanded((cur) => (cur === r.id ? null : r.id))}
-          onExport={() => toast.push({ title: "Export queued. You will get an email when it is ready." })}
           filters={
             <Select value={state} onChange={(e) => set({ state: e.target.value })} className="w-[230px]" aria-label="Approval status">
               <option value="submitted">Awaiting approval ({counts.submitted})</option>

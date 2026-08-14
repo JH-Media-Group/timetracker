@@ -41,10 +41,12 @@ export default function InvoicesPage() {
   const { params, set } = useUrlState();
   const { clientById } = useApp();
   const can = useCan();
+  const qc = useQueryClient();
 
   const view = (params.get("view") as View) || "outstanding";
 
   const { data: invoices = [], isLoading } = useQuery({ queryKey: ["invoices"], queryFn: api.listInvoices });
+  const refreshInvoices = () => qc.invalidateQueries({ queryKey: ["invoices"] });
   const all = invoices as Invoice[];
   const today = React.useMemo(() => new Date(), []);
 
@@ -190,7 +192,6 @@ export default function InvoicesPage() {
           height={620}
           selectable={can("invoice:manage")}
           onRowOpen={(r) => router.push(`/invoices/${r.id}`)}
-          onExport={() => toast.push({ title: "Export queued. You will get an email when it is ready." })}
           filters={<ViewSelect view={view} set={set} counts={counts} />}
           bulkActions={[
             {
@@ -202,11 +203,41 @@ export default function InvoicesPage() {
             },
             {
               key: "remind", label: "Send reminder", input: "immediate",
-              run: (sel) => { toast.push({ tone: "success", title: `Reminder emailed for ${sel.length} invoices.` }); },
+              run: async (sel) => {
+                let recorded = 0;
+                let skipped = 0;
+                for (const r of sel as Row[]) {
+                  const detail = await api.getInvoice(r.id);
+                  const contacts = detail ? clientById.get(detail.clientId)?.contacts ?? [] : [];
+                  const to = contacts.find((c) => c.isPrimary)?.email ?? contacts.find((c) => c.email)?.email;
+                  if (!to) { skipped++; continue; }
+                  await api.sendReminder(r.id, [to]);
+                  recorded++;
+                }
+                refreshInvoices();
+                toast.push({
+                  title: `${recorded} ${recorded === 1 ? "reminder" : "reminders"} recorded on the timeline`
+                    + (skipped ? `, ${skipped} skipped for having no contact email` : "")
+                    + ". No email was sent: mail delivery is not configured yet.",
+                });
+              },
             },
             {
               key: "delete", label: "Delete", intent: "danger", input: "modal", end: true,
-              run: () => { toast.push({ tone: "danger", title: "Only draft invoices can be deleted. Sent invoices are written off." }); },
+              run: async (sel) => {
+                // Only a draft can be deleted; anything sent is written off, so
+                // the ledger keeps the number. Say which happened to which.
+                const rows = sel as Row[];
+                const drafts = rows.filter((r) => r.state === "draft");
+                for (const r of drafts) await api.deleteInvoice(r.id);
+                refreshInvoices();
+                toast.push({
+                  tone: "danger",
+                  title: drafts.length === rows.length
+                    ? `Deleted ${drafts.length} ${drafts.length === 1 ? "draft" : "drafts"}.`
+                    : `Deleted ${drafts.length} of ${rows.length}. The rest have been sent, so write them off instead.`,
+                });
+              },
             },
           ]}
           empty={

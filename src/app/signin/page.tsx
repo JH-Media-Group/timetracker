@@ -16,10 +16,28 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Button, Field, Input } from "@/components/ui/primitives";
 import { Logo } from "@/components/app/logo";
 
+/**
+ * Where to land after signing in.
+ *
+ * Only a path on this site. `?next=` arrives from the middleware, but it also
+ * arrives from whatever anybody puts in a link, and an unchecked value here is
+ * an open redirect: a phishing page can send somebody to a real Tally sign-in
+ * and take them somewhere else the moment they succeed, with the credentials
+ * having been typed into the genuine article.
+ *
+ * A protocol-relative `//evil.example` is a URL to another host that looks like
+ * a path, so a leading-slash test alone is not enough.
+ */
+function safeNext(value: string | null): string {
+  if (!value) return "/timesheet";
+  if (!value.startsWith("/") || value.startsWith("//") || value.startsWith("/\\")) return "/timesheet";
+  return value;
+}
+
 export default function SignInPage() {
   const router = useRouter();
   const search = useSearchParams();
-  const next = search.get("next") || "/timesheet";
+  const next = safeNext(search.get("next"));
 
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");

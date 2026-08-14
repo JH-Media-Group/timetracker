@@ -16,7 +16,7 @@ import { Plus } from "lucide-react";
 import * as api from "@/lib/api";
 import { ValueAccumulator } from "@/lib/derive";
 import { formatMoney } from "@/lib/format";
-import type { Invoice, TimeEntry } from "@/lib/types";
+import type { Client, Invoice, TimeEntry } from "@/lib/types";
 import { TERM_LABEL } from "@/lib/labels";
 import { Badge, Button, EmptyState, Select } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
@@ -31,6 +31,15 @@ interface Row {
   uninvoiced: number; outstanding: number; term: string; currency: string;
   archived: boolean;
 }
+
+/** What somebody might type into the inline terms field, mapped to the enum. */
+const PAYMENT_TERMS: Record<string, Client["paymentTerm"]> = {
+  upon_receipt: "upon_receipt", receipt: "upon_receipt", due_on_receipt: "upon_receipt",
+  net_15: "net_15", "15": "net_15",
+  net_30: "net_30", "30": "net_30",
+  net_45: "net_45", "45": "net_45",
+  net_60: "net_60", "60": "net_60",
+};
 
 export default function ClientsPage() {
   const router = useRouter();
@@ -58,7 +67,7 @@ export default function ClientsPage() {
       if (!clientId) continue;
       let bucket = acc.get(clientId);
       if (!bucket) { bucket = new ValueAccumulator(); acc.set(clientId, bucket); }
-      bucket.add(e.durationSeconds, e.billableRateCents);
+      bucket.add(e.durationSeconds, e.billableRateCents ?? 0);
     }
     // Divided once per client, at the end. Rounding each entry and adding the
     // results would put this column a few cents away from the invoice built
@@ -153,7 +162,6 @@ export default function ClientsPage() {
           height={620}
           selectable={can("client:manage")}
           onRowOpen={(r) => router.push(`/clients/${r.id}`)}
-          onExport={() => toast.push({ title: "Export queued. You will get an email when it is ready." })}
           filters={
             <Select value={status} onChange={(e) => set({ status: e.target.value })} className="w-[200px]" aria-label="Client status">
               <option value="active">Active clients ({counts.active})</option>
@@ -164,7 +172,20 @@ export default function ClientsPage() {
             {
               key: "terms", label: "Set payment terms", input: "inline",
               inlineLabel: "Terms", inlinePlaceholder: "net 30",
-              run: (sel) => { toast.push({ tone: "success", title: `Updated ${sel.length} clients.` }); },
+              run: async (sel, value) => {
+                const term = PAYMENT_TERMS[(value ?? "").trim().toLowerCase().replace(/[\s-]+/g, "_")];
+                if (!term) {
+                  toast.push({ tone: "danger", title: "Use one of: upon receipt, net 15, net 30, net 45, net 60." });
+                  return;
+                }
+                const ids = (sel as Row[]).map((r) => r.id);
+                for (const id of ids) await api.updateClient(id, { paymentTerm: term });
+                qc.invalidateQueries({ queryKey: ["bootstrap"] });
+                toast.push({
+                  tone: "success",
+                  title: `Payment terms set for ${ids.length} ${ids.length === 1 ? "client" : "clients"}.`,
+                });
+              },
             },
             {
               key: "archive", label: status === "archived" ? "Restore" : "Archive", input: "immediate", end: true,

@@ -11,7 +11,7 @@ export function TeammateSwitcher({ userId, onChange }: { userId: string; onChang
   const { users, me, userById } = useApp();
   const can = useCan();
   const [open, setOpen] = React.useState(false);
-  if (!can("time:edit_others")) return null;
+  if (!can("time:view_others")) return null;
 
   const current = userById.get(userId);
   const employees = users.filter((u) => u.employmentType === "employee" && !u.archivedAt);

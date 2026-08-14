@@ -56,6 +56,14 @@ export interface DataGridProps<T> {
   bulkActions?: BulkAction[];
   onRowOpen?: (row: T) => void;
   filters?: React.ReactNode;
+  /**
+   * Overrides the built-in CSV export.
+   *
+   * The default writes what is on screen: the visible columns in their current
+   * order, the rows after filtering and sorting, and the totals row. Pass this
+   * only when the export has to come from the server, which is the case when a
+   * list is paginated and the file must cover more than the page.
+   */
   onExport?: () => void;
   label: string;
   height?: number | string;
@@ -72,6 +80,30 @@ export function DataGrid<T extends object>({
   const [acting, setActing] = React.useState<BulkAction | null>(null);
   const [actValue, setActValue] = React.useState("");
   const [hidden, setHidden] = React.useState<string[]>([]);
+
+  /**
+   * Writes the grid to CSV.
+   *
+   * What is on screen is what lands in the file, which is the only version of
+   * "export" that does not need explaining: same columns, same order, same
+   * filters, same sort. The totals row goes with it, because a spreadsheet of
+   * hours whose total has to be recomputed by hand is a spreadsheet nobody
+   * trusts.
+   */
+  const exportCsv = React.useCallback(() => {
+    if (!api) return;
+    const stamp = new Date().toISOString().slice(0, 10);
+    api.exportDataAsCsv({
+      fileName: `${label.toLowerCase().replace(/[^a-z0-9]+/g, "-")}-${stamp}.csv`,
+      allColumns: false,
+      skipPinnedBottom: false,
+      // Cell renderers return React elements, which stringify to "[object
+      // Object]". The formatted value is what the person is reading, so that is
+      // what the file gets.
+      processCellCallback: (p) =>
+        p.value == null ? "" : (p.formatValue ? p.formatValue(p.value) : String(p.value)),
+    });
+  }, [api, label]);
   const [density, setDensity] = React.useState<"comfortable" | "compact">(densityProp ?? "comfortable");
 
   // Column visibility and density persist per user per table.
@@ -216,7 +248,9 @@ export function DataGrid<T extends object>({
                 </div>
               </PopoverContent>
             </Popover>
-            {onExport && <Button variant="ghost" size="sm" onClick={onExport}><Download className="size-3.5" />Export</Button>}
+            <Button variant="ghost" size="sm" onClick={onExport ?? exportCsv} disabled={!api && !onExport}>
+              <Download className="size-3.5" />Export
+            </Button>
           </div>
         </div>
 

@@ -103,7 +103,24 @@ function toSignIn() {
   if (window.location.pathname.startsWith("/signin")) return;
   redirecting = true;
   const next = window.location.pathname + window.location.search;
-  window.location.href = `/signin?next=${encodeURIComponent(next)}`;
+
+  // Drop the cookie before leaving.
+  //
+  // The middleware treats the cookie's presence as being signed in and bounces
+  // /signin to /timesheet. With an expired or revoked session that is a loop:
+  // the page loads, bootstrap 401s, we come back here, the middleware sends us
+  // to /timesheet again. Clearing it server-side breaks the cycle, and the
+  // cookie is httpOnly so this is the only way to clear it.
+  void fetch(`${BASE}/auth/signout`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "Content-Type": "application/json" },
+    body: "{}",
+  })
+    .catch(() => {})
+    .finally(() => {
+      window.location.href = `/signin?next=${encodeURIComponent(next)}`;
+    });
 }
 
 async function request<T>(
@@ -172,6 +189,7 @@ const get = async <T,>(path: string, query?: Query): Promise<T> => (await reques
 const post = async <T,>(path: string, body?: unknown, idempotencyKey?: string): Promise<T> =>
   (await request<T>("POST", path, { body, idempotencyKey })).data;
 const patch = async <T,>(path: string, body: unknown): Promise<T> => (await request<T>("PATCH", path, { body })).data;
+const patch_ = patch;
 const put = async <T,>(path: string, body: unknown): Promise<T> => (await request<T>("PUT", path, { body })).data;
 const del = async <T,>(path: string): Promise<T> => (await request<T>("DELETE", path)).data;
 
@@ -707,8 +725,9 @@ export async function restoreTimeEntry(entry: { id: ID }): Promise<TimeEntryView
   return fromTimeEntry(await post<TimeEntryWire>(`/time-entries/${entry.id}/restore`));
 }
 
+/** Stops the running timer. Defaults to your own; a reviewer may name somebody. */
 export async function stopTimer(userId?: ID): Promise<TimeEntryView | null> {
-  const row = await post<TimeEntryWire | null>(`/time-entries/current/stop`, { userId });
+  const row = await post<TimeEntryWire | null>("/time-entries/current/stop", { userId: userId ?? null });
   return row ? fromTimeEntry(row) : null;
 }
 
@@ -792,13 +811,29 @@ const isoLocal = (d: Date) =>
 
 /* ================================================================ expenses */
 
+/**
+ * Lists that can be truncated say so.
+ *
+ * The server caps these collections and reports `hasMore`. Dropping that on the
+ * floor turns a capped list into one that reads as complete, which is the exact
+ * failure the cap was added to make visible. `truncated` is a property on the
+ * returned array so no call site has to change to keep working.
+ */
+type MaybeTruncated<T> = T[] & { truncated?: boolean };
+
+function withTruncation<T>(rows: T[], meta: Record<string, unknown> | undefined): MaybeTruncated<T> {
+  const out = rows as MaybeTruncated<T>;
+  if (meta?.hasMore) out.truncated = true;
+  return out;
+}
+
 export async function listExpenses(
   q: { from?: string; to?: string; userId?: ID; projectId?: ID } = {}
-): Promise<ExpenseView[]> {
-  const rows = await get<ExpenseWire[]>("/expenses", {
-    from: q.from, to: q.to, user_id: q.userId, project_id: q.projectId,
+): Promise<MaybeTruncated<ExpenseView>> {
+  const { data, meta } = await request<ExpenseWire[]>("GET", "/expenses", {
+    query: { from: q.from, to: q.to, user_id: q.userId, project_id: q.projectId },
   });
-  return rows.map(fromExpense);
+  return withTruncation(data.map(fromExpense), meta);
 }
 
 export async function createExpense(input: Omit<Expense, "id">): Promise<ExpenseView> {
@@ -845,13 +880,28 @@ export async function setReimbursementState(
 
 /* ============================================================== approvals */
 
-export const listSubmissions = async (): Promise<SubmissionView[]> =>
-  (await get<SubmissionWire[]>("/approvals", { state: "all" })).map(fromSubmission);
+export const listSubmissions = async (): Promise<MaybeTruncated<SubmissionView>> => {
+  const { data, meta } = await request<SubmissionWire[]>("GET", "/approvals", { query: { state: "all" } });
+  return withTruncation(data.map(fromSubmission), meta);
+};
 
 export async function submitTimesheet(userId: ID, periodStart: string): Promise<SubmissionView> {
   return fromSubmission(await post<SubmissionWire>("/approvals/submit", { periodStart, userId }));
 }
 
+/**
+ * Approving takes an optional note; sending something back does not.
+ *
+ * "Changes requested" with no reason is a message that says only "no", and the
+ * server refuses it, so the signature refuses it too rather than letting a
+ * call that typechecks fail at runtime.
+ */
+export async function reviewSubmission(
+  id: ID, state: "approved", note?: string
+): Promise<SubmissionView>;
+export async function reviewSubmission(
+  id: ID, state: "changes_requested", note: string
+): Promise<SubmissionView>;
 export async function reviewSubmission(
   id: ID, state: "approved" | "changes_requested", note?: string
 ): Promise<SubmissionView> {
@@ -920,8 +970,11 @@ export async function archiveProject(id: ID, archived = true): Promise<Project> 
   return fromProject(await post<ProjectWire>(path));
 }
 
-export async function togglePin(id: ID): Promise<ID[]> {
-  const result = await post<{ pinned: boolean; pinnedProjectIds: string[] }>(`/projects/${id}/pin`);
+/** Pins or unpins for the signed-in person only. Returns the whole new list. */
+export async function togglePin(id: ID, pinned: boolean): Promise<ID[]> {
+  const result = await post<{ pinned: boolean; pinnedProjectIds: string[] }>(
+    `/projects/${id}/${pinned ? "pin" : "unpin"}`
+  );
   return result.pinnedProjectIds;
 }
 
@@ -1005,8 +1058,10 @@ export async function archiveUser(id: ID, archived = true): Promise<User> {
 
 /* ================================================================ invoices */
 
-export const listInvoices = async (): Promise<InvoiceView[]> =>
-  (await get<InvoiceWire[]>("/invoices", { state: "all" })).map(fromInvoice);
+export const listInvoices = async (): Promise<MaybeTruncated<InvoiceView>> => {
+  const { data, meta } = await request<InvoiceWire[]>("GET", "/invoices", { query: { state: "all" } });
+  return withTruncation(data.map(fromInvoice), meta);
+};
 
 export async function getInvoice(id: ID): Promise<InvoiceView | null> {
   try {
@@ -1168,6 +1223,10 @@ export async function createInvoice(input: CreateInvoiceInput): Promise<InvoiceV
           l.sublabel && l.sublabel !== "Billable time" ? `${l.label}: ${l.sublabel}` : l.label,
         quantity: l.quantity,
         unitPriceCents: Math.round(l.unitPriceCents),
+        // The exact value, not `quantity x unitPrice`. The quantity is hours
+        // rounded to two decimals for the document, and re-deriving the amount
+        // from it is how the preview and the invoice came out dollars apart.
+        amountCents: Math.round(l.amountCents),
         isTaxed: l.kind !== "expense",
         itemType: l.kind === "expense" ? "Expense" : "Service",
       })),
@@ -1186,6 +1245,80 @@ export async function deleteInvoice(id: ID): Promise<boolean> {
 
 export async function markInvoiceSent(id: ID): Promise<InvoiceView> {
   return fromInvoice(await post<InvoiceWire>(`/invoices/${id}/mark-sent`));
+}
+
+/**
+ * Copies an invoice into a new draft.
+ *
+ * The lines come across; the claimed time and expenses do not, because those
+ * are already on the original and billing them twice is the one thing the
+ * attachment rules exist to prevent. Dates move to today and the payment terms
+ * of the original.
+ */
+export async function duplicateInvoice(id: ID): Promise<InvoiceView> {
+  const source = await getInvoice(id);
+  if (!source) throw new ApiError({ status: 404, code: "not_found", message: "That invoice no longer exists." });
+
+  const span = Math.max(
+    0,
+    Math.round((new Date(source.dueDate).getTime() - new Date(source.issueDate).getTime()) / 86_400_000)
+  );
+  const issueDate = isoLocal(new Date());
+  const dueDate = isoLocal(new Date(Date.now() + span * 86_400_000));
+
+  return fromInvoice(await post<InvoiceWire>(
+    "/invoices",
+    {
+      clientId: source.clientId,
+      subject: source.subject ?? null,
+      notes: source.notes ?? null,
+      poNumber: source.poNumber ?? null,
+      issueDate,
+      dueDate,
+      taxPercent: source.taxPercent ?? null,
+      discountPercent: source.discountPercent ?? null,
+      lines: source.lineItems.map((l) => ({
+        projectId: l.projectId ?? null,
+        description: l.description,
+        quantity: l.quantity,
+        unitPriceCents: l.unitPriceCents,
+        amountCents: l.amountCents,
+        isTaxed: l.isTaxed,
+      })),
+      projectIds: source.projectIds,
+    },
+    idempotencyKey()
+  ));
+}
+
+/** Records a reminder against the invoice. Reports whether it was really sent. */
+export async function sendReminder(id: ID, to: string[]): Promise<{ delivered: boolean }> {
+  return post<{ delivered: boolean }>(`/invoices/${id}/reminder`, { to });
+}
+
+export async function archiveClient(id: ID): Promise<void> {
+  await del(`/clients/${id}`);
+}
+
+export async function createExpenseCategory(input: {
+  name: string; unitName?: string; unitPriceCents?: number;
+}): Promise<ExpenseCategory> {
+  return fromCategory(await post<CategoryWire>("/expense-categories", {
+    name: input.name,
+    unitName: input.unitName ?? null,
+    unitPriceCents: input.unitPriceCents ?? null,
+  }));
+}
+
+export async function updateExpenseCategory(
+  id: ID, patch: { name?: string; unitName?: string | null; unitPriceCents?: number | null; archived?: boolean }
+): Promise<ExpenseCategory> {
+  return fromCategory(await patch_<CategoryWire>(`/expense-categories/${id}`, patch));
+}
+
+/** Ends every session in the account, including this one. */
+export async function signOutEverywhere(): Promise<{ revoked: number }> {
+  return post<{ revoked: number }>("/auth/signout-all", {});
 }
 
 export async function sendInvoice(
@@ -1239,7 +1372,36 @@ export const teamReport = (q: { from: string; to: string; employmentType?: "empl
 export const invoicingReport = (q: { from: string; to: string }) =>
   report<ReportRow>("/reports/invoicing", { from: q.from, to: q.to });
 
-export const getProjectSummary = (id: ID) => get<Record<string, unknown>>(`/projects/${id}/summary`);
+/** Everything the project page's KPI cards need, computed server-side. */
+export interface ProjectSummaryDto {
+  totalSeconds: number;
+  billableSeconds: number;
+  nonBillableSeconds: number;
+  billableCents: number;
+  costCents: number;
+  expenseCents: number;
+  invoicedCents: number;
+  uninvoicedCents: number;
+  overbilledCents: number;
+  feesToDateCents: number | null;
+  budget: {
+    by: string;
+    budget: number | null;
+    spent: number;
+    remaining: number | null;
+    percentUsed: number | null;
+    monthly: boolean;
+  };
+}
+
+export const getProjectSummary = async (id: ID): Promise<ProjectSummaryDto | null> => {
+  try {
+    return await get<ProjectSummaryDto>(`/projects/${id}/summary`);
+  } catch (e) {
+    if (isApiError(e) && e.status === 404) return null;
+    throw e;
+  }
+};
 
 /* ================================================================== search */
 
