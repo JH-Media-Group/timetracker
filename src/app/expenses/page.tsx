@@ -18,8 +18,7 @@ import { formatMoney, isoDate, parseMoney } from "@/lib/format";
 import type { Expense } from "@/lib/types";
 import {
   Avatar, Badge, Button, Card, Checkbox, Dialog, DialogContent, Dropzone, EmptyState,
-  Field, Input, Segmented, Select, Textarea,
-} from "@/components/ui/primitives";
+  Field, Input, Segmented, Select, Textarea, Affix } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { PageBody, PageHeader, PeriodPicker, usePeriod, useUrlState } from "@/components/app/page-chrome";
 import { DataGrid } from "@/components/app/data-grid";
@@ -343,6 +342,24 @@ function CategoryList({ expenses }: { expenses: Expense[] }) {
 
 /* ----------------------------------------------------------- new expense */
 
+/**
+ * What an amount field will accept as it is typed (TALLY-45).
+ *
+ * `inputMode="decimal"` only hints to a soft keyboard; on a desktop it lets
+ * letters straight through, and "abc" parsed to zero without ever saying so.
+ * `type="number"` is the other obvious answer and is worse: it silently drops
+ * the whole value on a stray character, and its spinners are useless on money.
+ *
+ * So the value is filtered rather than validated: digits and at most one
+ * decimal point survive, everything else never appears. Formatting to two
+ * places happens on blur, so typing "12.5" is not fought with mid-keystroke.
+ */
+function acceptMoney(raw: string): string {
+  const cleaned = raw.replace(/[^\d.]/g, "");
+  const [whole, ...rest] = cleaned.split(".");
+  return rest.length ? `${whole}.${rest.join("").slice(0, 2)}` : whole!;
+}
+
 function ExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v: boolean) => void }) {
   const qc = useQueryClient();
   const toast = useToast();
@@ -404,7 +421,7 @@ function ExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
       >
         <div className="flex flex-col gap-4">
           <Field label="Project" required>
-            <ProjectPicker projectId={projectId} onChange={setProjectId} />
+            <ProjectPicker projectId={projectId} onChange={setProjectId} portal={false} />
           </Field>
 
           <div className="grid gap-4 md:grid-cols-2">
@@ -423,7 +440,7 @@ function ExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
           {byUnit ? (
             <div className="grid gap-4 md:grid-cols-2">
               <Field label={`${category!.unitName ?? "Units"}s`} required help={`${formatMoney(category!.unitPriceCents!)} per ${category!.unitName}`}>
-                <Input inputMode="decimal" align="right" value={units} onChange={(e) => setUnits(e.target.value)} placeholder="0" />
+                <Input inputMode="decimal" align="right" value={units} onChange={(e) => setUnits(acceptMoney(e.target.value))} placeholder="0" />
               </Field>
               <Field label="Total">
                 <Input readOnly align="right" value={formatMoney(computed)} className="bg-bg-muted" />
@@ -431,7 +448,16 @@ function ExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
             </div>
           ) : (
             <Field label="Amount" required>
-              <Input inputMode="decimal" align="right" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="0.00" />
+              <Affix prefix="$">
+                <Input
+                  inputMode="decimal"
+                  align="right"
+                  value={amount}
+                  onChange={(e) => setAmount(acceptMoney(e.target.value))}
+                  onBlur={() => setAmount((a) => (a ? (parseMoney(a) ?? 0) / 100 : 0).toFixed(2))}
+                  placeholder="0.00"
+                />
+              </Affix>
             </Field>
           )}
 

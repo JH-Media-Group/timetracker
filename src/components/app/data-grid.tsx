@@ -151,6 +151,31 @@ export function DataGrid<T extends object>({
 
   const gridOptions = React.useMemo(() => createDefaultGridOptions<T>(), []);
 
+  /**
+   * Selection, from the one API that owns it (TALLY-40).
+   *
+   * `selectable` decides whether the column exists at all, which the defaults
+   * cannot know. `selectionColumnDef` carries the width and pinning the
+   * hand-built column used to provide, so the first data column does not shift.
+   */
+  const rowSelection = React.useMemo(
+    () => (selectable ? gridOptions.rowSelection : undefined),
+    [selectable, gridOptions]
+  );
+
+  const selectionColumnDef = React.useMemo(
+    () => ({
+      width: 44,
+      minWidth: 44,
+      maxWidth: 44,
+      pinned: "left" as const,
+      resizable: false,
+      suppressMovable: true,
+      suppressHeaderMenuButton: true,
+    }),
+    []
+  );
+
   /* Column types are built here rather than in the design system because how a
      duration renders is an account setting and how money renders depends on the
      row's currency. `type: "money"` on a column is what pulls these in. */
@@ -192,14 +217,17 @@ export function DataGrid<T extends object>({
           p.node?.rowPinned ? <>{p.valueFormatted ?? p.value ?? ""}</> : inner(p),
       };
     });
-    if (!selectable) return base;
-    return [{
-      colId: "__select", width: 44, minWidth: 44, maxWidth: 44, pinned: "left" as const,
-      sortable: false, resizable: false, filter: false, suppressMovable: true,
-      headerCheckboxSelection: true, checkboxSelection: (p: { data?: GridRow<T> }) => p.data?._kind === "data",
-      suppressHeaderMenuButton: true,
-    }, ...base];
-  }, [columns, hidden, selectable]);
+    /**
+     * No hand-built selection column (TALLY-40).
+     *
+     * `rowSelection.checkboxes` in `createDefaultGridOptions` already renders
+     * one, and that is the current AG Grid API. This used to prepend a second
+     * `__select` column using the older `checkboxSelection` API, and on v34
+     * both are honoured: one selection, drawn twice, so ticking either box
+     * ticked the other. Width and pinning now come from `selectionColumnDef`.
+     */
+    return base;
+  }, [columns, hidden]);
 
   const layer: "browse" | "select" | "act" = acting ? "act" : selected.length ? "select" : "browse";
 
@@ -383,6 +411,8 @@ export function DataGrid<T extends object>({
         <div className="min-h-0 flex-1" role="region" aria-label={label}>
           <AgGridReact
             {...gridOptions}
+            rowSelection={rowSelection}
+            selectionColumnDef={selectionColumnDef}
             theme={density === "compact" ? tallyCompactGridTheme : tallyGridTheme}
             rowData={rows ?? []}
             columnDefs={cols}

@@ -151,7 +151,7 @@ export default function ClientDetailPage() {
               </Button>
             )}
             <Menu trigger={<Button variant="secondary">Actions</Button>}>
-              <MenuItem onSelect={() => router.push("/projects/new")}>New project</MenuItem>
+              <MenuItem onSelect={() => router.push(`/projects/new?client=${id}`)}>New project</MenuItem>
               <MenuItem onSelect={() => router.push(`/invoices/new?client=${client.id}`)}>New invoice</MenuItem>
               <MenuItem disabled>Email statement (needs email delivery)</MenuItem>
               <MenuItem
@@ -240,7 +240,7 @@ export default function ClientDetailPage() {
           <Card className="mt-3" padded={false}>
             {clientProjects.length === 0 ? (
               <div className="p-4">
-                <EmptyState title="No projects yet." action={<Button variant="primary" onClick={() => router.push("/projects/new")}>New project</Button>}>
+                <EmptyState title="No projects yet." action={<Button variant="primary" onClick={() => router.push(`/projects/new?client=${id}`)}>New project</Button>}>
                   Create a project before anyone can track time to this client.
                 </EmptyState>
               </div>

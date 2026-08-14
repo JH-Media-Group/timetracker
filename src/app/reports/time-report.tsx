@@ -14,11 +14,12 @@ import { useQuery } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
 import * as api from "@/lib/api";
 import { formatDuration, formatMoney, formatPercent, toDate } from "@/lib/format";
-import { Card, Meter, Segmented } from "@/components/ui/primitives";
+import { X } from "lucide-react";
+import { Badge, Card, Meter, Segmented, Select } from "@/components/ui/primitives";
 import { DataGrid } from "@/components/app/data-grid";
 import { StackedBarChart, Legend } from "@/components/app/charts";
 import { Kpi } from "@/components/app/kpi";
-import { useCan } from "@/components/app/providers";
+import { useApp, useCan } from "@/components/app/providers";
 import { useUrlState, type Period } from "@/components/app/page-chrome";
 import type { GridRow } from "@/components/ui/grid";
 
@@ -36,14 +37,38 @@ export function TimeReport({ period }: { period: Period }) {
   const { params, set } = useUrlState();
   const can = useCan();
 
-  const groupBy = (params.get("by") as GroupBy) || "client";
+  /**
+   * Scope filters, read from the URL (TALLY-41, TALLY-16).
+   *
+   * The endpoint has taken `userId` and `projectId` since it was written and
+   * the seam has always passed them; the screen simply never read them. That is
+   * why "My time report" showed everybody: the menu linked to
+   * `?by=person&user=<id>`, the grouping was honoured and the person was not.
+   */
+  const userId = params.get("user") ?? undefined;
+  const projectId = params.get("project") ?? undefined;
+
+  /**
+   * Grouping people by person when the report is already one person is a
+   * one-row table. Scoped to somebody, the useful default is what they worked
+   * on, so the link needs no grouping of its own.
+   */
+  const groupBy = (params.get("by") as GroupBy) || (userId ? "project" : "client");
   // The server calls the fourth dimension "user"; the button says "person",
   // because that is the word somebody would use.
   const dimension = groupBy === "person" ? "user" : groupBy;
 
+  const { userById, projectById, projects } = useApp();
+
+  const scopedTo = [
+    userId ? [userById.get(userId)?.firstName, userById.get(userId)?.lastName].filter(Boolean).join(" ") : null,
+    projectId ? projectById.get(projectId)?.name : null,
+  ].filter(Boolean).join(" · ") || null;
+
   const { data, isLoading: loading } = useQuery({
-    queryKey: ["report", "time", period.from, period.to, dimension],
-    queryFn: () => api.timeReport({ from: period.from, to: period.to, groupBy: dimension }),
+    queryKey: ["report", "time", period.from, period.to, dimension, userId, projectId],
+    queryFn: () =>
+      api.timeReport({ from: period.from, to: period.to, groupBy: dimension, userId, projectId }),
   });
 
   const totals = React.useMemo(() => {
@@ -173,6 +198,32 @@ export function TimeReport({ period }: { period: Period }) {
         height={560}
         onRowOpen={groupBy === "task" ? undefined : open}
         filters={
+          <>
+          {/* Who and what this is scoped to, and how to get out of it. */}
+          {scopedTo && (
+            <Badge variant="neutral" className="gap-1.5">
+              {scopedTo}
+              <button
+                type="button"
+                aria-label="Clear this filter"
+                onClick={() => set({ user: null, project: null, by: null })}
+                className="text-ink-tertiary hover:text-ink"
+              >
+                <X className="size-3" />
+              </button>
+            </Badge>
+          )}
+          <Select
+            aria-label="Project"
+            value={projectId ?? ""}
+            onChange={(e) => set({ project: e.target.value || null })}
+            className="w-[190px]"
+          >
+            <option value="">All projects</option>
+            {projects.filter((p) => !p.archivedAt).map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </Select>
           <Segmented
             value={groupBy}
             onChange={(v) => set({ by: v === "client" ? null : v })}
@@ -184,6 +235,7 @@ export function TimeReport({ period }: { period: Period }) {
             ]}
             aria-label="Group time by"
           />
+          </>
         }
       />
     </>

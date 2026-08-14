@@ -159,8 +159,15 @@ function EntryRow({ entry, expanded, onToggle }: { entry: TimeEntry; expanded: b
         </div>
 
         <button className="min-w-0 flex-1 text-left" onClick={onToggle} aria-expanded={expanded}>
+          {/*
+            The client was --text-tertiary, which tokens.css calls the floor:
+            "nothing smaller or lighter than this is allowed to carry meaning".
+            At text-sm it was under that floor in practice and Jason could not
+            read it at a glance (TALLY-47). One step up, still clearly secondary
+            to the project name beside it.
+          */}
           <div className="truncate">
-            <span className="text-sm text-ink-tertiary">{client?.name}</span>{" "}
+            <span className="text-sm text-ink-secondary">{client?.name}</span>{" "}
             <span className="font-medium text-ink">{project?.name}</span>
           </div>
           <div className="truncate text-ink-secondary">

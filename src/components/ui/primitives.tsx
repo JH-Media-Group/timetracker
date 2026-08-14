@@ -397,18 +397,32 @@ export function Popover({ open, onOpenChange, children }: { open?: boolean; onOp
 export const PopoverTrigger = RPopover.Trigger;
 export const PopoverAnchor = RPopover.Anchor;
 
-export function PopoverContent({ children, className, align = "start", sideOffset = 6, onOpenAutoFocus }: {
+export function PopoverContent({
+  children, className, align = "start", sideOffset = 6, onOpenAutoFocus, portal = true,
+}: {
   children: React.ReactNode; className?: string; align?: "start" | "center" | "end"; sideOffset?: number;
   onOpenAutoFocus?: (e: Event) => void;
+  /**
+   * Whether to render in a portal at the document root.
+   *
+   * True is right almost everywhere: it escapes any `overflow: hidden` ancestor,
+   * which is what a popover inside a scrolling grid cell needs.
+   *
+   * **False is required inside a Dialog.** A Dialog is modal, so it traps focus
+   * and blocks pointer events outside its own subtree. A portalled popover
+   * renders outside that subtree, so the dialog pulls focus straight back out
+   * and dismisses it: the picker opened, closed, and sent typing to the topbar
+   * search instead (TALLY-39).
+   */
+  portal?: boolean;
 }) {
-  return (
-    <RPopover.Portal>
-      <RPopover.Content align={align} sideOffset={sideOffset} onOpenAutoFocus={onOpenAutoFocus}
-        className={cn(popoverClass, "p-0", className)}>
-        {children}
-      </RPopover.Content>
-    </RPopover.Portal>
+  const content = (
+    <RPopover.Content align={align} sideOffset={sideOffset} onOpenAutoFocus={onOpenAutoFocus}
+      className={cn(popoverClass, "p-0", className)}>
+      {children}
+    </RPopover.Content>
   );
+  return portal ? <RPopover.Portal>{content}</RPopover.Portal> : content;
 }
 
 /* ----------------------------------------------------- Overlays: Dropdown */

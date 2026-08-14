@@ -97,7 +97,7 @@ export function WeekView({ weekStart, userId, entries, loading }: {
             return (
               <tr key={row.key} className="border-b border-border hover:bg-surface-hover">
                 <td className="sticky left-0 z-10 bg-surface px-3 py-2">
-                  <div className="truncate text-sm text-ink-tertiary">{client?.name}</div>
+                  <div className="truncate text-sm text-ink-secondary">{client?.name}</div>
                   <div className="truncate font-medium text-ink">{project?.name}</div>
                   <div className="truncate text-ink-secondary">{task?.name}{row.notes ? ` · ${row.notes}` : ""}</div>
                 </td>

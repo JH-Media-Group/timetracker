@@ -10,7 +10,7 @@
  */
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { X } from "lucide-react";
 import * as api from "@/lib/api";
@@ -53,6 +53,7 @@ export function ProjectEditor({ projectId }: { projectId?: string }) {
 }
 
 function ProjectForm({ existing }: { existing?: Project }) {
+  const search = useSearchParams();
   const router = useRouter();
   const qc = useQueryClient();
   const toast = useToast();
@@ -60,7 +61,15 @@ function ProjectForm({ existing }: { existing?: Project }) {
 
   const [form, setForm] = React.useState(() => ({
     name: existing?.name ?? "",
-    clientId: existing?.clientId ?? clients[0]?.id ?? "",
+    /**
+     * The client this was started from, when it was started from one.
+     *
+     * Coming from a client's page and being asked which client this is for is
+     * a question the app already knows the answer to (TALLY-43). Falling back
+     * to the first client alphabetically is a guess, and a wrong one often
+     * enough to be worth not making silently.
+     */
+    clientId: existing?.clientId ?? search.get("client") ?? clients[0]?.id ?? "",
     code: existing?.code ?? "",
     startsOn: existing?.startsOn ?? "",
     endsOn: existing?.endsOn ?? "",

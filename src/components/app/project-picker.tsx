@@ -55,10 +55,19 @@ function fuzzy(haystack: string, needle: string): boolean {
 }
 
 export function ProjectPicker({
-  projectId, onChange, className, disabled, id,
+  projectId, onChange, className, disabled, id, portal = true,
 }: {
   projectId?: ID; onChange: (projectId: ID) => void;
   className?: string; disabled?: boolean; id?: string;
+  /**
+   * Pass `false` when this sits inside a Dialog.
+   *
+   * A Dialog traps focus in its own subtree, and a portalled popover renders
+   * outside it, so the dialog takes focus back and closes the picker before a
+   * key can reach it (TALLY-39). Everywhere else the portal is what stops a
+   * scrolling ancestor clipping the list.
+   */
+  portal?: boolean;
 }) {
   const { projects, clientById, me, taskById } = useApp();
   const [open, setOpen] = React.useState(false);
@@ -126,7 +135,7 @@ export function ProjectPicker({
         </button>
       </PopoverTrigger>
 
-      <PopoverContent className="w-[var(--radix-popover-trigger-width)] min-w-[340px]">
+      <PopoverContent className="w-[var(--radix-popover-trigger-width)] min-w-[340px]" portal={portal}>
         <div className="flex items-center gap-2 border-b border-border px-3 py-2">
           <Search className="size-4 shrink-0 text-ink-tertiary" aria-hidden />
           <input
