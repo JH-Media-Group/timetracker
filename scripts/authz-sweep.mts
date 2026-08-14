@@ -64,6 +64,37 @@ const ENDPOINTS: string[] = [
   `/api/v1/reports/invoicing?${period}`,
 ];
 
+
+/**
+ * Signs in and returns the cookie, or explains why it could not.
+ *
+ * Sign-in is limited to ten attempts per fifteen minutes per address, which is
+ * the point of the limiter and which these scripts will hit if they are run
+ * back to back. Reading `set-cookie` off a 429 gives a TypeError about null,
+ * which reads as a broken script rather than as a working defence.
+ */
+async function signIn(base: string, email: string, password: string): Promise<string> {
+  const res = await fetch(`${base}/api/v1/auth/signin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: base },
+    body: JSON.stringify({ email, password }),
+  });
+
+  const cookie = res.headers.get("set-cookie");
+  if (res.ok && cookie) return cookie.split(";")[0]!;
+
+  if (res.status === 429) {
+    const retry = res.headers.get("retry-after");
+    throw new Error(
+      `Sign-in is rate limited${retry ? `, retry in ${retry}s` : ""}. ` +
+        "Ten attempts per fifteen minutes per address, which is the limiter working. " +
+        "Wait, or restart Redis to clear the buckets."
+    );
+  }
+
+  throw new Error(`Could not sign in as ${email}: ${res.status} ${await res.text()}`);
+}
+
 async function main() {
   const created: string[] = [];
   const cookies = new Map<BaseProfileKey, string>();
@@ -95,14 +126,7 @@ async function main() {
       });
       created.push(id);
 
-      const res = await fetch(`${BASE}/api/v1/auth/signin`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Origin: BASE },
-        body: JSON.stringify({ email, password: PASSWORD }),
-      });
-      const cookie = res.headers.get("set-cookie");
-      if (!res.ok || !cookie) throw new Error(`Could not sign in as ${key}: ${res.status}`);
-      cookies.set(key, cookie.split(";")[0]!);
+      cookies.set(key, await signIn(BASE, email, PASSWORD));
     }
 
     const width = Math.max(...ENDPOINTS.map((e) => e.length)) + 2;

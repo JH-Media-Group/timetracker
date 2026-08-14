@@ -27,6 +27,37 @@ function check(name: string, ok: boolean, detail = "") {
   console.log(`${ok ? "  ok  " : "  LEAK"}  ${name}${detail ? `   ${detail}` : ""}`);
 }
 
+
+/**
+ * Signs in and returns the cookie, or explains why it could not.
+ *
+ * Sign-in is limited to ten attempts per fifteen minutes per address, which is
+ * the point of the limiter and which these scripts will hit if they are run
+ * back to back. Reading `set-cookie` off a 429 gives a TypeError about null,
+ * which reads as a broken script rather than as a working defence.
+ */
+async function signIn(base: string, email: string, password: string): Promise<string> {
+  const res = await fetch(`${base}/api/v1/auth/signin`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Origin: base },
+    body: JSON.stringify({ email, password }),
+  });
+
+  const cookie = res.headers.get("set-cookie");
+  if (res.ok && cookie) return cookie.split(";")[0]!;
+
+  if (res.status === 429) {
+    const retry = res.headers.get("retry-after");
+    throw new Error(
+      `Sign-in is rate limited${retry ? `, retry in ${retry}s` : ""}. ` +
+        "Ten attempts per fifteen minutes per address, which is the limiter working. " +
+        "Wait, or restart Redis to clear the buckets."
+    );
+  }
+
+  throw new Error(`Could not sign in as ${email}: ${res.status} ${await res.text()}`);
+}
+
 async function main() {
   const created: string[] = [];
 
@@ -52,12 +83,7 @@ async function main() {
   created.push(id);
 
   try {
-    const signin = await fetch(`${BASE}/api/v1/auth/signin`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Origin: BASE },
-      body: JSON.stringify({ email, password: PASSWORD }),
-    });
-    const cookie = signin.headers.get("set-cookie")!.split(";")[0]!;
+    const cookie = await signIn(BASE, email, PASSWORD);
     const asMember = (path: string) =>
       fetch(BASE + path, { headers: { Cookie: cookie, Origin: BASE } }).then(async (r) => ({
         status: r.status,

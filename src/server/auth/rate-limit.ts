@@ -85,20 +85,42 @@ type RedisLike = {
 let redis: RedisLike | null = null;
 let redisTried = false;
 
+let announcedFallback = false;
+
 async function getRedis(): Promise<RedisLike | null> {
   if (redisTried) return redis;
   redisTried = true;
   if (!env.REDIS_URL) return null;
   try {
     const { default: Redis } = await import("ioredis");
-    redis = new Redis(env.REDIS_URL, {
+    const client = new Redis(env.REDIS_URL, {
       maxRetriesPerRequest: 1,
       // A rate limiter that blocks the request path when Redis is slow is worse
       // than one that briefly falls back to the local bucket.
       connectTimeout: 500,
       lazyConnect: false,
       enableOfflineQueue: false,
-    }) as unknown as RedisLike;
+      // One attempt, then the local bucket. Retrying forever turns a missing
+      // Redis into a stream of unhandled error events and nothing else.
+      retryStrategy: () => null,
+    });
+
+    // Say which limiter is running, once. Without this an unreachable Redis is
+    // an ioredis stack trace in the log and a silent switch to per-process
+    // buckets, which are correct on one droplet and wrong the moment there are
+    // two.
+    client.on("error", (error: Error) => {
+      if (announcedFallback) return;
+      announcedFallback = true;
+      console.warn(
+        `[rate-limit] Redis at ${env.REDIS_URL} is unreachable (${error.message}). ` +
+          "Falling back to in-process buckets, which are correct for a single " +
+          "process and not for more than one."
+      );
+      redis = null;
+    });
+
+    redis = client as unknown as RedisLike;
   } catch {
     redis = null;
   }
