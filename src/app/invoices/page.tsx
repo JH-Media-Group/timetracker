@@ -11,7 +11,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
 import { Plus } from "lucide-react";
 import * as api from "@/lib/api";
@@ -336,44 +336,125 @@ function StatusFilterSelect({
 /* -------------------------------------------------------------- recurring */
 
 const FREQUENCY_LABEL: Record<RecurringInvoice["frequency"], string> = {
-  monthly: "Monthly", quarterly: "Quarterly", yearly: "Yearly",
+  weekly: "Weekly", monthly: "Monthly", quarterly: "Quarterly", yearly: "Yearly",
 };
 
 function RecurringList() {
+  const router = useRouter();
+  const toast = useToast();
+  const qc = useQueryClient();
+  const can = useCan();
   const { clientById } = useApp();
   const { data: schedules = [] } = useQuery({ queryKey: ["recurring"], queryFn: api.listRecurringInvoices });
   const list = schedules as RecurringInvoice[];
+  const manage = can("invoice:manage");
+
+  const refresh = () => qc.invalidateQueries({ queryKey: ["recurring"] });
+
+  const toggle = useMutation({
+    mutationFn: ({ id, state }: { id: string; state: "active" | "paused" }) =>
+      api.setRecurringInvoiceState(id, state),
+    onSuccess: (r) => {
+      toast.push({ tone: "success", title: r.state === "paused" ? "Schedule paused." : "Schedule resumed." });
+      refresh();
+    },
+    onError: (e: unknown) => toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not change the schedule." }),
+  });
+
+  /**
+   * Raising one by hand, which is what makes the schedule usable before the
+   * daily job in TALLY-26 exists. It advances the schedule in the same
+   * transaction, so pressing it twice does not bill the same period twice.
+   */
+  const issue = useMutation({
+    mutationFn: (id: string) => api.issueRecurringInvoice(id),
+    onSuccess: ({ invoiceId }) => {
+      toast.push({ tone: "success", title: "Invoice raised from the schedule." });
+      refresh();
+      qc.invalidateQueries({ queryKey: ["invoices"] });
+      router.push(`/invoices/${invoiceId}`);
+    },
+    onError: (e: unknown) => toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not raise the invoice." }),
+  });
+
+  const newButton = manage && (
+    <Button variant="primary" onClick={() => router.push("/invoices/recurring/new")}>
+      <Plus className="size-4" />New recurring invoice
+    </Button>
+  );
 
   if (!list.length) {
-    return <Card><EmptyState title="No recurring invoices.">A schedule issues the same invoice on a fixed cadence.</EmptyState></Card>;
+    return (
+      <Card>
+        <EmptyState title="No recurring invoices." action={newButton}>
+          A schedule issues the same invoice on a fixed cadence.
+        </EmptyState>
+      </Card>
+    );
   }
 
   return (
-    <Card padded={false}>
-      <div className="flex items-center border-b border-border bg-bg-muted px-4 py-2 text-xs font-semibold uppercase tracking-[0.04em] text-ink-tertiary">
-        <span className="flex-1">Client and subject</span>
-        <span className="w-32">Frequency</span>
-        <span className="w-32">Next issue</span>
-        <span className="w-32 text-right">Amount</span>
-        <span className="w-28 pl-3">Status</span>
-      </div>
-      {list.map((r) => (
-        <div key={r.id} className="flex items-center border-b border-border px-4 py-2.5 text-base last:border-b-0">
-          <span className="min-w-0 flex-1">
-            <span className="block truncate font-medium leading-tight text-ink">{clientById.get(r.clientId)?.name}</span>
-            <span className="block truncate text-sm leading-tight text-ink-tertiary">{r.subject}</span>
-          </span>
-          <span className="w-32 text-ink-secondary">{FREQUENCY_LABEL[r.frequency]}</span>
-          <span className="w-32 tabular-nums text-ink-secondary">{r.nextIssueOn ? formatDateUS(r.nextIssueOn) : "Not scheduled"}</span>
-          <span className="w-32 text-right font-medium tabular-nums">{formatMoney(r.amountCents)}</span>
-          <span className="w-28 pl-3">
-            <Badge variant={r.state === "active" ? "success" : r.state === "paused" ? "warning" : "neutral"} dot={r.state !== "completed"}>
-              {r.state === "active" ? "Active" : r.state === "paused" ? "Paused" : "Completed"}
-            </Badge>
-          </span>
+    <>
+      {manage && <div className="mb-3 flex justify-end">{newButton}</div>}
+      <Card padded={false}>
+        <div className="flex items-center border-b border-border bg-bg-muted px-4 py-2 text-xs font-semibold uppercase tracking-[0.04em] text-ink-tertiary">
+          <span className="flex-1">Client and subject</span>
+          <span className="w-32">Frequency</span>
+          <span className="w-32">Next issue</span>
+          <span className="w-32 text-right">Amount</span>
+          <span className="w-28 pl-3">Status</span>
+          {manage && <span className="w-[210px] pl-3 text-right">Actions</span>}
         </div>
-      ))}
-    </Card>
+        {list.map((r) => (
+          <div key={r.id} className="flex items-center border-b border-border px-4 py-2.5 text-base last:border-b-0">
+            <span className="min-w-0 flex-1">
+              <span className="block truncate font-medium leading-tight text-ink">{clientById.get(r.clientId)?.name}</span>
+              <span className="block truncate text-sm leading-tight text-ink-tertiary">{r.subject}</span>
+            </span>
+            <span className="w-32 text-ink-secondary">
+              {FREQUENCY_LABEL[r.frequency]}
+              {r.interval > 1 && <span className="text-ink-tertiary"> ×{r.interval}</span>}
+            </span>
+            <span className="w-32 tabular-nums text-ink-secondary">
+              {r.state === "paused" ? "Paused" : r.nextIssueOn ? formatDateUS(r.nextIssueOn) : "Not scheduled"}
+            </span>
+            <span className="w-32 text-right font-medium tabular-nums">{formatMoney(r.amountCents)}</span>
+            <span className="w-28 pl-3">
+              <Badge variant={r.state === "active" ? "success" : r.state === "paused" ? "warning" : "neutral"} dot={r.state !== "completed"}>
+                {r.state === "active" ? "Active" : r.state === "paused" ? "Paused" : "Completed"}
+              </Badge>
+            </span>
+            {manage && (
+              <span className="flex w-[210px] items-center justify-end gap-1 pl-3">
+                {r.state !== "completed" && (
+                  <>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      loading={issue.isPending && issue.variables === r.id}
+                      disabled={r.state === "paused" || !r.nextIssueOn}
+                      onClick={() => issue.mutate(r.id)}
+                    >
+                      Issue now
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => toggle.mutate({ id: r.id, state: r.state === "active" ? "paused" : "active" })}
+                    >
+                      {r.state === "active" ? "Pause" : "Resume"}
+                    </Button>
+                  </>
+                )}
+                <Button variant="ghost" size="sm" onClick={() => router.push(`/invoices/recurring/${r.id}`)}>
+                  Edit
+                </Button>
+              </span>
+            )}
+          </div>
+        ))}
+      </Card>
+    </>
   );
 }
 

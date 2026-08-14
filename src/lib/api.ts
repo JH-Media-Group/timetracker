@@ -30,7 +30,7 @@
 import type {
   Client, Expense, ExpenseCategory, Invoice, InvoiceLineItem, InvoicePayment, InvoiceEvent,
   Project, Settings, Task, TimeEntry, TimesheetSubmission, User, ID, InvoiceState,
-  PermissionProfile, RecurringInvoice, Retainer, BillingType, BillBy, BudgetBy,
+  PermissionProfile, RecurringInvoice, RecurringInvoiceLine, Retainer, BillingType, BillBy, BudgetBy,
 } from "./types";
 import { startOfWeek } from "./format";
 
@@ -1134,21 +1134,87 @@ export async function getInvoice(id: ID): Promise<InvoiceView | null> {
   }
 }
 
-export const listRecurringInvoices = async (): Promise<RecurringInvoice[]> => {
-  const rows = await get<{
-    id: string; clientId: string; subject: string; frequency: string; interval: number;
-    nextIssueOn: string | null; state: string; amountCents: number;
-  }[]>("/recurring-invoices");
-  return rows.map((r) => ({
-    id: r.id,
-    clientId: r.clientId,
-    subject: r.subject,
-    frequency: r.frequency as RecurringInvoice["frequency"],
-    intervalMonths: r.interval,
-    nextIssueOn: opt(r.nextIssueOn),
-    amountCents: r.amountCents,
-    state: r.state as RecurringInvoice["state"],
-  }));
+/* ------------------------------------------------------ recurring invoices */
+
+interface RecurringWire {
+  id: string; clientId: string; subject: string | null;
+  frequency: string; interval: number;
+  startsOn: string; endsOn: string | null; occurrencesRemaining: number | null;
+  nextIssueOn: string | null; lastIssuedOn: string | null;
+  state: string; sendAutomatically: boolean; amountCents: number;
+  notes: string | null; paymentTermDays: number;
+  taxPercent: number | null; discountPercent: number | null;
+  lines: { description: string; quantity: number; unitPriceCents: number; isTaxed?: boolean }[];
+}
+
+const fromRecurring = (r: RecurringWire): RecurringInvoice => ({
+  id: r.id,
+  clientId: r.clientId,
+  subject: r.subject ?? "",
+  frequency: r.frequency as RecurringInvoice["frequency"],
+  interval: r.interval,
+  startsOn: r.startsOn,
+  endsOn: opt(r.endsOn),
+  occurrencesRemaining: r.occurrencesRemaining ?? undefined,
+  nextIssueOn: opt(r.nextIssueOn),
+  lastIssuedOn: opt(r.lastIssuedOn),
+  amountCents: r.amountCents,
+  state: r.state as RecurringInvoice["state"],
+  sendAutomatically: r.sendAutomatically,
+  notes: opt(r.notes),
+  paymentTermDays: r.paymentTermDays,
+  taxPercent: r.taxPercent ?? undefined,
+  discountPercent: r.discountPercent ?? undefined,
+  lines: r.lines ?? [],
+});
+
+export const listRecurringInvoices = async (): Promise<RecurringInvoice[]> =>
+  (await get<RecurringWire[]>("/recurring-invoices")).map(fromRecurring);
+
+export async function getRecurringInvoice(id: ID): Promise<RecurringInvoice | null> {
+  try {
+    return fromRecurring(await get<RecurringWire>(`/recurring-invoices/${id}`));
+  } catch (e) {
+    if (isApiError(e) && e.status === 404) return null;
+    throw e;
+  }
+}
+
+/** The body both create and update take. A schedule is written whole. */
+export interface RecurringInput {
+  clientId: ID;
+  subject?: string | null;
+  notes?: string | null;
+  frequency: RecurringInvoice["frequency"];
+  interval: number;
+  startsOn: string;
+  endsOn?: string | null;
+  occurrencesRemaining?: number | null;
+  sendAutomatically?: boolean;
+  paymentTermDays?: number;
+  taxPercent?: number | null;
+  discountPercent?: number | null;
+  lines: RecurringInvoiceLine[];
+}
+
+export const createRecurringInvoice = async (input: RecurringInput): Promise<RecurringInvoice> =>
+  fromRecurring(await post<RecurringWire>("/recurring-invoices", input));
+
+export const updateRecurringInvoice = async (id: ID, input: RecurringInput): Promise<RecurringInvoice> =>
+  fromRecurring(await patch<RecurringWire>(`/recurring-invoices/${id}`, input));
+
+export const setRecurringInvoiceState = async (
+  id: ID,
+  state: "active" | "paused"
+): Promise<RecurringInvoice> =>
+  fromRecurring(await post<RecurringWire>(`/recurring-invoices/${id}/state`, { state }));
+
+/** Raises the next invoice now and moves the schedule on one period. */
+export const issueRecurringInvoice = async (id: ID): Promise<{ invoiceId: ID }> =>
+  post<{ invoiceId: string }>(`/recurring-invoices/${id}/issue`);
+
+export const deleteRecurringInvoice = async (id: ID): Promise<void> => {
+  await del(`/recurring-invoices/${id}`);
 };
 
 export const listRetainers = async (): Promise<Retainer[]> => {

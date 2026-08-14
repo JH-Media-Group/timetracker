@@ -450,11 +450,21 @@ async function main() {
         clientId: idFor(r.clientId),
         subject: r.subject,
         frequency: r.frequency,
-        interval: r.intervalMonths,
-        startsOn: r.nextIssueOn ?? new Date().toISOString().slice(0, 10),
+        interval: r.interval,
+        startsOn: r.startsOn,
         nextIssueOn: r.nextIssueOn ?? null,
         state: r.state,
-        template: { amountCents: r.amountCents },
+        sendAutomatically: r.sendAutomatically,
+        // The whole template, not just the headline figure. A schedule with an
+        // amount and no lines cannot raise an invoice, which is what it is for.
+        template: {
+          amountCents: r.amountCents,
+          paymentTermDays: r.paymentTermDays,
+          notes: null,
+          taxPercent: null,
+          discountPercent: null,
+          lines: r.lines,
+        },
       }))
     );
   }

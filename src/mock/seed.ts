@@ -363,13 +363,42 @@ export const invoices: Invoice[] = [];
   }
 }
 
+/** One schedule, with the fields every row shares. */
+function r(
+  id: string,
+  client: string,
+  subject: string,
+  frequency: RecurringInvoice["frequency"],
+  amountCents: number,
+  nextIssueOn: string
+): RecurringInvoice {
+  return {
+    id,
+    clientId: clientId(client),
+    subject,
+    frequency,
+    interval: 1,
+    startsOn: nextIssueOn,
+    nextIssueOn,
+    amountCents,
+    state: "active",
+    sendAutomatically: false,
+    paymentTermDays: 30,
+    lines: [{ description: subject, quantity: 1, unitPriceCents: amountCents }],
+  };
+}
+
 export const recurringInvoices: RecurringInvoice[] = [
-  { id: "ri1", clientId: clientId("Example Client 43"), subject: "Maintenance Plan", frequency: "monthly", intervalMonths: 1, nextIssueOn: "2026-09-01", amountCents: 160000, state: "active" },
-  { id: "ri2", clientId: clientId("Example Client 19"), subject: "Maintenance and Health Support Monthly Plan", frequency: "monthly", intervalMonths: 1, nextIssueOn: "2026-09-01", amountCents: 63400, state: "active" },
-  { id: "ri3", clientId: clientId("Example Client 42"), subject: "Website Maintenance Plan", frequency: "monthly", intervalMonths: 1, nextIssueOn: "2026-09-01", amountCents: 60000, state: "active" },
-  { id: "ri4", clientId: clientId("Example Client 31"), subject: "Example Client 40 | Enhanced Support Package", frequency: "monthly", intervalMonths: 1, nextIssueOn: "2026-09-01", amountCents: 25000, state: "active" },
-  { id: "ri5", clientId: clientId("Example Client 32"), subject: "Hosting", frequency: "quarterly", intervalMonths: 3, nextIssueOn: "2026-10-01", amountCents: 60000, state: "active" },
-  { id: "ri6", clientId: clientId("Example Learning"), subject: "Support Plan - Maintenance - Example Client 40", frequency: "monthly", intervalMonths: 1, amountCents: 30000, state: "paused" },
+  // `interval` counts periods, not months: quarterly at 1 is every three
+  // months. It was `intervalMonths` until schedules became editable, and
+  // quarterly carried a 3 there, which under the new name would read as every
+  // nine months.
+  r("ri1", "Example Client 43", "Maintenance Plan", "monthly", 50000, "2026-09-01"),
+  r("ri2", "Example Client 19", "Maintenance and Health Support Monthly Plan", "monthly", 50000, "2026-09-01"),
+  r("ri3", "Example Client 42", "Website Maintenance Plan", "monthly", 50000, "2026-09-01"),
+  r("ri4", "Example Client 31", "Example Client 40 | Enhanced Support Package", "monthly", 50000, "2026-09-01"),
+  r("ri5", "Example Client 32", "Hosting", "quarterly", 50000, "2026-10-01"),
+  { ...r("ri6", "Example Learning", "Support Plan - Maintenance - Example Client 40", "monthly", 50000, "2026-09-01"), state: "paused", nextIssueOn: undefined },
 ];
 
 export const retainers: Retainer[] = [

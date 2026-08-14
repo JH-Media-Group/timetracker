@@ -210,6 +210,35 @@ export const invoiceSchema = z.object({
 
 export const invoicePatchSchema = invoiceSchema.partial().omit({ clientId: true });
 
+/**
+ * A recurring schedule.
+ *
+ * The lines are the same shape as an invoice's, because a schedule is a
+ * template for one. What it does not carry is an issue date or a due date:
+ * those are computed when it is raised, so a schedule set up in January bills
+ * with February's numbering sequence and the client's tax rate as it stands
+ * that day.
+ */
+export const recurringSchema = z.object({
+  clientId: z.string().uuid("Choose a client."),
+  subject: z.string().max(200).nullable().optional(),
+  notes: z.string().max(10000).nullable().optional(),
+  frequency: z.enum(["weekly", "monthly", "quarterly", "yearly"]),
+  interval: z.number().int().min(1).max(60).default(1),
+  startsOn: isoDate,
+  endsOn: isoDate.nullable().optional(),
+  occurrencesRemaining: z.number().int().min(1).max(1000).nullable().optional(),
+  sendAutomatically: z.boolean().default(false),
+  paymentTermDays: z.number().int().min(0).max(365).default(30),
+  taxPercent: z.number().min(0).max(100).nullable().optional(),
+  discountPercent: z.number().min(0).max(100).nullable().optional(),
+  lines: z.array(invoiceLineSchema).min(1, "A schedule needs at least one line.").max(500),
+});
+
+export const recurringStateSchema = z.object({
+  state: z.enum(["active", "paused"]),
+});
+
 export const paymentSchema = z.object({
   amountCents: z.number().int().positive("A payment has to be more than nothing."),
   paidAt: z.string().datetime(),

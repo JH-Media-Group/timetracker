@@ -1310,25 +1310,11 @@ async function reverseRetainerDraw(
 
 /* --------------------------------------------------- recurring and retainers */
 
-export async function listRecurring(ctx: Ctx) {
-  assertCan(ctx, "invoice:view");
-  const rows = await ctx.db
-    .select()
-    .from(s.recurringInvoices)
-    .orderBy(asc(s.recurringInvoices.nextIssueOn));
-
-  return rows.map((r) => ({
-    id: r.id,
-    clientId: r.clientId,
-    subject: r.subject,
-    frequency: r.frequency,
-    interval: r.interval,
-    nextIssueOn: r.nextIssueOn,
-    state: r.state,
-    amountCents: Number((r.template as { amountCents?: number })?.amountCents ?? 0),
-    sendAutomatically: r.sendAutomatically,
-  }));
-}
+/**
+ * Recurring schedules moved to `./recurring.ts` when they gained a write
+ * path, so the read and the writes share one serializer and one idea of
+ * what a schedule is. `listRecurring` used to live here.
+ */
 
 export async function listRetainers(ctx: Ctx) {
   assertCan(ctx, "invoice:view");

@@ -194,10 +194,34 @@ export interface Invoice {
   events: InvoiceEvent[];
 }
 
+export interface RecurringInvoiceLine {
+  description: string;
+  quantity: number;
+  unitPriceCents: number;
+  isTaxed?: boolean;
+}
+
 export interface RecurringInvoice {
-  id: ID; clientId: ID; subject: string; frequency: "monthly" | "quarterly" | "yearly";
-  intervalMonths: number; nextIssueOn?: string; amountCents: number;
+  id: ID;
+  clientId: ID;
+  subject: string;
+  /** Weekly joined the list when schedules became editable. */
+  frequency: "weekly" | "monthly" | "quarterly" | "yearly";
+  /** How many periods between issues, so "every 3 months" is quarterly at 1. */
+  interval: number;
+  startsOn: string;
+  endsOn?: string;
+  occurrencesRemaining?: number;
+  nextIssueOn?: string;
+  lastIssuedOn?: string;
+  amountCents: number;
   state: "active" | "paused" | "completed";
+  sendAutomatically: boolean;
+  notes?: string;
+  paymentTermDays: number;
+  taxPercent?: number;
+  discountPercent?: number;
+  lines: RecurringInvoiceLine[];
 }
 
 export interface Retainer {
