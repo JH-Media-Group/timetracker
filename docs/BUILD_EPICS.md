@@ -83,24 +83,24 @@ The working checklist for the backend build and the frontend wiring. Tick items 
 
 ## E7. Expenses and approvals API
 
-- [ ] Expenses CRUD and reimbursement state transitions
-- [ ] Approvals: submit, approve, request changes, flags, `/approvals/me`
+- [x] Expenses CRUD and reimbursement state transitions
+- [x] Approvals: submit, approve, request changes, flags, `/approvals/me`
 
 ## E8. Invoices API
 
-- [ ] Invoice CRUD with the numbering sequence drawn under row lock
-- [ ] `POST /invoices/preview-lines` generating lines from uninvoiced time and expenses
-- [ ] State machine endpoints: mark sent, write off, close, duplicate
-- [ ] Payments, including void and the paid/open transition
-- [ ] Recurring invoices and retainers with the draw ledger
+- [x] Invoice CRUD with the numbering sequence drawn under row lock
+- [x] `POST /invoices/preview-lines` generating lines from uninvoiced time and expenses
+- [x] State machine endpoints: mark sent, write off, close, duplicate
+- [x] Payments, including void and the paid/open transition
+- [x] Recurring invoices and retainers with the draw ledger
 
 ## E9. Reports API
 
-- [ ] `/reports/time` with grouping and server-computed group rows and totals
-- [ ] `/reports/profitability`
-- [ ] `/reports/team`
-- [ ] `/reports/invoicing` with aging buckets
-- [ ] `/projects/:id/summary` and `/projects/:id/chart`
+- [x] `/reports/time` with grouping and server-computed group rows and totals
+- [x] `/reports/profitability`
+- [x] `/reports/team`
+- [x] `/reports/invoicing` with aging buckets
+- [x] `/projects/:id/summary` and `/projects/:id/chart`
 
 ## E10. Seed
 

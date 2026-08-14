@@ -41,7 +41,9 @@ export interface Meta {
   page?: number;
   perPage?: number;
   hasMore?: boolean;
-  totals?: Record<string, number>;
+  /** Money and duration totals. Null is meaningful: a margin on no revenue is
+   *  undefined, not zero. */
+  totals?: Record<string, number | null>;
   [key: string]: unknown;
 }
 

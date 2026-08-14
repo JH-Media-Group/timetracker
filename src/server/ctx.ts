@@ -121,6 +121,20 @@ export function assertCan(ctx: Ctx, capability: Capability, detail?: string): vo
   }
 }
 
+/**
+ * Any one of several capabilities is enough.
+ *
+ * Needed because the capability set is a lattice rather than a ladder:
+ * `report:view_all` is strictly wider than `report:view_team`, but an
+ * Executive Manager holds the first and not the second, so a check for the
+ * narrower one alone locks out the person with more authority.
+ */
+export function assertCanAny(ctx: Ctx, capabilities: Capability[], detail?: string): void {
+  if (ctx.actor.kind === "system") return;
+  if (capabilities.some((c) => ctx.actor.capabilities.has(c))) return;
+  throw forbidden(detail ?? `This action needs one of: ${capabilities.join(", ")}.`);
+}
+
 /** True when the actor may act on their own records for this capability family. */
 export const isSelf = (ctx: Ctx, userId: string): boolean => ctx.actor.userId === userId;
 
