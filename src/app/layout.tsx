@@ -26,8 +26,27 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   return (
     <html lang="en" suppressHydrationWarning className={`${inter.variable} ${mono.variable}`}>
       <head>
-        {/* Render-blocking on purpose: prevents a flash of the wrong theme. */}
-        <script nonce={nonce} dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }} />
+        {/*
+          Render-blocking on purpose: prevents a flash of the wrong theme.
+
+          `suppressHydrationWarning` is for the nonce, and it is the browser's
+          behaviour rather than ours that needs suppressing. Once a script has
+          been parsed, the HTML spec has the browser move the nonce into an
+          internal slot and blank the content attribute, so `getAttribute("nonce")`
+          reads "" on the client while the server sent a real value. React
+          compares the two and reports a hydration mismatch on every page load.
+          The nonce itself is working: the script ran, and in production it is
+          what lets it run at all.
+
+          Scoped to this one element, and safe here only because
+          `THEME_INIT_SCRIPT` is a compile-time constant. If it ever becomes
+          dynamic, this suppression starts hiding a real mismatch.
+        */}
+        <script
+          nonce={nonce}
+          suppressHydrationWarning
+          dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }}
+        />
       </head>
       <body>
         {/* One boundary for the whole app. Filter state lives in the URL, so
