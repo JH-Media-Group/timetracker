@@ -23,7 +23,8 @@
     "db:setup": "pnpm db:up && pnpm db:migrate && pnpm db:migrate:test && pnpm db:seed",
     "authz:sweep": "tsx scripts/authz-sweep.mts",
     "authz:scope": "tsx scripts/scope-probe.mts",
-    "db:cleanup-probe": "tsx scripts/cleanup-probe.mts"
+    "db:cleanup-probe": "tsx scripts/cleanup-probe.mts",
+    "db:invariants": "tsx scripts/invariants.mts"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.1.0",
