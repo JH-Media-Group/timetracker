@@ -122,7 +122,8 @@ The working checklist for the backend build and the frontend wiring. Tick items 
 - [x] Static scan for handlers whose only effect is a toast
 - [x] Automated Playwright sweep clicking every control on every route and watching for a request, a navigation, or a DOM change
 - [x] Each finding either wired up or disabled with the reason on the control
-- [x] Sweep re-run and diffed against the previous pass
+- [x] Sweep re-run and diffed against the previous pass. Two consecutive passes over the final production build agree: 611 and 607 controls did something, 32 did nothing observable in both, and the only difference between the passes is the week-start segmented control alternating, which is the sweep clicking the option it selected on the previous route.
+- [x] All 32 verified individually rather than assumed: two are a grouping control with no client chosen yet, twenty-eight are the already-selected option of a segmented control or the already-active section link, one is an already-active tab, and one is "Print or save as PDF", which opens the browser dialog Playwright suppresses. Export was checked separately on all nine grids and writes a CSV on every one.
 
 ## E13. Final security sweep
 
