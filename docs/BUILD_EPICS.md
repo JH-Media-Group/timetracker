@@ -135,6 +135,29 @@ The working checklist for the backend build and the frontend wiring. Tick items 
 - [x] Secrets review: no secrets tracked, `.env.*` ignored, the dev password lives only in the seed and is printed with a warning
 - [x] Dependency audit clean (five advisories pinned out through overrides)
 - [x] Permissions and credentials list handed over ([PERMISSIONS-AND-CREDENTIALS.md](PERMISSIONS-AND-CREDENTIALS.md))
+- [x] Three adversarial reviews (two Claude, one Codex) applied in full
+- [x] `tests/routes.test.ts`: every route declares a capability or names itself, with a reason, in an exemption list
+- [x] `pnpm db:invariants`: ten data invariants checked against the database rather than against the code
+- [x] Verified against a production build, not the dev server: the strict CSP with its per-request nonce, 27 routes in both themes, 27 interaction flows, the profile matrix and the scope probe
+
+### What the final review found, and what it changed
+
+The reviews were worth more than the tests. Between them they found a Member
+able to read the company's cost base from an ungated project summary, a lost
+update on `paid_cents` under concurrent payments, a retainer left over-drawn by
+an invoice edit, an idempotency mechanism that deduplicated nothing because the
+client generated a fresh key per call, an open redirect that survived a
+leading-slash check because URL parsing strips tabs and newlines first, and a
+Content-Security-Policy whose comment described a nonce it did not have.
+
+The pattern underneath them is the one worth carrying forward: **every defect
+was a rule stated in prose and asserted nowhere executable.** Comments had
+drifted from the code, always in the flattering direction. So the response was
+not only to fix them but to make the rules countable: `tests/routes.test.ts` for
+the capability gate, `tests/invoices.test.ts` for the money invariants,
+`tests/env.test.ts` for the environment schema, and `scripts/invariants.mts` for
+the data. When adding a rule to this codebase, add the thing that checks it in
+the same commit.
 
 ---
 
