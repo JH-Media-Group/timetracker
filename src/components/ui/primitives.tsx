@@ -390,16 +390,25 @@ export const DialogTrigger = RDialog.Trigger;
 export const DialogClose = RDialog.Close;
 
 /**
- * A tray: a dialog that arrives from the right and keeps its height.
+ * A detail tray, docked to the right, beside a list rather than on top of it.
  *
- * Built on `RDialog` rather than beside it, so focus trapping, Escape, the
- * overlay and returning focus to whatever opened it are the behaviours that
- * already work everywhere else. The only differences are the shape and that the
- * body scrolls on its own, because a tray holds a table.
+ * **Deliberately not modal**, which is the whole design:
  *
- * **A picker inside a tray needs `portal={false}`,** for the same reason it does
- * inside a dialog: this is modal, and a portalled popover renders outside the
- * subtree that traps focus (TALLY-39).
+ *   - **No overlay.** Nothing behind it dims or blurs.
+ *   - **The page stays live.** Clicking another row on the left swaps what the
+ *     tray shows instead of closing it, so a queue can be worked straight down.
+ *     Editing on the left keeps working with the tray open.
+ *   - **The page yields space** rather than being covered: `--tray-w` of right
+ *     padding while one is open, so no row is hidden underneath.
+ *
+ * It still uses `RDialog` for the parts that are genuinely a dialog's: Escape,
+ * the role and labelling, and returning focus on close. `modal={false}` turns
+ * off the focus trap and the pointer-event blocking, and outside clicks are
+ * explicitly not a dismissal, because an outside click is how you choose the
+ * next record.
+ *
+ * Since it does not trap focus, a picker inside it does **not** need
+ * `portal={false}`, unlike inside a real dialog (TALLY-39).
  */
 export function Tray({
   open, onOpenChange, title, subtitle, actions, children, footer,
@@ -413,11 +422,27 @@ export function Tray({
   children: React.ReactNode;
   footer?: React.ReactNode;
 }) {
+  /**
+   * Tells the page to make room. One tray is open at a time, so a single
+   * attribute on the root is enough and `base.css` owns the layout rule.
+   */
+  React.useEffect(() => {
+    if (!open) return;
+    document.documentElement.setAttribute("data-tray-open", "");
+    return () => document.documentElement.removeAttribute("data-tray-open");
+  }, [open]);
+
   return (
-    <RDialog.Root open={open} onOpenChange={onOpenChange}>
+    <RDialog.Root open={open} onOpenChange={onOpenChange} modal={false}>
       <RDialog.Portal>
-        <RDialog.Overlay className={dialogOverlayClass} />
-        <RDialog.Content className={trayContentClass} aria-describedby={undefined}>
+        <RDialog.Content
+          className={trayContentClass}
+          aria-describedby={undefined}
+          /* Opening must not steal focus from the list being worked through. */
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          /* An outside click chooses the next record; it does not dismiss. */
+          onInteractOutside={(e) => e.preventDefault()}
+        >
           <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
             <div className="min-w-0">
               <RDialog.Title className="truncate text-lg font-semibold text-ink">{title}</RDialog.Title>

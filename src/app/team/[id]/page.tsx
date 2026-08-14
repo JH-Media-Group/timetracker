@@ -17,7 +17,8 @@ import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { ValueAccumulator } from "@/lib/derive";
 import {
-  addDays, formatDateUS, formatDuration, formatMoney, formatPercent, isoDate, startOfWeek,
+  addDays, formatClockTime, formatDateUS, formatDuration, formatMoney, formatPercent, isoDate,
+  minutesOfDay, startOfWeek,
 } from "@/lib/format";
 import type { TimeEntry } from "@/lib/types";
 import {Avatar, Badge, Button, Card, EmptyState, Spinner, Meter, Tabs, Select,
@@ -31,7 +32,7 @@ import { PROFILE_LABEL } from "@/lib/labels";
 export default function PersonDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { userById, projectById, clientById, taskById, ready } = useApp();
+  const { userById, projectById, clientById, taskById, settings, ready } = useApp();
   const can = useCan();
   const person = userById.get(id);
   const { granularity, anchor, period, onChange } = usePeriod("month", ["week", "month", "quarter", "year"]);
@@ -135,13 +136,28 @@ export default function PersonDetailPage() {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [list, projectById]);
 
+  /**
+   * Every segment in the period, newest first (TALLY-16, TALLY-14).
+   *
+   * The 40-row cap is gone. It was arbitrary, and it made the total below the
+   * list a total of "the last 40 things" rather than of the period, which is a
+   * figure nobody wants. The period picker above already bounds this.
+   *
+   * One row per entry is one row per work segment, which is what answers
+   * Jason's original question: three hours in one sitting reads differently
+   * from ten chunks, and a daily total cannot tell you which happened.
+   */
   const recent = React.useMemo(
     () =>
       [...list]
         .filter((e) => !recentProject || e.projectId === recentProject)
-        .sort((a, b) => b.spentOn.localeCompare(a.spentOn))
-        .slice(0, 40),
+        .sort((a, b) => b.spentOn.localeCompare(a.spentOn) || (b.startedAt ?? "").localeCompare(a.startedAt ?? "")),
     [list, recentProject]
+  );
+
+  const recentTotal = React.useMemo(
+    () => recent.reduce((a, e) => a + e.durationSeconds, 0),
+    [recent]
   );
 
   // The bootstrap fetch has to finish before "not found" is the truth.
@@ -361,7 +377,7 @@ export default function PersonDetailPage() {
                 ))}
               </Select>
               <span className="text-sm text-ink-tertiary">
-                {recent.length === 40 ? "Showing the 40 most recent" : `${recent.length} ${recent.length === 1 ? "entry" : "entries"}`}
+                {recent.length} {recent.length === 1 ? "segment" : "segments"} · {formatDuration(recentTotal, settings.timeDisplay)}
               </span>
             </div>
 
@@ -375,12 +391,33 @@ export default function PersonDetailPage() {
               <>
                 <div className="flex items-center border-b border-border bg-bg-muted px-4 py-2 text-xs font-semibold uppercase tracking-[0.04em] text-ink-tertiary">
                   <span className="w-28">Date</span>
+                  <span className="w-32">Started</span>
+                  <span className="w-32">Ended</span>
                   <span className="flex-1">Project and task</span>
                   <span className="w-24 text-right">Hours</span>
                 </div>
                 {recent.map((e) => (
                   <div key={e.id} className="flex items-center border-b border-border px-4 py-2.5 text-base last:border-b-0">
                     <span className="w-28 tabular-nums text-ink-secondary">{formatDateUS(e.spentOn)}</span>
+                    {/*
+                      Not every entry has times. An entry typed as "2.5" in
+                      duration mode has no start at all, and an imported one may
+                      have neither. The no-value glyph the grids use goes here
+                      rather than 00:00, which reads as midnight.
+
+                      The times are the subject's, resolved from the stored
+                      timestamp the same way the timesheet resolves them, so a
+                      late segment does not drift onto the wrong day for a
+                      viewer in another timezone.
+                    */}
+                    <span className="w-32 tabular-nums text-ink-secondary">
+                      {e.startedAt ? formatClockTime(minutesOfDay(e.startedAt)) : <span className="text-ink-tertiary">&mdash;</span>}
+                    </span>
+                    <span className="w-32 tabular-nums text-ink-secondary">
+                      {e.timerStartedAt
+                        ? <span className="text-live">running</span>
+                        : e.endedAt ? formatClockTime(minutesOfDay(e.endedAt)) : <span className="text-ink-tertiary">&mdash;</span>}
+                    </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate leading-tight text-ink">
                         {projectById.get(e.projectId)?.name} <span className="text-ink-tertiary">·</span> {taskById.get(e.taskId)?.name}

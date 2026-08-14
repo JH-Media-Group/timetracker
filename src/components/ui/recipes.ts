@@ -454,18 +454,21 @@ export const dialogContentClass = [
 ].join(" ");
 
 /**
- * A tray that slides in from the right.
+ * A detail tray, docked to the right.
  *
- * Same machinery as a dialog, different shape. A dialog is for one decision;
- * a tray is for a record you want open beside the list you came from, which is
- * why it takes the height and leaves the left of the screen visible.
+ * **Not a modal.** There is no overlay, nothing behind it dims, and the page
+ * stays live: the point is to keep clicking rows on the left and watch the tray
+ * follow. A modal would make that impossible, which is why the first version of
+ * this was wrong.
  *
- * Wide, because the things that go in it are tables. `max-w-[880px]` leaves a
- * name column readable behind it on a laptop, which is what makes it a tray
- * rather than a modal that happens to be on the right (TALLY-41).
+ * The page takes `--tray-w` of right padding while one is open, so the list is
+ * never underneath the panel. Both sides read the same token or they disagree
+ * and the last column hides.
  */
 export const trayContentClass = [
-  "fixed inset-y-0 right-0 z-(--z-modal) flex w-full max-w-[880px] flex-col",
+  /* Below the topbar, not over it: the timer, the search and the profile menu
+     have to stay reachable, which is the same reason there is no overlay. */
+  "fixed bottom-0 right-0 top-(--topbar-h) z-(--z-modal) flex w-full max-w-(--tray-w) flex-col",
   "border-l border-border bg-surface shadow-xl",
   "data-[state=open]:animate-in data-[state=open]:slide-in-from-right",
   "data-[state=closed]:animate-out data-[state=closed]:slide-out-to-right",

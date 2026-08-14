@@ -369,6 +369,11 @@
   --ease-in:  cubic-bezier(0.4, 0, 1, 1);      /* exits */
   --ease-out: cubic-bezier(0, 0, 0.2, 1);      /* entrances */
 
+  /* The detail tray. A token because two things have to agree on it: the
+     panel's width, and the right padding the page takes while it is open so
+     nothing sits underneath it. */
+  --tray-w: 720px;
+
   --dur-fast: 120ms;  /* hover, focus, colour change */
   --dur:      180ms;  /* popovers, dropdowns, toasts */
   --dur-slow: 280ms;  /* modals, drawers, route transitions */

@@ -11,6 +11,24 @@
 
 @layer base {
 
+  /* ---- Detail tray -------------------------------------------------------- */
+
+  /* The tray is docked, not overlaid: the page gives up the space rather than
+     hiding a column underneath the panel. One tray is open at a time, so the
+     attribute lives on the root and this is the only place that reacts to it.
+
+     Below the tray's own breakpoint it takes the screen, so there is nothing
+     left to make room for. */
+  @media (min-width: 768px) {
+    :root[data-tray-open] main {
+      padding-right: var(--tray-w);
+    }
+  }
+
+  main {
+    transition: padding-right var(--dur-slow) var(--ease);
+  }
+
   /* ---- Reset -------------------------------------------------------------- */
 
   *,

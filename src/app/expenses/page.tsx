@@ -200,7 +200,7 @@ export default function ExpensesPage() {
           totals={totals}
           height={600}
           selectable={can("expense:manage")}
-          onRowOpen={(r) => setOpenId(r.id)}
+          onRowOpen={(r) => setOpenId((cur) => (cur === r.id ? null : r.id))}
           filters={
             <Select
               value={view}
