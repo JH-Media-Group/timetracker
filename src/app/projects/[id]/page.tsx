@@ -7,7 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, ChevronRight, Pencil, Info } from "lucide-react";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { projectSummary, secondsToCents } from "@/lib/derive";
+import { projectSummary, sumValue } from "@/lib/derive";
 import {
   addDays, formatDuration, formatHours, formatMoney, formatMoneyShort, formatPercent,
   isoDate, startOfWeek, toDate,
@@ -51,16 +51,19 @@ export default function ProjectDetailPage() {
     const sorted = [...entries].sort((a, b) => a.spentOn.localeCompare(b.spentOn));
     const first = startOfWeek(toDate(sorted[0]!.spentOn));
     const last = startOfWeek(api.TODAY);
-    const buckets: { label: string; seconds: number; cents: number }[] = [];
+    // Cent-seconds while accumulating, cents at the end. The chart is a
+    // cumulative line, so a cent of drift per week compounds all the way along
+    // it and the last point disagrees with the KPI card above it.
+    const buckets: { label: string; seconds: number; centSeconds: number }[] = [];
     for (let d = first; d <= last; d = addDays(d, 7)) {
-      buckets.push({ label: `${d.getDate()}/${d.getMonth() + 1}`, seconds: 0, cents: 0 });
+      buckets.push({ label: `${d.getDate()}/${d.getMonth() + 1}`, seconds: 0, centSeconds: 0 });
     }
     for (const e of entries) {
       const wk = startOfWeek(toDate(e.spentOn));
       const idx = Math.round((wk.getTime() - first.getTime()) / (7 * 86400000));
       if (buckets[idx]) {
         buckets[idx].seconds += e.durationSeconds;
-        buckets[idx].cents += secondsToCents(e.durationSeconds, e.billableRateCents);
+        buckets[idx].centSeconds += e.durationSeconds * e.billableRateCents;
       }
     }
     return buckets;
@@ -70,8 +73,12 @@ export default function ProjectDetailPage() {
     let acc = 0;
     const useHours = project?.budgetBy === "project_hours";
     return weekly.map((w, i) => {
-      acc += useHours ? w.seconds : w.cents;
-      return { label: w.label, value: useHours ? acc / 3600 : acc / 100, partial: i === weekly.length - 1 };
+      acc += useHours ? w.seconds : w.centSeconds;
+      return {
+        label: w.label,
+        value: useHours ? acc / 3600 : Math.round(acc / 3600) / 100,
+        partial: i === weekly.length - 1,
+      };
     });
   }, [weekly, project]);
 
@@ -82,8 +89,8 @@ export default function ProjectDetailPage() {
       .map(([taskId, list]) => ({
         taskId, list,
         seconds: list.reduce((a, e) => a + e.durationSeconds, 0),
-        billable: list.reduce((a, e) => a + secondsToCents(e.durationSeconds, e.billableRateCents), 0),
-        cost: list.reduce((a, e) => a + secondsToCents(e.durationSeconds, e.costRateCents), 0),
+        billable: sumValue(list, (e) => e.durationSeconds, (e) => e.billableRateCents),
+        cost: sumValue(list, (e) => e.durationSeconds, (e) => e.costRateCents),
       }))
       .sort((a, b) => b.seconds - a.seconds);
   }, [entries]);
@@ -95,8 +102,8 @@ export default function ProjectDetailPage() {
       .map(([userId, list]) => ({
         userId, list,
         seconds: list.reduce((a, e) => a + e.durationSeconds, 0),
-        billable: list.reduce((a, e) => a + secondsToCents(e.durationSeconds, e.billableRateCents), 0),
-        cost: list.reduce((a, e) => a + secondsToCents(e.durationSeconds, e.costRateCents), 0),
+        billable: sumValue(list, (e) => e.durationSeconds, (e) => e.billableRateCents),
+        cost: sumValue(list, (e) => e.durationSeconds, (e) => e.costRateCents),
       }))
       .sort((a, b) => b.seconds - a.seconds);
   }, [entries]);

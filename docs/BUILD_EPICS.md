@@ -108,7 +108,7 @@ The working checklist for the backend build and the frontend wiring. Tick items 
 
 ## E11. Frontend wiring
 
-- [ ] `src/lib/api.ts` rewritten to `fetch` the real API, signatures unchanged
+- [x] `src/lib/api.ts` rewritten to `fetch` the real API, signatures unchanged
 - [ ] Sign-in page and the authenticated shell
 - [ ] Error and loading states wired to the real failure modes
 - [ ] Playwright pass over every route against the real backend

@@ -6,7 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
 import { Plus, Download, Upload } from "lucide-react";
 import * as api from "@/lib/api";
-import { projectBudget, secondsToCents } from "@/lib/derive";
+import { projectBudget, sumValue } from "@/lib/derive";
 import { formatDuration, formatHours, formatMoney, formatPercent } from "@/lib/format";
 import type { Project, TimeEntry } from "@/lib/types";
 import { Badge, Button, EmptyState, Meter, Select } from "@/components/ui/primitives";
@@ -77,7 +77,7 @@ export default function ProjectsPage() {
       for (const p of list2.sort((a, b) => a.name.localeCompare(b.name))) {
         const mine = byProject.get(p.id) ?? [];
         const b = projectBudget(p, mine);
-        const costs = mine.reduce((a, e) => a + secondsToCents(e.durationSeconds, e.costRateCents), 0);
+        const costs = sumValue(mine, (e) => e.durationSeconds, (e) => e.costRateCents);
         out.push({
           _id: p.id, _kind: "data", id: p.id, name: p.name, client,
           type: p.billingType === "fixed_fee" ? "Fixed Fee" : p.billingType === "non_billable" ? "Non-Billable" : "Time & Materials",

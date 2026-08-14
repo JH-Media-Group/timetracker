@@ -12,8 +12,41 @@
 
 import type { Expense, Invoice, Project, TimeEntry, User } from "./types";
 
+/**
+ * The value of one entry's time.
+ *
+ * Correct for a single row and wrong for a set of them: rounding each entry and
+ * adding the results accumulates error in one direction, and the server does
+ * not do that, so the two would disagree by a growing number of cents. Use
+ * `sumValue` for anything with more than one row in it.
+ */
 export const secondsToCents = (seconds: number, rateCents: number) =>
   Math.round((seconds * rateCents) / 3600);
+
+/**
+ * The value of many entries' time: sum the products, divide once at the end.
+ *
+ * This is the same rule as `sumSecondsToCents` in `src/domain/money.ts` and the
+ * `ROUND(SUM(seconds * rate) / 3600)` in every report query. All three have to
+ * agree to the cent, because a person reading a total on one screen and an
+ * invoice built from another will notice if they do not.
+ */
+export function sumValue<T>(
+  rows: Iterable<T>,
+  seconds: (row: T) => number,
+  rateCents: (row: T) => number
+): number {
+  let product = 0;
+  for (const row of rows) product += seconds(row) * rateCents(row);
+  return Math.round(product / 3600);
+}
+
+/** An accumulator for the same rule, when the rows arrive one at a time. */
+export class ValueAccumulator {
+  private product = 0;
+  add(seconds: number, rateCents: number) { this.product += seconds * rateCents; }
+  get cents() { return Math.round(this.product / 3600); }
+}
 
 /* ------------------------------------------------------------------ budgets */
 
@@ -48,11 +81,11 @@ export function projectBudget(project: Project, entries: TimeEntry[], monthOnly?
     return { kind: "hours", budget: project.budgetSeconds, spent, remaining: project.budgetSeconds - spent, percentUsed: pct, health: budgetHealth(pct), resetsMonthly: project.budgetResetsMonthly };
   }
   if (project.budgetBy === "project_fees" && project.budgetFeeCents) {
-    const spent = scoped.reduce((a, e) => a + secondsToCents(e.durationSeconds, e.billableRateCents), 0);
+    const spent = sumValue(scoped, (e) => e.durationSeconds, (e) => e.billableRateCents);
     const pct = spent / project.budgetFeeCents;
     return { kind: "fees", budget: project.budgetFeeCents, spent, remaining: project.budgetFeeCents - spent, percentUsed: pct, health: budgetHealth(pct), resetsMonthly: project.budgetResetsMonthly };
   }
-  const spent = scoped.reduce((a, e) => a + secondsToCents(e.durationSeconds, e.billableRateCents), 0);
+  const spent = sumValue(scoped, (e) => e.durationSeconds, (e) => e.billableRateCents);
   return { kind: "none", budget: null, spent, remaining: null, percentUsed: null, health: "none", resetsMonthly: false };
 }
 
@@ -83,8 +116,8 @@ export function projectSummary(
 
   const totalSeconds = mine.reduce((a, e) => a + e.durationSeconds, 0);
   const billableSeconds = billable.reduce((a, e) => a + e.durationSeconds, 0);
-  const billableCents = billable.reduce((a, e) => a + secondsToCents(e.durationSeconds, e.billableRateCents), 0);
-  const timeCostCents = mine.reduce((a, e) => a + secondsToCents(e.durationSeconds, e.costRateCents), 0);
+  const billableCents = sumValue(billable, (e) => e.durationSeconds, (e) => e.billableRateCents);
+  const timeCostCents = sumValue(mine, (e) => e.durationSeconds, (e) => e.costRateCents);
   const expenseCents = myExp.reduce((a, e) => a + e.totalCents, 0);
 
   const invoicedCents = invoices
@@ -97,9 +130,11 @@ export function projectSummary(
     const fees = project.feeCents ?? 0;
     uninvoicedCents = Math.max(0, fees - invoicedCents);       // floored: over-billing is not a negative receivable
   } else {
-    uninvoicedCents = billable
-      .filter((e) => !e.invoiceId && !e.billedExternally)
-      .reduce((a, e) => a + secondsToCents(e.durationSeconds, e.billableRateCents), 0)
+    uninvoicedCents = sumValue(
+      billable.filter((e) => !e.invoiceId && !e.billedExternally),
+      (e) => e.durationSeconds,
+      (e) => e.billableRateCents
+    )
       + myExp.filter((e) => e.isBillable && !e.invoiceId).reduce((a, e) => a + e.totalCents, 0);
   }
 
@@ -142,12 +177,12 @@ export function profitFor(revenueCents: number, costCents: number): Pick<ProfitR
 export function projectRevenue(project: Project, entries: TimeEntry[], expenses: Expense[]): number {
   if (project.billingType === "non_billable") return 0;
   if (project.billingType === "fixed_fee") return project.feeCents ?? 0;
-  return entries.filter((e) => e.isBillable).reduce((a, e) => a + secondsToCents(e.durationSeconds, e.billableRateCents), 0)
+  return sumValue(entries.filter((e) => e.isBillable), (e) => e.durationSeconds, (e) => e.billableRateCents)
     + expenses.filter((e) => e.isBillable).reduce((a, e) => a + e.totalCents, 0);
 }
 
 export function projectCost(entries: TimeEntry[], expenses: Expense[]): number {
-  return entries.reduce((a, e) => a + secondsToCents(e.durationSeconds, e.costRateCents), 0)
+  return sumValue(entries, (e) => e.durationSeconds, (e) => e.costRateCents)
     + expenses.reduce((a, e) => a + e.totalCents, 0);
 }
 
@@ -171,7 +206,7 @@ export function utilization(users: User[], entries: TimeEntry[], weeks = 1): Uti
     return {
       user, totalSeconds, billableSeconds, capacitySeconds,
       utilization: capacitySeconds ? totalSeconds / capacitySeconds : 0,
-      costCents: mine.reduce((a, e) => a + secondsToCents(e.durationSeconds, e.costRateCents), 0),
+      costCents: sumValue(mine, (e) => e.durationSeconds, (e) => e.costRateCents),
     };
   });
 }

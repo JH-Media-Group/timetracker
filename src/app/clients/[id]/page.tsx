@@ -15,7 +15,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Mail, Pencil, Phone, Plus } from "lucide-react";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { projectBudget, secondsToCents } from "@/lib/derive";
+import { projectBudget, sumValue, ValueAccumulator } from "@/lib/derive";
 import { formatDateUS, formatDuration, formatMoney, formatMoneyShort, formatPercent } from "@/lib/format";
 import type { Invoice, TimeEntry } from "@/lib/types";
 import {
@@ -55,15 +55,19 @@ export default function ClientDetailPage() {
 
   const stats = React.useMemo(() => {
     const list = entries as TimeEntry[];
-    let seconds = 0, billableSeconds = 0, uninvoiced = 0, cost = 0;
+    let seconds = 0, billableSeconds = 0;
+    const uninvoicedAcc = new ValueAccumulator();
+    const costAcc = new ValueAccumulator();
     for (const e of list) {
       seconds += e.durationSeconds;
-      cost += secondsToCents(e.durationSeconds, e.costRateCents);
+      costAcc.add(e.durationSeconds, e.costRateCents);
       if (e.isBillable) {
         billableSeconds += e.durationSeconds;
-        if (!e.invoiceId && !e.billedExternally) uninvoiced += secondsToCents(e.durationSeconds, e.billableRateCents);
+        if (!e.invoiceId && !e.billedExternally) uninvoicedAcc.add(e.durationSeconds, e.billableRateCents);
       }
     }
+    const uninvoiced = uninvoicedAcc.cents;
+    const cost = costAcc.cents;
     const outstanding = clientInvoices
       .filter((i) => i.state === "sent" || i.state === "partial" || i.state === "late")
       .reduce((a, i) => a + (i.totalCents - i.paidCents), 0);
@@ -236,8 +240,8 @@ export default function ClientDetailPage() {
                   const b = projectBudget(p, mine);
                   const seconds = mine.reduce((a, e) => a + e.durationSeconds, 0);
                   const uninvoiced = mine.reduce(
-                    (a, e) => a + (e.isBillable && !e.invoiceId && !e.billedExternally ? secondsToCents(e.durationSeconds, e.billableRateCents) : 0), 0
-                  );
+                    (a, e) => a + (e.isBillable && !e.invoiceId && !e.billedExternally ? e.durationSeconds * e.billableRateCents : 0), 0
+                  ) / 3600  /* summed as products, divided once */;
                   return (
                     <Link
                       key={p.id}

@@ -10,6 +10,7 @@
  */
 
 import * as React from "react";
+import { usePathname } from "next/navigation";
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "@/lib/api";
 import type { Client, ExpenseCategory, Project, Settings, Task, User, ID } from "@/lib/types";
@@ -62,6 +63,8 @@ export interface AppData {
   projectById: Map<ID, Project>;
   taskById: Map<ID, Task>;
   categoryById: Map<ID, ExpenseCategory>;
+  /** What the signed-in person may do, exactly as the server computed it. */
+  capabilities: ReadonlySet<string>;
   ready: boolean;
 }
 
@@ -73,28 +76,37 @@ export function useApp(): AppData {
   return ctx;
 }
 
-/** Capability check. The mock grants by profile; the real app reads /me/capabilities. */
+/**
+ * Capability check.
+ *
+ * The set comes from the server, which computed it from the same constant the
+ * API gates on. That is the point: the client asks the identical question, so a
+ * button cannot appear for an action the request would refuse, and a new
+ * capability does not need a copy of the table maintained over here.
+ *
+ * Before the bootstrap lands the set is empty and every check is false, so the
+ * shell renders its floor rather than flashing controls and taking them away.
+ */
 export function useCan() {
-  const { me } = useApp();
-  return React.useCallback((cap: string) => {
-    const p = me.profile;
-    if (p === "administrator") return true;
-    const table: Record<string, string[]> = {
-      member: ["time:create_own", "time:edit_own", "expense:manage"],
-      project_manager: ["time:create_own", "time:edit_own", "time:view_others", "time:edit_others", "approval:review", "project:manage", "client:manage", "task:manage", "expense:manage"],
-      people_admin: ["time:create_own", "time:edit_own", "time:view_others", "time:edit_others", "approval:review", "people:manage", "expense:manage"],
-      accounting: ["time:create_own", "time:edit_own", "client:manage", "invoice:manage", "rates:view_billable", "report:view_financial", "expense:manage"],
-      executive_manager: ["time:create_own", "time:edit_own", "time:view_others", "time:edit_others", "approval:review", "project:manage", "client:manage", "people:manage", "invoice:manage", "rates:view_billable", "report:view_financial", "expense:manage"],
-    };
-    return (table[p] ?? []).includes(cap);
-  }, [me.profile]);
+  const { capabilities } = useApp();
+  return React.useCallback((cap: string) => capabilities.has(cap), [capabilities]);
 }
 
+/** Screens that render before anybody is signed in, so they must not bootstrap. */
+const ANONYMOUS = ["/signin"];
+
 function AppDataProvider({ children }: { children: React.ReactNode }) {
-  const { data } = useQuery({
+  const pathname = usePathname();
+  const anonymous = ANONYMOUS.some((r) => pathname.startsWith(r));
+
+  const { data, error, isLoading } = useQuery({
     queryKey: ["bootstrap"],
     queryFn: api.getBootstrap,
     staleTime: Infinity,
+    enabled: !anonymous,
+    // A 401 is already being handled by a redirect to sign in; retrying it just
+    // makes three requests fail instead of one.
+    retry: (count, e) => count < 2 && !(api.isApiError(e) && e.status === 401),
   });
 
   const value = React.useMemo<AppData>(() => {
@@ -104,20 +116,74 @@ function AppDataProvider({ children }: { children: React.ReactNode }) {
     const tasks = data?.tasks ?? [];
     const expenseCategories = data?.expenseCategories ?? [];
     return {
-      me: data?.me ?? ({ id: "u1", firstName: "…", lastName: "", email: "", roles: [], departments: [], employmentType: "employee", profile: "administrator", weeklyCapacitySeconds: 144000, timezone: "UTC", billableRateCents: 0, costRateCents: 0 } as User),
+      // The placeholder holds no capabilities, so nothing privileged renders
+      // before the real answer arrives.
+      me: data?.me ?? ({ id: "", firstName: "…", lastName: "", email: "", roles: [], departments: [], employmentType: "employee", profile: "member", weeklyCapacitySeconds: 144000, timezone: "UTC", billableRateCents: 0, costRateCents: 0 } as User),
       users, clients, projects, tasks, expenseCategories,
-      settings: data?.settings ?? ({} as Settings),
+      settings: data?.settings ?? (DEFAULT_SETTINGS as Settings),
       pinnedProjectIds: data?.pinnedProjectIds ?? [],
       userById: new Map(users.map((u) => [u.id, u])),
       clientById: new Map(clients.map((c) => [c.id, c])),
       projectById: new Map(projects.map((p) => [p.id, p])),
       taskById: new Map(tasks.map((t) => [t.id, t])),
       categoryById: new Map(expenseCategories.map((c) => [c.id, c])),
+      capabilities: new Set(data?.capabilities ?? []),
       ready: !!data,
     };
   }, [data]);
 
+  // A failure that is not a 401 has to be visible. Rendering the shell over an
+  // empty context would show every page as "no data", which reads as an empty
+  // account rather than as a server that is down.
+  if (!anonymous && error && !(api.isApiError(error) && error.status === 401)) {
+    return <BootstrapFailure error={error} />;
+  }
+
   return <AppCtx.Provider value={value}>{children}</AppCtx.Provider>;
+}
+
+/**
+ * Sensible values for the moment before the account's own settings land.
+ *
+ * Not an empty object: `settings.timeDisplay` and `settings.weekStartsOn` are
+ * read during the first render of the timesheet, and undefined there formats a
+ * duration as "NaN".
+ */
+const DEFAULT_SETTINGS: Settings = {
+  companyName: "",
+  companyAddress: "",
+  baseCurrency: "USD",
+  timezone: "America/New_York",
+  weekStartsOn: 1,
+  timerMode: "duration",
+  timeDisplay: "decimal",
+  roundingMinutes: 0,
+  requireNotes: "never",
+  allowFutureDates: true,
+  modules: {},
+};
+
+function BootstrapFailure({ error }: { error: unknown }) {
+  const message = error instanceof Error ? error.message : "Something went wrong.";
+  const requestId = api.isApiError(error) ? error.requestId : undefined;
+
+  return (
+    <div className="flex min-h-screen items-center justify-center p-6">
+      <div className="max-w-md text-center">
+        <h1 className="mb-2 text-xl font-semibold text-ink">Tally could not start</h1>
+        <p className="mb-4 text-base text-ink-secondary">{message}</p>
+        {requestId && (
+          <p className="mb-4 font-mono text-sm text-ink-muted">Request {requestId}</p>
+        )}
+        <button
+          className="rounded-md border border-border px-3 py-1.5 text-base text-ink hover:bg-bg-subtle"
+          onClick={() => window.location.reload()}
+        >
+          Try again
+        </button>
+      </div>
+    </div>
+  );
 }
 
 /** Invalidate everything that could have changed after a write. */

@@ -13,7 +13,7 @@ import { useRouter } from "next/navigation";
 import type { ColDef } from "ag-grid-community";
 import { formatDuration, formatMoney, formatPercent, isoDate, startOfWeek, toDate } from "@/lib/format";
 import type { TimeEntry } from "@/lib/types";
-import { secondsToCents } from "@/lib/derive";
+import { ValueAccumulator } from "@/lib/derive";
 import { Card, Meter, Segmented } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { DataGrid } from "@/components/app/data-grid";
@@ -46,19 +46,20 @@ export function TimeReport({
   const groupBy = (params.get("by") as GroupBy) || "client";
 
   const totals = React.useMemo(() => {
-    let total = 0, billable = 0, amount = 0;
+    let total = 0, billable = 0;
+    const value = new ValueAccumulator();
     for (const e of entries) {
       total += e.durationSeconds;
       if (e.isBillable) {
         billable += e.durationSeconds;
-        amount += secondsToCents(e.durationSeconds, e.billableRateCents);
+        value.add(e.durationSeconds, e.billableRateCents);
       }
     }
-    return { total, billable, nonBillable: total - billable, amount };
+    return { total, billable, nonBillable: total - billable, amount: value.cents };
   }, [entries]);
 
   const rows = React.useMemo<GridRow<Row>[]>(() => {
-    const buckets = new Map<string, { name: string; sub: string; total: number; billable: number; amount: number }>();
+    const buckets = new Map<string, { name: string; sub: string; total: number; billable: number; value: ValueAccumulator }>();
 
     for (const e of entries) {
       const project = projectById.get(e.projectId);
@@ -78,11 +79,11 @@ export function TimeReport({
         sub = u?.roles.join(", ") ?? "";
       }
 
-      const cur = buckets.get(key) ?? { name, sub, total: 0, billable: 0, amount: 0 };
+      const cur = buckets.get(key) ?? { name, sub, total: 0, billable: 0, value: new ValueAccumulator() };
       cur.total += e.durationSeconds;
       if (e.isBillable) {
         cur.billable += e.durationSeconds;
-        cur.amount += secondsToCents(e.durationSeconds, e.billableRateCents);
+        cur.value.add(e.durationSeconds, e.billableRateCents);
       }
       buckets.set(key, cur);
     }
@@ -92,7 +93,7 @@ export function TimeReport({
         _id: id, _kind: "data" as const, id, name: v.name, sub: v.sub,
         total: v.total, billable: v.billable, nonBillable: v.total - v.billable,
         share: totals.total ? v.total / totals.total : 0,
-        amount: v.amount,
+        amount: v.value.cents,
       }))
       .sort((a, b) => b.total - a.total);
   }, [entries, groupBy, projectById, clientById, taskById, userById, totals.total]);

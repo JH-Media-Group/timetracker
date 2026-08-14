@@ -14,7 +14,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
 import { Plus } from "lucide-react";
 import * as api from "@/lib/api";
-import { secondsToCents } from "@/lib/derive";
+import { ValueAccumulator } from "@/lib/derive";
 import { formatMoney } from "@/lib/format";
 import type { Invoice, TimeEntry } from "@/lib/types";
 import { TERM_LABEL } from "@/lib/labels";
@@ -51,13 +51,20 @@ export default function ClientsPage() {
 
   const uninvoicedByClient = React.useMemo(() => {
     const projectClient = new Map(projects.map((p) => [p.id, p.clientId]));
-    const m = new Map<string, number>();
+    const acc = new Map<string, ValueAccumulator>();
     for (const e of entries as TimeEntry[]) {
       if (!e.isBillable || e.invoiceId || e.billedExternally) continue;
       const clientId = projectClient.get(e.projectId);
       if (!clientId) continue;
-      m.set(clientId, (m.get(clientId) ?? 0) + secondsToCents(e.durationSeconds, e.billableRateCents));
+      let bucket = acc.get(clientId);
+      if (!bucket) { bucket = new ValueAccumulator(); acc.set(clientId, bucket); }
+      bucket.add(e.durationSeconds, e.billableRateCents);
     }
+    // Divided once per client, at the end. Rounding each entry and adding the
+    // results would put this column a few cents away from the invoice built
+    // from the same hours.
+    const m = new Map<string, number>();
+    for (const [clientId, bucket] of acc) m.set(clientId, bucket.cents);
     return m;
   }, [entries, projects]);
 

@@ -15,7 +15,7 @@ import { useQuery } from "@tanstack/react-query";
 import { CalendarClock, Mail } from "lucide-react";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
-import { secondsToCents } from "@/lib/derive";
+import { ValueAccumulator } from "@/lib/derive";
 import {
   addDays, formatDateUS, formatDuration, formatMoney, formatPercent, isoDate, startOfWeek,
 } from "@/lib/format";
@@ -48,15 +48,19 @@ export default function PersonDetailPage() {
   const list = entries as TimeEntry[];
 
   const stats = React.useMemo(() => {
-    let seconds = 0, billableSeconds = 0, cost = 0, revenue = 0;
+    let seconds = 0, billableSeconds = 0;
+    const costAcc = new ValueAccumulator();
+    const revenueAcc = new ValueAccumulator();
     for (const e of list) {
       seconds += e.durationSeconds;
-      cost += secondsToCents(e.durationSeconds, e.costRateCents);
+      costAcc.add(e.durationSeconds, e.costRateCents);
       if (e.isBillable) {
         billableSeconds += e.durationSeconds;
-        revenue += secondsToCents(e.durationSeconds, e.billableRateCents);
+        revenueAcc.add(e.durationSeconds, e.billableRateCents);
       }
     }
+    const cost = costAcc.cents;
+    const revenue = revenueAcc.cents;
     const days = (new Date(period.to).getTime() - new Date(period.from).getTime()) / 86400000 + 1;
     const capacity = (person?.weeklyCapacitySeconds ?? 0) * (days / 7);
     return {
