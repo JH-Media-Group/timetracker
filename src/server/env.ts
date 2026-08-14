@@ -126,6 +126,7 @@ function read() {
     SPACES_KEY: blank(process.env.SPACES_KEY),
     SPACES_SECRET: blank(process.env.SPACES_SECRET),
     ALLOW_DESTRUCTIVE: blank(process.env.ALLOW_DESTRUCTIVE),
+    TRUST_PROXY: blank(process.env.TRUST_PROXY),
   };
 
   const parsed = schema.safeParse(raw);
