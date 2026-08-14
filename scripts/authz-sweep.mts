@@ -27,6 +27,7 @@ import * as s from "../src/server/db/schema";
 import { newId } from "../src/server/db/ids";
 import { hashPassword } from "../src/server/auth/password";
 import { BASE_PROFILES, type BaseProfileKey } from "../src/server/auth/capabilities";
+import { clearSignInLimits, signIn } from "./lib/dev-signin.mts";
 
 const BASE = process.env.BASE ?? "http://localhost:3200";
 const PASSWORD = "authz-sweep-password";
@@ -65,35 +66,6 @@ const ENDPOINTS: string[] = [
 ];
 
 
-/**
- * Signs in and returns the cookie, or explains why it could not.
- *
- * Sign-in is limited to ten attempts per fifteen minutes per address, which is
- * the point of the limiter and which these scripts will hit if they are run
- * back to back. Reading `set-cookie` off a 429 gives a TypeError about null,
- * which reads as a broken script rather than as a working defence.
- */
-async function signIn(base: string, email: string, password: string): Promise<string> {
-  const res = await fetch(`${base}/api/v1/auth/signin`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Origin: base },
-    body: JSON.stringify({ email, password }),
-  });
-
-  const cookie = res.headers.get("set-cookie");
-  if (res.ok && cookie) return cookie.split(";")[0]!;
-
-  if (res.status === 429) {
-    const retry = res.headers.get("retry-after");
-    throw new Error(
-      `Sign-in is rate limited${retry ? `, retry in ${retry}s` : ""}. ` +
-        "Ten attempts per fifteen minutes per address, which is the limiter working. " +
-        "Wait, or restart Redis to clear the buckets."
-    );
-  }
-
-  throw new Error(`Could not sign in as ${email}: ${res.status} ${await res.text()}`);
-}
 
 async function main() {
   const created: string[] = [];
@@ -107,6 +79,10 @@ async function main() {
 
   const profileId = new Map(profileRows.filter((p) => p.baseKey).map((p) => [p.baseKey!, p.id]));
   const passwordHash = await hashPassword(PASSWORD);
+
+  // Six sign-ins against a ten-per-fifteen-minutes limit means this tool cannot
+  // be run twice without clearing after itself.
+  await clearSignInLimits(PROFILES.map((k) => `authz-${k}@sweep.invalid`));
 
   try {
     for (const key of PROFILES) {

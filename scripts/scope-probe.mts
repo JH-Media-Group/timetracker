@@ -16,6 +16,7 @@ import { db } from "../src/server/db/client";
 import * as s from "../src/server/db/schema";
 import { newId } from "../src/server/db/ids";
 import { hashPassword } from "../src/server/auth/password";
+import { clearSignInLimits, signIn } from "./lib/dev-signin.mts";
 
 const BASE = process.env.BASE ?? "http://localhost:3200";
 const PASSWORD = "scope-probe-password";
@@ -28,35 +29,6 @@ function check(name: string, ok: boolean, detail = "") {
 }
 
 
-/**
- * Signs in and returns the cookie, or explains why it could not.
- *
- * Sign-in is limited to ten attempts per fifteen minutes per address, which is
- * the point of the limiter and which these scripts will hit if they are run
- * back to back. Reading `set-cookie` off a 429 gives a TypeError about null,
- * which reads as a broken script rather than as a working defence.
- */
-async function signIn(base: string, email: string, password: string): Promise<string> {
-  const res = await fetch(`${base}/api/v1/auth/signin`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Origin: base },
-    body: JSON.stringify({ email, password }),
-  });
-
-  const cookie = res.headers.get("set-cookie");
-  if (res.ok && cookie) return cookie.split(";")[0]!;
-
-  if (res.status === 429) {
-    const retry = res.headers.get("retry-after");
-    throw new Error(
-      `Sign-in is rate limited${retry ? `, retry in ${retry}s` : ""}. ` +
-        "Ten attempts per fifteen minutes per address, which is the limiter working. " +
-        "Wait, or restart Redis to clear the buckets."
-    );
-  }
-
-  throw new Error(`Could not sign in as ${email}: ${res.status} ${await res.text()}`);
-}
 
 async function main() {
   const created: string[] = [];
@@ -70,6 +42,7 @@ async function main() {
 
   const id = newId();
   const email = "scope-probe@sweep.invalid";
+  await clearSignInLimits([email]);
   await db.insert(s.users).values({
     id,
     email,
