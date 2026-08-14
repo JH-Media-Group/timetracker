@@ -8,7 +8,7 @@ with none of it.
 Each item says what is missing, what does not work until it arrives, and what
 I will do once I have it.
 
-**Last updated:** 2026-08-14.
+**Last updated:** 2026-08-14. SendGrid chosen for email; everything else still open.
 
 ---
 
@@ -47,36 +47,75 @@ everybody ends up in Workspace. The permission model supports either.
 
 ---
 
-## 2. Outbound email
+## 2. Outbound email: SendGrid
 
-**What is missing:** an SMTP account, and a decision about which service.
+**Decided.** SendGrid, confirmed 2026-08-14.
 
-**Where it goes:**
+That is a good fit for the way this is already built: Tally sends through plain
+SMTP, and SendGrid publishes an SMTP relay, so it drops into the existing
+`SMTP_URL` with no new dependency, no vendor SDK, and nothing to unpick if we
+ever move.
+
+**What I need:**
 
 ```
-SMTP_URL=smtps://user:password@host:465
+SMTP_URL=smtps://apikey:<the API key>@smtp.sendgrid.net:465
 MAIL_FROM=billing@jhmediagroup.com
 ```
 
-**Options, in the order I would pick them:**
+The username is the literal word `apikey`. The password is the key itself, which
+starts `SG.` and is shown exactly once, at creation. If the key contains a
+character that is awkward in a URL, percent-encode it; the rest of the string is
+already safe.
 
-1. **Google Workspace SMTP relay.** No new vendor, no new bill, and the From
-   address is already yours. Rate limited to 10,000 messages a day, which is
-   several hundred times what Tally will send.
-2. **Postmark.** Best deliverability for transactional mail and the clearest
-   bounce reporting. About $15 a month at this volume.
-3. **Amazon SES.** Cheapest, most setup, and the sandbox has to be lifted before
-   it will send to arbitrary addresses.
+**Two things to set up in SendGrid, in this order:**
 
-**What does not work until then:** sending an invoice, chasing one with a
+1. **Domain authentication for `jhmediagroup.com`.** Settings, Sender
+   Authentication, Authenticate Your Domain. It gives you three CNAME records to
+   add at your DNS host, and SendGrid verifies them once they propagate.
+
+   **Start this first.** It is the only item on this whole list with a waiting
+   period attached, and it is the one that decides whether an invoice lands in
+   an inbox or a spam folder. An unauthenticated sender can technically send;
+   invoices from one get filtered, and a client who says "I never received it"
+   is not lying.
+
+2. **An API key with Mail Send permission only.** Settings, API Keys, Create API
+   Key, Restricted Access, and grant nothing but Mail Send. A full-access key in
+   an environment file is a key that can also read every message the account has
+   ever sent.
+
+**Worth knowing before you pick a plan:** the free tier is capped per day, and
+that cap is low enough to matter on a day somebody sends reminders to every
+outstanding invoice at once. Check the current numbers when you sign up; at this
+volume the smallest paid tier is likely to be right, and the failure mode of
+being wrong is silent for exactly as long as nobody looks at the invoice
+timeline.
+
+**What does not work until it arrives:** sending an invoice, chasing one with a
 reminder, emailing a statement, and the "your timesheet is not submitted"
 nudges. Every one of these is *recorded* today with a delivery state of
 `not_configured`, and the UI says so in as many words rather than claiming the
-mail went out. The invoice timeline is honest; it just has nothing to show.
+mail went out. The invoice timeline is honest; it just has nothing to show yet.
 
-**What I will do with it:** wire the queue processor for the `email.*` topics
-already being written to the outbox, and add a bounce webhook if we go with
-Postmark or SES.
+**What I will do with it:**
+
+- Add the transport and the templates behind the `env.smtp` check that already
+  guards every send site, so the same code paths light up rather than new ones
+  appearing.
+- Add the outbox topics for the sends that do not have one yet. The outbox
+  currently carries `invoice.sent`, `invoice.paid`, `timesheet.submitted` and
+  `timesheet.approved`; the reminders and statements are recorded on the invoice
+  timeline but do not raise an event, so there is nothing for a worker to pick
+  up.
+- Wire SendGrid's Event Webhook so a bounce or a spam report comes back as a
+  delivery state on the message rather than as silence. This matters more than
+  it sounds: an invoice that bounced looks identical to one that was ignored,
+  and the difference is whether you chase the client or fix the address.
+
+None of that needs the key to be written, only to be tested end to end. Say the
+word and I will build it against a local SMTP capture so it is ready to switch
+on the day the key lands.
 
 ---
 
