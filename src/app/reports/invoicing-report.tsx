@@ -106,6 +106,18 @@ export function InvoicingReport({ period }: { period: Period }) {
     return { buckets: [...m.entries()], total };
   }, [data]);
 
+  /**
+   * Who to call, biggest first (TALLY-17).
+   *
+   * A different cut from both neighbours: Aging says how much is late, the grid
+   * below sorts by how long it has been late, and this says where the money is.
+   * The largest overdue invoice is usually worth more than the oldest one.
+   */
+  const topOutstanding = React.useMemo(
+    () => detailed.filter((r) => r.balance > 0).sort((a, b) => b.balance - a.balance).slice(0, 6),
+    [detailed]
+  );
+
   /** Issued against collected, by month: raised then, and cash arriving then. */
   const monthly = React.useMemo(() => {
     const server = (data?.meta.monthly ?? []) as {
@@ -117,6 +129,10 @@ export function InvoicingReport({ period }: { period: Period }) {
       values: [m.collectedCents / 100, Math.max(0, (m.issuedCents - m.collectedCents) / 100)],
     }));
   }, [data]);
+
+  /** What the wide column holds, or nothing when there is neither. */
+  const wide: "chart" | "outstanding" | null =
+    monthly.length > 1 ? "chart" : topOutstanding.length > 0 ? "outstanding" : null;
 
   const columns = React.useMemo<ColDef[]>(() => [
     { colId: "number", field: "number", headerName: "Invoice", width: 170 },
@@ -176,8 +192,18 @@ export function InvoicingReport({ period }: { period: Period }) {
         <Kpi label="Average days to pay" value={stats.avgDays == null ? "No data" : `${stats.avgDays}`} muted={stats.avgDays == null} />
       </div>
 
-      <div className="mb-4 grid gap-4 xl:grid-cols-[1fr_340px]">
-        {monthly.length > 1 && (
+      {/*
+        Aging is the 340px column. The wide one holds the monthly chart when
+        there is more than a month of history to draw, and otherwise the
+        largest outstanding balances.
+
+        The two-column definition is conditional because the wide column used
+        to be a hole: with one month of data the chart did not render, Aging
+        took the 1fr column, and 340px of nothing sat beside it (TALLY-17).
+        When neither has anything to show, Aging spans the row instead.
+      */}
+      <div className={cn("mb-4 grid gap-4", wide && "xl:grid-cols-[1fr_340px]")}>
+        {wide === "chart" && (
           <Card>
             <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
               <h2 className="text-md font-semibold text-ink">Issued and collected by month</h2>
@@ -196,6 +222,33 @@ export function InvoicingReport({ period }: { period: Period }) {
                 { name: "Still owed", color: "var(--viz-4)" },
               ]}
             />
+          </Card>
+        )}
+
+        {wide === "outstanding" && (
+          <Card>
+            <h2 className="mb-3 text-md font-semibold text-ink">Largest outstanding</h2>
+            <div className="flex flex-col">
+              {topOutstanding.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => router.push(`/invoices/${r.id}`)}
+                  className="flex items-center gap-3 rounded-md px-2 py-2 text-left text-base transition-colors hover:bg-surface-hover"
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate font-medium text-ink">{r.client}</span>
+                    <span className="block truncate text-sm text-ink-tertiary">{r.number}</span>
+                  </span>
+                  {r.daysLate > 0 && (
+                    <span className="shrink-0 text-sm text-danger">{r.daysLate} days overdue</span>
+                  )}
+                  <span className="shrink-0 tabular-nums font-medium text-ink">
+                    {formatMoney(r.balance)}
+                  </span>
+                </button>
+              ))}
+            </div>
           </Card>
         )}
 

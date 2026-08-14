@@ -504,11 +504,14 @@ export const navItemClass = [
   "group relative flex items-center gap-2 rounded-md px-2 py-1.5",
   "text-base text-ink-secondary",
   "transition-[background-color,color] duration-(--dur-fast) ease-(--ease)",
-  "hover:bg-surface-hover hover:text-ink",
+  "hover:bg-nav-hover hover:text-ink",
   "focus-visible:outline-2 focus-visible:outline-focus focus-visible:outline-offset-1",
   /* Active state carries a 2px accent rail as well as the fill, so the current
-     page is identifiable without relying on a subtle background difference. */
-  "aria-[current=page]:bg-bg-muted aria-[current=page]:font-medium aria-[current=page]:text-ink",
+     page is identifiable without relying on a subtle background difference.
+     The fills are nav-specific tokens: the shared surface steps are measured
+     against --surface, and against the sidebar's --bg-subtle they were too
+     close to see (TALLY-10). */
+  "aria-[current=page]:bg-nav-active aria-[current=page]:font-medium aria-[current=page]:text-ink",
   "aria-[current=page]:before:absolute aria-[current=page]:before:left-0 aria-[current=page]:before:top-1/2",
   "aria-[current=page]:before:h-4 aria-[current=page]:before:w-0.5 aria-[current=page]:before:-translate-y-1/2",
   "aria-[current=page]:before:rounded-full aria-[current=page]:before:bg-accent",

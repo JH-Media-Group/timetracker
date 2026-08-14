@@ -44,6 +44,16 @@
   --surface-hover:  light-dark(#F7F7F8, #1A1A1D);
   --surface-active: light-dark(#F0F0F1, #202024);
 
+  /* The sidebar sits on --bg-subtle, and its own states have to read against
+     that rather than against the page. --surface-hover and --bg-muted are
+     steps away from --surface, so against --bg-subtle they were nearly
+     invisible: a relative-luminance delta of 0.025 for both hover and active,
+     which is why neither could be seen at a glance (TALLY-10). These are ~0.09,
+     and active is a clear step past hover so the two never read as one state.
+     Contrast against the label text stays above 13:1 in both themes. */
+  --nav-hover:      light-dark(#EFEFF1, #1C1C20);
+  --nav-active:     light-dark(#E4E4E7, #2A2A2F);
+
   --border:         light-dark(#E4E4E7, #27272A);  /* hairlines, dividers, input rest */
   --border-strong:  light-dark(#D4D4D8, #3F3F46);  /* input hover, axis lines */
 

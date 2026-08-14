@@ -66,15 +66,36 @@ export interface DataGridProps<T> {
    */
   onExport?: () => void;
   label: string;
+  /**
+   * The grid's minimum height when it fills, or its exact height when it does not.
+   */
   height?: number | string;
+  /**
+   * Stretch to the bottom of the window (TALLY-7).
+   *
+   * On by default, because the common case is a page's main table and a short
+   * list used to leave half a screen of nothing under it. A page looks the same
+   * whether it holds four rows or four hundred.
+   *
+   * The escape hatch is for a grid embedded in a card beside other content,
+   * where a fixed short height is the point. Nothing passes it today: every
+   * DataGrid in the app is a page main table. The short lists on the client and
+   * person pages are plain markup rather than grids, which is why they are not
+   * affected by this at all.
+   */
+  fill?: boolean;
   density?: "comfortable" | "compact";
 }
+
+/** `PageBody`'s bottom padding (`pb-16`), so filling does not create a scrollbar. */
+const BOTTOM_GAP = 64;
 
 export function DataGrid<T extends object>({
   rows, columns, tableId, loading, empty, totals, totalsSpanAllPages,
   selectable, bulkActions = [], onRowOpen, filters, onExport, label,
-  height = 520, density: densityProp,
+  height = 520, fill = true, density: densityProp,
 }: DataGridProps<T>) {
+  const frameRef = React.useRef<HTMLDivElement>(null);
   const [api, setApi] = React.useState<GridApi | null>(null);
   const [selected, setSelected] = React.useState<T[]>([]);
   const [acting, setActing] = React.useState<BulkAction | null>(null);
@@ -202,20 +223,60 @@ export function DataGrid<T extends object>({
 
   const showEmpty = !loading && rows && rows.length === 0;
 
-  /* A short table should not leave half a screen of empty grid under it, so the
-     frame shrinks to fit when there are few rows and only then starts to scroll. */
-  const fitted = React.useMemo(() => {
-    if (typeof height !== "number" || !rows) return height;
-    const rowH = density === "compact" ? 36 : 44;
-    const groupRows = rows.filter((r) => r._kind === "group").length;
-    const dataRows = rows.length - groupRows;
-    const content = 48 /* action row */ + (density === "compact" ? 32 : 36) /* header */
-      + dataRows * rowH + groupRows * 38 + (totals ? rowH : 0) + 2;
-    return Math.min(height, content);
-  }, [height, rows, density, totals]);
+  /**
+   * How much window is left below the grid's top edge.
+   *
+   * Measured from the frame's position in the **document**, not the viewport, so
+   * scrolling does not change the answer. Measuring `rect.top` alone would grow
+   * the grid as the page scrolls, which grows the page, which scrolls further.
+   *
+   * `BOTTOM_GAP` matches `PageBody`'s bottom padding, so a filled grid reaches
+   * the bottom of the window without pushing a scrollbar into existence.
+   */
+  const [room, setRoom] = React.useState<number | null>(null);
+
+  React.useLayoutEffect(() => {
+    if (!fill) return;
+    const el = frameRef.current;
+    if (!el) return;
+
+    const measure = () => {
+      const documentTop = el.getBoundingClientRect().top + window.scrollY;
+      setRoom(window.innerHeight - documentTop - BOTTOM_GAP);
+    };
+
+    measure();
+    window.addEventListener("resize", measure);
+
+    // Anything above the grid changing size moves it: a filter wrapping to a
+    // second line, KPI cards loading, the sidebar collapsing.
+    const observer = new ResizeObserver(measure);
+    observer.observe(document.body);
+
+    return () => {
+      window.removeEventListener("resize", measure);
+      observer.disconnect();
+    };
+  }, [fill]);
+
+  /**
+   * The height the frame actually takes.
+   *
+   * Filling grids take whatever room is left, never less than `height`, so a
+   * grid pushed down a long page still has a usable size. Non-filling grids
+   * take `height` exactly.
+   */
+  const frameHeight = React.useMemo(() => {
+    if (!fill || typeof height !== "number") return height;
+    return room == null ? height : Math.max(height, Math.round(room));
+  }, [fill, height, room]);
 
   return (
-    <div className={cn(tableFrameClass, "w-full")} style={{ height: showEmpty ? undefined : fitted }}>
+    <div
+      ref={frameRef}
+      className={cn(tableFrameClass, "w-full")}
+      style={{ height: showEmpty ? undefined : frameHeight }}
+    >
       {/* The action row. Always present, always --action-row-h tall. */}
       <div className={actionRowClass} data-layer={layer}>
         <div className={actionRowLayerVariants({ active: layer === "browse" })}>

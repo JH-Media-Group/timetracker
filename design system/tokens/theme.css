@@ -71,6 +71,8 @@
   --color-surface:        var(--surface);
   --color-surface-hover:  var(--surface-hover);
   --color-surface-active: var(--surface-active);
+  --color-nav-hover:      var(--nav-hover);
+  --color-nav-active:     var(--nav-active);
   --color-border:         var(--border);
   --color-border-strong:  var(--border-strong);
   --color-overlay:        var(--overlay);
