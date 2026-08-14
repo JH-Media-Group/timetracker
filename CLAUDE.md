@@ -77,14 +77,20 @@ Work is tracked in Jira project **TALLY** and documented in Confluence space **T
 
 **Last updated:** 2026-08-14. Maintain this section manually.
 
-- Backend and wiring complete. E0 through E13 in docs/BUILD_EPICS.md are ticked. Handed to Jason for testing.
-- **Jason's first testing pass is TALLY-5 with thirteen children.** The two real gaps are TALLY-6 (a manager cannot edit or remove a person) and TALLY-13 (no way to create a retainer); both are missing screens rather than broken ones. TALLY-14 (a Tasks tab on a person, with start and end times) subsumes TALLY-12 and TALLY-16, so build it first. TALLY-11 (readable slugs instead of UUIDs) touches every route, the seam, the schema, a backfill and the importer, so cost it before starting.
-- Not built, each waiting on a credential rather than on a decision about scope: Google SSO, email delivery, receipt and PDF storage, the deployment, and running the Harvest import against real data. docs/PERMISSIONS-AND-CREDENTIALS.md says what does not work until each arrives.
-- Deliberately disabled in the UI rather than faked: the full account export, CSV import, and the integration connect buttons. Per-grid CSV export does work. (The settings page used to undercut this by hardcoding Google Calendar and Slack as "Connected" with a green badge while neither existed. Now every integration reads Not connected, which is true.)
-- Open decisions parked for Jason: final product name ("Tally" is a placeholder), droplet size (4 vCPU/8 GB proposed), whether contractors keep password auth or everyone lands in Workspace, and whether invoice numbering continues Harvest's sequence.
+- Backend and wiring complete. E0 through E13 in [docs/BUILD_EPICS.md](docs/BUILD_EPICS.md) are ticked. **479 tests, 14 data invariants.**
+- **The invoicing epic (TALLY-24) is built.** Recurring schedules can be created and are raised by a daily cron job (`pnpm jobs:recurring`), there is an Uninvoiced screen, retainers can be opened and funded, and the seven-section configuration area at `/invoices/configure` is live. The invoices area now has five tabs.
+- **Two sections are deliberately incomplete, and say so on the screen:** Appearance has its column toggles but no logo or colour (needs object storage, TALLY-21), and Messages stores its templates but nothing sends mail (needs SendGrid, TALLY-19).
+- **Open question for Jason:** the message templates use `[token]` and TALLY-32 specifies `%token%`. Worth settling before the first email goes out.
+- Still not built, each waiting on a credential: Google SSO, email delivery, receipt and PDF storage, the deployment, and running the Harvest import against real data. See [docs/PERMISSIONS-AND-CREDENTIALS.md](docs/PERMISSIONS-AND-CREDENTIALS.md).
+- Deliberately disabled rather than faked: the full account export, CSV import, and the integration connect buttons. Per-grid CSV export does work.
+- Open decisions parked: final product name, droplet size (4 vCPU/8 GB proposed), whether contractors keep password auth, and whether invoice numbering continues Harvest's sequence (the screen supports either).
+- **Two orphaned settings the new structural check found and could not fix:** `projectNotesVisibility` gates a project-notes feature that does not exist, and `budgetAlertPercent` still alerts nobody. Both are recorded rather than hidden; each needs its own ticket.
+
 - **Three adversarial reviews found real defects, and their lesson is the most useful thing in this file:** every one of them was a rule stated in prose at the top of a file and asserted nowhere executable, and the comments had drifted from the code in the flattering direction. The response was to make the rules countable, so **add the check in the same commit as the rule**:
   - `tests/routes.test.ts` every route declares a capability or is exempted with a reason
   - `tests/invoices.test.ts` a preview equals the invoice it produces, stored totals equal the sum of the lines, a retainer balance equals its ledger
   - `tests/env.test.ts` every variable the schema declares is actually read
-  - `pnpm db:invariants` ten invariants checked against the data rather than the code
+  - `tests/settings-consumed.test.ts` every setting is read by something outside the settings plumbing, or exempted with a written reason. **Found two orphans on its first run.**
+  - `tests/jobs.test.ts` every job script has a `pnpm` entry and a cron line in BACKEND_PRD §9.0, because a job nobody scheduled fails silently
+  - `pnpm db:invariants` fourteen invariants checked against the data rather than the code
 - **Verify against a production build, not the dev server.** The strict CSP only applies there, and a hooks-order bug that the dev server tolerated crashed the project page under `next start`.
