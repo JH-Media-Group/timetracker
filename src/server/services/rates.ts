@@ -38,7 +38,13 @@ export async function rateFor(
   kind: "billable" | "cost",
   on?: IsoDate
 ): Promise<number | null> {
-  const day = on ?? new Date().toISOString().slice(0, 10);
+  // `ctx.now()`, not `new Date()`. The context carries an injectable clock for
+  // exactly this: reading the wall clock here makes the rate shown on a person's
+  // page depend on what time the test suite runs, which is the same defect that
+  // made `tests/time.test.ts` pass every morning and fail every afternoon. It
+  // is latent rather than live only because the seeded rates have open-ended
+  // ranges that match any day.
+  const day = on ?? (ctx.now().toISOString().slice(0, 10) as IsoDate);
   const [row] = await ctx.db
     .select({ amountCents: s.userRates.amountCents })
     .from(s.userRates)

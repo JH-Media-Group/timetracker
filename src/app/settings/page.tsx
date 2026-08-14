@@ -615,9 +615,19 @@ function DataSection() {
 
 /* ------------------------------------------------------------ integrations */
 
+/**
+ * None of these are connected, because none of them are built.
+ *
+ * Google Calendar and Slack were hardcoded to "Connected" with a green badge.
+ * The connect buttons are disabled, so the page was half honest: it refused to
+ * let you do anything while showing a green light for two integrations that do
+ * not exist anywhere in the codebase. A disabled button reads as "not yet"; a
+ * green Connected badge reads as "working", and somebody would have gone
+ * looking for the Slack timer.
+ */
 const INTEGRATIONS = [
-  { name: "Google Calendar", state: "Connected", help: "Pull meetings into the calendar view so they can be turned into entries." },
-  { name: "Slack", state: "Connected", help: "Start and stop timers from Slack, and get the Friday reminder there." },
+  { name: "Google Calendar", state: "Not connected", help: "Pull meetings into the calendar view so they can be turned into entries." },
+  { name: "Slack", state: "Not connected", help: "Start and stop timers from Slack, and get the Friday reminder there." },
   { name: "QuickBooks", state: "Not connected", help: "Push invoices and payments so nobody re-keys them." },
   { name: "Asana", state: "Not connected", help: "Track time against tasks without leaving Asana." },
 ];

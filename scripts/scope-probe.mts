@@ -17,6 +17,7 @@ import * as s from "../src/server/db/schema";
 import { newId } from "../src/server/db/ids";
 import { hashPassword } from "../src/server/auth/password";
 import { clearSignInLimits, signIn } from "./lib/dev-signin.mts";
+import { assertLocalTarget } from "./lib/dev-only.mts";
 
 const BASE = process.env.BASE ?? "http://localhost:3200";
 const PASSWORD = "scope-probe-password";
@@ -31,6 +32,9 @@ function check(name: string, ok: boolean, detail = "") {
 
 
 async function main() {
+  // Before the first read, let alone the first write. See dev-only.mts.
+  assertLocalTarget(BASE);
+
   const created: string[] = [];
 
   const [memberProfile] = await db

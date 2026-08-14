@@ -15,14 +15,26 @@ Mark items `[x]` as they land and add the commit SHA. This file is the working s
 
 The build did not follow this plan's ordering. The front end was built first against a mock API, then the backend was built in one pass as the E0 to E13 epics in [BUILD_EPICS.md](BUILD_EPICS.md), and the two were joined at the `src/lib/api.ts` seam. **BUILD_EPICS.md is the accurate record of what exists.** This file is now the forward plan: what is left.
 
-Done, in substance, whatever the numbering here says:
+**An earlier version of this section overclaimed in five places and understated in one, and was caught by an adversarial review against the code rather than against itself.** The list below has been checked endpoint by endpoint. Where something is half-built, it says which half, because "built" covering a read-only endpoint is how TALLY-13 came to be filed as a missing screen when it is a missing endpoint.
 
-- All of Phase 0. Repo, scaffold, tokens, the `DataGrid` wrapper, the local Postgres and Redis stack, migrations, and a deterministic server-side seed.
-- Phase 1 except the Harvest import (waiting on the export) and Google SSO (waiting on OAuth credentials).
-- Phase 2 in full: rates, budgets, project detail, expenses, approvals, and the profitability, team and contractor reports.
-- Phase 3 except the three items that need a credential: PDF storage, email send, and the Stripe pay page. Invoices, recurring invoices, retainers, payments and the invoicing report are built.
+**Built and working**
 
-Not started: Phase 1.5 (offline queue, calendar drag-create, Google Calendar overlay, mobile Track), Phase 4 (bulk actions, import/export, saved reports, audit log UI, Slack, the droplet), and the QuickBooks sync.
+- **Phase 0 except CI.** Repo, scaffold, tokens, the `DataGrid` wrapper, the local Postgres and Redis stack, migrations, and a deterministic server-side seed. Item 0.4 is *not* done: there is no `.github/` directory, so the typecheck, lint, test, palette and em-dash gates run only when somebody runs them by hand.
+- **Phase 1 except three things.** The Harvest import waits on the export, Google SSO waits on OAuth credentials, and item 1.7's SSE stream was never written: reconciliation between tabs is a 30-second poll (`src/components/app/timer.tsx`), so 1.7's "two tabs reconcile within a second" cannot pass as stated.
+- **Phase 2 except alerts.** Rates, budgets, project detail, expenses, approvals, and the profitability, team and invoicing reports. There is no separate contractor report; contractor is a scope inside the Team report.
+- **Phase 3 core.** Invoices end to end, payments, the invoicing report, and the retainer ledger with its draw-at-send.
+
+**Half-built, and the half that is missing**
+
+- **Budget alerts (2.2).** `budgetAlertPercent` is stored, editable and serialized, and read by nothing. No job compares it to spend and no notification exists. The UI offers to alert you and will not. Worse than unbuilt, because it promises.
+- **Retainers (3.7).** The ledger, balance, draw and reversal are built and tested. `/api/v1/retainers` exports `GET` only, so a retainer cannot be created through the API at all. This is TALLY-13, and it is an endpoint, not just a screen.
+- **Recurring invoices (3.6).** Same shape: `GET` only, no create.
+- **Invoice configuration (3.8).** The six settings columns exist in the schema and are served by the settings API. There is no invoicing section in the settings UI; the page has eight sections and none of them is it.
+- **Bulk actions (4.1).** The opposite drift: these were listed as not started and the UI is built and working across seven list pages, with a `bulk_action_runs` table and a `bulk:execute` capability. What is missing is the server-side registry the backend PRD specifies.
+
+**Not started**
+
+Phase 1.5 (offline queue, calendar drag-create, Google Calendar overlay, mobile Track), the rest of Phase 4 (import/export, saved reports, audit log UI, Slack, the droplet), QuickBooks, Stripe, and PDF rendering. Note that PDF *generation* is unbuilt, not merely PDF storage: Playwright is not a dependency. "Print or save as PDF" uses the browser's own dialog.
 
 The seam is still one file. Every service the front end calls goes through `src/lib/api.ts`, and nothing else in the app speaks HTTP.
 

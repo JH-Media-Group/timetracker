@@ -18,6 +18,48 @@ declare global {
   var __tallySql: ReturnType<typeof postgres> | undefined;
 }
 
+/**
+ * Under test, a Date that reaches the driver as a bind parameter is a bug.
+ *
+ * Drizzle's column mappers turn a Date into a string long before it gets here,
+ * so a Date arriving as a parameter means it went in through a raw `sql`
+ * template, where it has no column to be typed by. The driver then tries to
+ * serialise an object as text and throws `ERR_INVALID_ARG_TYPE` at whatever
+ * moment that line happens to run. That bug has been written four times, and
+ * three of the four hid in code that runs rarely: a timer stop, a nightly
+ * purge, an hourly session touch.
+ *
+ * `tests/sql-literals.test.ts` catches this statically, including in code no
+ * test ever executes, which is where two of the four lived. This is the other
+ * half: any query a test actually runs is checked no matter how the value got
+ * into the template, so the two together cover both the unreached and the
+ * unwritten. Neither subsumes the other.
+ *
+ * Test-only because it costs a scan of every parameter list on every query, and
+ * because production has no business discovering this at runtime: by then the
+ * query has already failed.
+ *
+ * Scope, precisely. postgres.js on its own does handle a Date: it infers OID
+ * 1184 and serialises with `toISOString()`. This hook is on the pool drizzle
+ * uses, and everything that reaches it has been through drizzle, where a Date
+ * arrives as an untyped bind parameter with no column to be inferred from and
+ * the driver throws. The migration runner builds its own postgres.js client
+ * (`migrate.ts`) and is untouched by this, which is correct: there a Date is
+ * genuinely fine.
+ */
+function refuseDateParameters(_connection: number, query: string, parameters: unknown[]): void {
+  const index = parameters.findIndex((value) => value instanceof Date);
+  if (index === -1) return;
+
+  throw new TypeError(
+    `A Date reached the driver as bind parameter $${index + 1}. Drizzle maps column ` +
+      "values to strings before they get here, so this came from a raw `sql` template, " +
+      "where the driver has no column type to serialise it against and throws. " +
+      "Use `${value.toISOString()}::timestamptz`.\n\n" +
+      `  ${query.replace(/\s+/g, " ").trim().slice(0, 200)}`
+  );
+}
+
 export const sql =
   globalThis.__tallySql ??
   postgres(connectionString, {
@@ -49,6 +91,7 @@ export const sql =
       },
     },
     onnotice: env.isProduction ? () => {} : undefined,
+    debug: env.isTest ? refuseDateParameters : undefined,
   });
 
 if (!env.isProduction) globalThis.__tallySql = sql;

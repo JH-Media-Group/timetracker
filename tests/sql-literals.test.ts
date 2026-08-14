@@ -1,112 +1,306 @@
 /**
- * No Date goes into a raw `sql` template.
+ * No Date reaches a raw `sql` template.
  *
- * This is the fourth time the same bug has been written. A JS `Date`
- * interpolated into drizzle's `sql` tag reaches the postgres driver as an
- * object it cannot serialise, and the query throws `ERR_INVALID_ARG_TYPE: the
- * "string" argument must be of type string`. It is not a type error, so
- * TypeScript is happy; it is not a syntax error, so the build is happy; and it
- * only fires when that particular line runs.
+ * A JS `Date` interpolated into drizzle's `sql` tag arrives at the postgres
+ * driver as an object it cannot serialise, and the query throws
+ * `ERR_INVALID_ARG_TYPE` at runtime. It is not a type error, so TypeScript is
+ * happy; it is not a syntax error, so the build is happy; and it only fires
+ * when that particular line runs. `${value.toISOString()}::timestamptz` is the
+ * correct form: text, with an explicit cast so Postgres knows what it received.
  *
- * Where it has bitten so far:
+ * The bug has been written four times:
  *
- *   - `stopTimer`, found in development because stopping a timer is something
- *     you do constantly.
+ *   - `stopTimer`, found immediately, because stopping a timer is constant.
  *   - `purgeDeadSessions`, which nothing called, so nothing found it until the
- *     nightly sweep got a caller.
- *   - the rolling session touch, which runs at most once an hour per session.
- *     Every session in every test and every sweep was too fresh to reach it, so
- *     it survived three adversarial reviews and a production build, and then
- *     500ed every authenticated request the first time somebody stayed signed
- *     in for an hour.
+ *     nightly sweep gave it a caller.
+ *   - the rolling session touch, which runs at most once an hour per session,
+ *     so every session in every test was too fresh to reach it. It survived
+ *     three adversarial reviews and a production build, then 500ed every
+ *     authenticated request the first time somebody stayed signed in for an
+ *     hour.
  *
- * The pattern is that the guard has to be structural, because the bug hides in
- * the code paths that run least often. `${value.toISOString()}::timestamptz` is
- * the only correct form: text, with an explicit cast so Postgres knows what it
- * received.
+ * WHY THIS IS A COMPILER PASS AND NOT A REGEX
+ *
+ * The first version of this guard matched `new Date(` against source text to
+ * guess which locals held a Date. A review took it apart: it constructed
+ * fourteen evasions and verified thirteen, including a verbatim reintroduction
+ * of the `purgeDeadSessions` bug into this very codebase. Function parameters,
+ * object properties, destructured bindings, imported constants, `var`, values
+ * from date-fns helpers, and anything inside a nested `sql` fragment all walked
+ * straight past it. Worse, it deleted a name from its watch list if *any* line
+ * in the file assigned that name from `.toISOString()`, so each correct fix
+ * widened the hole, and its canary could not tell that the detector had died:
+ * breaking both patterns deliberately still produced a green run.
+ *
+ * A guard that reports success while missing the cases the bug actually favours
+ * is worse than no guard, because it converts "nobody has checked" into
+ * "something checks this". Text matching cannot decide which values are Dates.
+ * The compiler can, so ask it.
+ *
+ * TWO HALVES, DELIBERATELY
+ *
+ *   1. This file: a real TypeScript program over `src/` and `scripts/`, finding
+ *      every `sql` tagged template and asking the type checker what each
+ *      interpolated expression actually is. There is no pattern to evade. It
+ *      covers code no test ever executes, which is where two of the four
+ *      instances lived.
+ *
+ *   2. `src/server/db/client.ts`: under test the driver itself refuses a `Date`
+ *      bind parameter, so any code path a test touches fails loudly regardless
+ *      of how the value got there. Static analysis proves things about code
+ *      that never runs; the runtime assertion proves things about code that
+ *      does. Neither subsumes the other.
+ *
+ * WHAT THIS STILL DOES NOT CATCH, STATED PLAINLY
+ *
+ * A value typed `any` or `unknown`, or a generic parameter the checker cannot
+ * narrow, is invisible here: the compiler does not know it is a Date either.
+ * That is a real hole and it is not closable by this approach, so it is written
+ * down rather than implied away. It is the specific reason half 2 exists: the
+ * runtime guard does not care what the type system thought.
+ *
+ * The residue after both halves is code that is untyped *and* never executed by
+ * any test. That is a much smaller target than the original bug had, and the
+ * honest way to shrink it further is a test that executes the path, not a
+ * cleverer regex.
  */
 
-import { readFileSync } from "node:fs";
-import { join, relative } from "node:path";
 import { readdirSync, statSync } from "node:fs";
+import { join, relative } from "node:path";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
-const ROOT = join(process.cwd(), "src");
+const ROOT = process.cwd().replace(/\\/g, "/");
+
+/**
+ * Everywhere a query can be written.
+ *
+ * `scripts/` matters as much as `src/`: `purgeDeadSessions` hid because the only
+ * path to it was a maintenance script, and the scripts are still where the
+ * rarely-run queries live. `.mts` counts, which the previous version's
+ * `endsWith(".ts")` quietly did not.
+ */
+const SOURCE_DIRS = ["src", "scripts"];
 
 function sourceFiles(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
     const full = join(dir, name);
     if (statSync(full).isDirectory()) sourceFiles(full, out);
-    else if (name.endsWith(".ts") && !name.endsWith(".d.ts")) out.push(full);
+    else if (/\.(ts|tsx|mts)$/.test(name) && !name.endsWith(".d.ts")) {
+      out.push(full.replace(/\\/g, "/"));
+    }
   }
   return out;
 }
 
-/** Locals that hold a Date, by how they were declared in the same file. */
-function dateLocals(source: string): Set<string> {
-  const names = new Set<string>();
-  // `const x = new Date(...)`, `const x = ctx.now()`, `let x: Date | null`
-  for (const m of source.matchAll(/\b(?:const|let)\s+(\w+)\s*(?::\s*Date[^=]*)?=\s*new Date\(/g)) {
-    names.add(m[1]!);
-  }
-  for (const m of source.matchAll(/\b(?:const|let)\s+(\w+)\s*=\s*\w*\.?now\(\)/g)) {
-    names.add(m[1]!);
-  }
-  // A local reassigned from `.toISOString()` is a string, whatever it is called.
-  for (const m of source.matchAll(/\b(?:const|let)\s+(\w+)\s*=\s*[^;]*\.toISOString\(\)/g)) {
-    names.delete(m[1]!);
-  }
-  return names;
-}
+const roots = SOURCE_DIRS.flatMap((dir) => sourceFiles(join(ROOT, dir)));
+
+/**
+ * Built from an explicit file list rather than from tsconfig.json.
+ *
+ * The repository tsconfig pulls in `.next/types`, which only exists after a
+ * build, so a test reading it would pass or fail depending on whether somebody
+ * had run `next build` first.
+ */
+const COMPILER_OPTIONS: ts.CompilerOptions = {
+  target: ts.ScriptTarget.ES2022,
+  module: ts.ModuleKind.ESNext,
+  moduleResolution: ts.ModuleResolutionKind.Bundler,
+  strict: true,
+  noEmit: true,
+  skipLibCheck: true,
+  esModuleInterop: true,
+  resolveJsonModule: true,
+  allowImportingTsExtensions: true,
+  jsx: ts.JsxEmit.Preserve,
+  baseUrl: ROOT,
+  paths: { "@/*": ["./src/*"] },
+};
 
 interface Offence {
   file: string;
   line: number;
-  variable: string;
-  fragment: string;
+  expression: string;
 }
 
-const offences: Offence[] = [];
+interface Scan {
+  offences: Offence[];
+  templates: number;
+  interpolations: number;
+}
 
-for (const file of sourceFiles(ROOT)) {
-  const source = readFileSync(file, "utf8");
-  if (!source.includes("sql`")) continue;
+/** `Date`, or any union containing one. `Date | null` is just as fatal. */
+function mentionsDate(checker: ts.TypeChecker, type: ts.Type): boolean {
+  const parts = type.isUnion() ? type.types : [type];
+  return parts.some((part) => {
+    const symbol = part.getSymbol() ?? part.aliasSymbol;
+    if (symbol?.getName() === "Date") return true;
+    // A Date behind a type alias or a generic still prints as Date.
+    return checker.typeToString(part) === "Date";
+  });
+}
 
-  const dates = dateLocals(source);
-  if (dates.size === 0) continue;
+/**
+ * Every interpolation into a `sql` template, with the checker's verdict on it.
+ *
+ * Walking the AST rather than the text is what closes the nested-fragment hole:
+ * `sql`${sql`1 = 1`} AND x > ${cutoff}`` is two template nodes to the parser and
+ * was a truncated regex match to the previous version, which never saw the
+ * second interpolation at all.
+ */
+function scan(program: ts.Program, include: (fileName: string) => boolean): Scan {
+  const checker = program.getTypeChecker();
+  const offences: Offence[] = [];
+  let templates = 0;
+  let interpolations = 0;
 
-  for (const template of source.matchAll(/sql`(?:[^`\\]|\\.)*`/gs)) {
-    for (const interpolation of template[0].matchAll(/\$\{([^}]+)\}/g)) {
-      const expression = interpolation[1]!.trim();
-      // Anything that ends in a call is producing its own value; only a bare
-      // identifier can be the Date itself.
-      if (!/^\w+$/.test(expression)) continue;
-      if (!dates.has(expression)) continue;
+  for (const file of program.getSourceFiles()) {
+    if (file.isDeclarationFile || !include(file.fileName)) continue;
 
-      offences.push({
-        file: relative(process.cwd(), file).replace(/\\/g, "/"),
-        line: source.slice(0, template.index! + interpolation.index!).split("\n").length,
-        variable: expression,
-        fragment: template[0].replace(/\s+/g, " ").slice(0, 90),
-      });
-    }
+    const visit = (node: ts.Node): void => {
+      if (ts.isTaggedTemplateExpression(node)) {
+        /**
+         * Every tagged template, without looking at the tag.
+         *
+         * An earlier version matched the tag text against `sql` and `sql.*`,
+         * which a reviewer evaded with `const q = sql; q\`...\`` and with a
+         * re-export under another name. Resolving the tag properly through the
+         * checker is possible but fiddly, and it turns out to be unnecessary:
+         * this codebase contains exactly three tag names across 191 tagged
+         * templates, and all three are database tags. `sql` is drizzle's, `tx`
+         * is postgres.js's inside the migration runner, and `raw` is the
+         * destructured `sql.raw` in the seed. There is no styled-components, no
+         * graphql tag, nothing that legitimately takes a Date.
+         *
+         * So the question "is this the sql tag" is dropped entirely. A Date in
+         * any tagged template here is wrong, and a tag that does not exist
+         * cannot be aliased into.
+         */
+        templates++;
+        if (ts.isTemplateExpression(node.template)) {
+          for (const span of node.template.templateSpans) {
+            interpolations++;
+            if (mentionsDate(checker, checker.getTypeAtLocation(span.expression))) {
+              offences.push({
+                file: relative(ROOT, file.fileName).replace(/\\/g, "/"),
+                line: file.getLineAndCharacterOfPosition(span.expression.getStart(file)).line + 1,
+                expression: span.expression.getText(file),
+              });
+            }
+          }
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+
+    visit(file);
   }
+
+  return { offences, templates, interpolations };
 }
+
+const program = ts.createProgram(roots, COMPILER_OPTIONS);
+const result = scan(program, (fileName) => roots.includes(fileName));
 
 describe("raw sql templates", () => {
-  it("has templates to check", () => {
-    // A regex that silently matches nothing would pass this file forever.
-    const withTemplates = sourceFiles(ROOT).filter((f) => readFileSync(f, "utf8").includes("sql`"));
-    expect(withTemplates.length).toBeGreaterThan(3);
+  /**
+   * The positive control.
+   *
+   * The previous guard's canary only counted files containing the substring
+   * "sql`", which stays true forever whether or not the detector works: a
+   * reviewer broke both of its patterns deliberately and the suite stayed
+   * green. So this runs the real pipeline over a known-bad fixture and insists
+   * it catches it. If this passes and the file below is empty, the emptiness
+   * means something.
+   *
+   * The fixture deliberately uses the shapes that evaded the regex, so this
+   * also documents what the guard is now expected to cover.
+   */
+  it("catches the shapes it claims to, on a known-bad fixture", () => {
+    const fixture = `
+      declare const sql: (s: TemplateStringsArray, ...v: unknown[]) => unknown;
+      declare const column: unknown;
+      interface Range { from: Date }
+      export function byParameter(cutoff: Date) { return sql\`\${column} < \${cutoff}\`; }
+      export function byProperty(range: Range) { return sql\`\${column} < \${range.from}\`; }
+      export function byDestructuring({ from }: Range) { return sql\`\${column} < \${from}\`; }
+      export function byVar() { var d = new Date(); return sql\`\${column} < \${d}\`; }
+      export function byNesting(d: Date) { return sql\`\${sql\`1 = 1\`} AND \${column} < \${d}\`; }
+      export function byMaybe(d: Date | null) { return sql\`\${column} < \${d}\`; }
+      export function byAlias(d: Date) { const q = sql; return q\`\${column} < \${d}\`; }
+      export function correct(d: Date) { return sql\`\${column} < \${d.toISOString()}::timestamptz\`; }
+      export function alsoCorrect() { const ms = Date.now(); return sql\`\${column} < \${ms}\`; }
+    `;
+
+    const name = `${ROOT}/__sql_guard_fixture__.ts`;
+    const host = ts.createCompilerHost(COMPILER_OPTIONS);
+    const original = host.getSourceFile.bind(host);
+    host.getSourceFile = (fileName, languageVersion, onError, shouldCreate) =>
+      fileName === name
+        ? ts.createSourceFile(fileName, fixture, languageVersion, true)
+        : original(fileName, languageVersion, onError, shouldCreate);
+    host.fileExists = (fileName) => fileName === name || ts.sys.fileExists(fileName);
+    host.readFile = (fileName) => (fileName === name ? fixture : ts.sys.readFile(fileName));
+
+    const fixtureProgram = ts.createProgram([name], COMPILER_OPTIONS, host);
+    const caught = scan(fixtureProgram, (fileName) => fileName === name);
+    const lines = caught.offences.map((o) => o.expression).sort();
+
+    // Seven bad shapes, and neither of the two correct ones.
+    expect(lines, "the detector has stopped detecting; every other assertion here is now vacuous").toEqual([
+      "cutoff",
+      "d",
+      "d",
+      "d",
+      "d",
+      "from",
+      "range.from",
+    ]);
+  });
+
+  /**
+   * The checker has to have resolved real types.
+   *
+   * If module resolution fails, every expression comes back as `any`, nothing
+   * is a Date, and the file below passes while checking nothing. The fixture
+   * above uses local declarations and would still pass in that state, so this
+   * asserts against the real program.
+   */
+  it("resolved real types across the real program", () => {
+    expect(roots.length, "no source files found").toBeGreaterThan(50);
+    expect(result.templates, "no sql templates found, so the tag match is broken").toBeGreaterThan(50);
+    expect(
+      result.interpolations,
+      "sql templates but no interpolations, so the span walk is broken"
+    ).toBeGreaterThan(50);
+
+    const checker = program.getTypeChecker();
+    const session = program.getSourceFile(`${ROOT}/src/server/auth/session.ts`);
+    expect(session, "expected session.ts in the program").toBeDefined();
+
+    let sawATypedDate = false;
+    const visit = (node: ts.Node): void => {
+      if (ts.isNewExpression(node) && node.expression.getText(session!) === "Date") {
+        if (mentionsDate(checker, checker.getTypeAtLocation(node))) sawATypedDate = true;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(session!);
+
+    expect(
+      sawATypedDate,
+      "the checker could not type `new Date()` as Date, so module resolution failed " +
+        "and every Date in this codebase is currently invisible to this test"
+    ).toBe(true);
   });
 
   it("never interpolates a Date", () => {
-    const report = offences
-      .map((o) => `  ${o.file}:${o.line}  \${${o.variable}}  in  ${o.fragment}`)
+    const report = result.offences
+      .map((o) => `  ${o.file}:${o.line}  \${${o.expression}}`)
       .join("\n");
 
     expect(
-      offences,
+      result.offences,
       "a Date in a raw sql template reaches the driver as an object it cannot " +
         "serialise, and the query throws at runtime. Use " +
         "`${value.toISOString()}::timestamptz`:\n" +

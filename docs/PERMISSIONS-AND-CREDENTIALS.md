@@ -1,5 +1,16 @@
 # What Tally needs from you
 
+> **Do not paste a real key into this file.** It is committed, so a key written
+> here is in git history for good, and it is inside the Confluence sync globs, so
+> the next doc sync publishes it to a page every licensed user of the Atlassian
+> site can read, and into that page's version history, where deleting the line
+> here afterwards will not reach it.
+>
+> Real values go in `.env.local`, which is gitignored. This file describes the
+> shape of each one and says where to get it. `tests/repo-hygiene.test.ts` scans
+> every tracked file for credential shapes and fails the suite if one lands, so
+> this is a rule with something behind it rather than a request.
+
 Everything on this list was skipped during the build because it needs a
 credential, an account, or a decision that is not mine to make. Nothing here
 blocks running the app locally: `pnpm db:setup && pnpm dev -p 3200` works today

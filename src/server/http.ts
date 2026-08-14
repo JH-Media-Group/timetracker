@@ -264,22 +264,44 @@ function publicCtx(req: NextRequest, requestId: string): Ctx {
 }
 
 /**
- * The client address.
+ * The client address, or null when there is nothing honest to report.
  *
  * `X-Forwarded-For` is only believed when the deployment says it is behind a
  * proxy that sets it. Trusting it unconditionally lets any caller pick their
  * own address and walk straight through a per-IP rate limit, and puts a value
  * of their choosing into `sessions.ip` and the audit log.
+ *
+ * **Read the last hop, not the first.** The header is a trail, and a proxy
+ * appends to it: Caddy's `reverse_proxy` and nginx's `$proxy_add_x_forwarded_for`
+ * both leave whatever arrived in place and add the address they actually saw on
+ * the end. So a request carrying `X-Forwarded-For: 10.0.0.1` reaches us as
+ * `10.0.0.1, <the real address>`, and the first element is the one the caller
+ * chose. Taking it would hand an attacker a fresh rate-limit bucket per request
+ * and let them write any address they like into the audit log, which is worse
+ * than no address at all: a gap in the record reads as a gap, an invented
+ * address reads as evidence.
+ *
+ * Trusting the last hop assumes exactly one proxy in front. That is what we
+ * deploy, and if a second one is ever added this function has to count from the
+ * right rather than take the end.
  */
 export function clientIp(req: NextRequest): string | null {
-  if (env.TRUST_PROXY) {
-    const forwarded = req.headers.get("x-forwarded-for");
-    if (forwarded) return forwarded.split(",")[0]!.trim() || null;
-    const real = req.headers.get("x-real-ip");
-    if (real) return real.trim() || null;
+  if (!env.TRUST_PROXY) return null;
+
+  const forwarded = req.headers.get("x-forwarded-for");
+  if (forwarded) {
+    const hops = forwarded
+      .split(",")
+      .map((hop) => hop.trim())
+      .filter(Boolean);
+    const nearest = hops.at(-1);
+    if (nearest) return nearest;
   }
-  // Next does not expose the socket address in the edge runtime, so without a
-  // trusted proxy header there is nothing honest to report.
+
+  // Single-valued and set by the proxy itself, so there is no trail to walk.
+  const real = req.headers.get("x-real-ip");
+  if (real) return real.trim() || null;
+
   return null;
 }
 

@@ -163,7 +163,17 @@ export async function actorForToken(token: string): Promise<Actor | null> {
       .where(eq(s.sessions.id, row.sessionId))
       .returning({ expiresAt: s.sessions.expiresAt });
     await db.update(s.users).set({ lastSeenAt: now }).where(eq(s.users.id, row.userId));
-    renewedUntil = updated?.expiresAt ?? extended;
+
+    // Only what the database actually wrote.
+    //
+    // This used to fall back to `extended` when `returning()` came back empty,
+    // which happens when the row was revoked or swept between the select and
+    // the update. That value has not been through `LEAST`, so the fallback set
+    // a cookie thirty days out on a session whose absolute cap might have been
+    // two days away: the one path in this function that did not respect the
+    // ninety-day ceiling was the path taken when the session had just been
+    // taken away. No row means no renewal, which is also the honest answer.
+    renewedUntil = updated?.expiresAt ?? null;
   }
 
   return {

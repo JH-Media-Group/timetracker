@@ -28,6 +28,7 @@ import { newId } from "../src/server/db/ids";
 import { hashPassword } from "../src/server/auth/password";
 import { BASE_PROFILES, type BaseProfileKey } from "../src/server/auth/capabilities";
 import { clearSignInLimits, signIn } from "./lib/dev-signin.mts";
+import { assertLocalTarget } from "./lib/dev-only.mts";
 
 const BASE = process.env.BASE ?? "http://localhost:3200";
 const PASSWORD = "authz-sweep-password";
@@ -68,6 +69,11 @@ const ENDPOINTS: string[] = [
 
 
 async function main() {
+  // Before the first read, let alone the first write. Everything below this
+  // line inserts users, one of them an administrator whose password is a
+  // literal in this file.
+  assertLocalTarget(BASE);
+
   const created: string[] = [];
   const cookies = new Map<BaseProfileKey, string>();
 

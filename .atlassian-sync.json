@@ -20,9 +20,9 @@
     "rootPageId": "2969468929",
     "$rootPageId_note": "Set during init to the 'Product requirements' page: the parent of the mirrored docs tree.",
     "docGlobs": [
-      "docs/**/*.md",
-      "CLAUDE.md"
+      "docs/**/*.md"
     ],
+    "$docGlobs_note": "CLAUDE.md was listed here and never published, which left the manifest and the config disagreeing. It is onboarding for agents working in this repo rather than knowledge for Confluence readers, it changes on almost every commit, and Git is where it belongs. Dropped rather than published.",
     "excludeGlobs": [
       "node_modules/**",
       "**/CHANGELOG.md",

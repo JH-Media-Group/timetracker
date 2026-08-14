@@ -179,9 +179,11 @@ describe("sessions", () => {
     const userId = await makeUser({ profileId: profiles.member! });
     const { token, expiresAt } = await createSession(userId);
 
-    // Old enough to cross the touch interval.
+    // Old enough to cross the touch interval. Scoped by user: an unscoped
+    // update is correct only while the fixture happens to leave one session
+    // behind, and stops testing what it says the moment that changes.
     const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
-    await db.update(s.sessions).set({ lastSeenAt: twoHoursAgo });
+    await db.update(s.sessions).set({ lastSeenAt: twoHoursAgo }).where(eq(s.sessions.userId, userId));
 
     const actor = await actorForToken(token);
     expect(actor, "an hour-old session must still resolve").not.toBeNull();
@@ -191,9 +193,19 @@ describe("sessions", () => {
     expect(row!.expiresAt.getTime()).toBeGreaterThan(expiresAt.getTime());
     expect(row!.lastSeenAt.getTime()).toBeGreaterThan(twoHoursAgo.getTime());
 
-    // And the response has to be able to send the browser the new expiry, or
-    // the cookie still dies thirty days after sign-in whatever the row says.
-    expect(actor!.renewedUntil).toBeInstanceOf(Date);
+    // The cookie has to carry exactly what the row says, not merely some Date.
+    //
+    // `toBeInstanceOf(Date)` was here first and proved nothing: both branches of
+    // the old `updated?.expiresAt ?? extended` produced a Date, so the assertion
+    // could only fail if the touch had not run at all, which the comparison
+    // above already establishes. A reviewer replaced the capped value with the
+    // uncapped one and the whole suite stayed green, which is a mutant that sets
+    // a cookie outliving the absolute ceiling.
+    expect(
+      actor!.renewedUntil!.getTime(),
+      "the cookie expiry must be the value the database wrote, or the browser and " +
+        "the row disagree about when this session ends"
+    ).toBe(row!.expiresAt.getTime());
   });
 
   it("never lets the rolling extension outrun the absolute cap", async () => {
@@ -202,16 +214,45 @@ describe("sessions", () => {
 
     // A session near the end of its ninety days, and stale enough to be touched.
     const capAt = new Date(Date.now() + 2 * 86_400_000);
-    await db.update(s.sessions).set({
-      lastSeenAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
-      expiresAt: capAt,
-      absoluteExpiresAt: capAt,
-    });
+    await db
+      .update(s.sessions)
+      .set({
+        lastSeenAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
+        expiresAt: capAt,
+        absoluteExpiresAt: capAt,
+      })
+      .where(eq(s.sessions.userId, userId));
 
-    await expect(actorForToken(token)).resolves.not.toBeNull();
+    const actor = await actorForToken(token);
+    expect(actor).not.toBeNull();
 
     const [row] = await db.select().from(s.sessions).where(eq(s.sessions.userId, userId));
     expect(row!.expiresAt.getTime()).toBeLessThanOrEqual(row!.absoluteExpiresAt.getTime());
+
+    // The cap has to reach the cookie too. Capping only the row leaves the
+    // browser holding a session that the server will refuse, which reads to the
+    // user as being signed out at random.
+    expect(actor!.renewedUntil!.getTime()).toBeLessThanOrEqual(row!.absoluteExpiresAt.getTime());
+  });
+
+  /**
+   * The revoked-row path.
+   *
+   * When the row is deleted between the select and the update, `returning()`
+   * comes back empty. That used to fall through to the uncapped local value and
+   * hand the browser a thirty-day cookie for a session that no longer exists.
+   */
+  it("renews nothing when the session was revoked mid-request", async () => {
+    const userId = await makeUser({ profileId: profiles.member! });
+    const { token } = await createSession(userId);
+
+    await db
+      .update(s.sessions)
+      .set({ lastSeenAt: new Date(Date.now() - 2 * 60 * 60 * 1000) })
+      .where(eq(s.sessions.userId, userId));
+    await db.delete(s.sessions).where(eq(s.sessions.userId, userId));
+
+    expect(await actorForToken(token), "a deleted session must not resolve").toBeNull();
   });
 
   it("refuses a session past its absolute cap", async () => {

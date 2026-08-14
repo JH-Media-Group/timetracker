@@ -101,8 +101,18 @@ const schema = z.object({
    * Set only when the app genuinely sits behind a reverse proxy that rewrites
    * X-Forwarded-For. Believing that header without a proxy in front lets any
    * caller choose their own address and step around a per-IP rate limit.
+   *
+   * A closed set rather than a string, because the reader is `v === "1" || v ===
+   * "true"` and everything else quietly means false. `TRUST_PROXY=yes` looked
+   * like it had been configured, satisfied a check that only asked whether the
+   * variable was present, and disabled the per-address limiter anyway. A typo
+   * now fails at boot in every environment instead of being interpreted.
    */
-  TRUST_PROXY: z.string().optional(),
+  TRUST_PROXY: z
+    .enum(["0", "1", "false", "true"], {
+      message: 'TRUST_PROXY must be exactly "1", "0", "true" or "false".',
+    })
+    .optional(),
 });
 
 const blank = (v: string | undefined) => (v == null || v.trim() === "" ? undefined : v);
@@ -149,6 +159,19 @@ if (parsed.NODE_ENV === "production") {
     );
   }
 }
+
+/**
+ * Whether the deployment sits behind a proxy is asserted in
+ * `src/instrumentation.ts`, which runs when the server starts and not during
+ * `next build`. It is not asserted here, because module load happens during the
+ * build too, and requiring a deployment fact to compile an artifact is how the
+ * first version of that check broke `next build` outright.
+ *
+ * The schema above does the other half: `TRUST_PROXY=yes` is refused everywhere
+ * rather than silently meaning "no".
+ */
+
+const parsed_isProduction = parsed.NODE_ENV === "production";
 
 export const env = {
   ...parsed,

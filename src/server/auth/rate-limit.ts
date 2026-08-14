@@ -128,14 +128,29 @@ async function getRedis(): Promise<RedisLike | null> {
 }
 
 /**
+ * The stored key for a bucket.
+ *
+ * Exported because the security scripts clear the buckets they are about to
+ * fill, and they need the same string this builds. Two places composing the
+ * same key by hand is two places to get it wrong: rename the prefix here and a
+ * hand-built copy elsewhere silently stops matching, leaving a tool that
+ * quietly clears nothing and a 429 whose message blames the wrong thing.
+ */
+export const bucketKey = (routeClass: RouteClass, key: string) => `rl:${routeClass}:${key}`;
+
+/** The two dimensions sign-in is limited on. Same reason: one definition. */
+export const signInIpKey = (ip: string) => `signin:ip:${ip}`;
+export const signInEmailKey = (email: string) => `signin:email:${email}`;
+
+/**
  * Consumes one point.
  *
  * `key` should identify the actor and the thing being limited, for example
- * `auth:signin:ip:203.0.113.5` or `write:user:<id>`.
+ * `signin:ip:203.0.113.5` or `user:<id>`.
  */
 export async function consume(routeClass: RouteClass, key: string): Promise<RateResult> {
   const limit = LIMITS[routeClass];
-  const full = `rl:${routeClass}:${key}`;
+  const full = bucketKey(routeClass, key);
 
   const client = await getRedis();
   if (!client) return consumeLocal(full, limit);

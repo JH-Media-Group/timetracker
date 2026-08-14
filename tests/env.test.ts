@@ -20,6 +20,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { proxyConfigurationError } from "../src/server/proxy-check";
 
 const source = readFileSync(resolve(process.cwd(), "src/server/env.ts"), "utf8");
 
@@ -74,5 +75,62 @@ describe("the environment schema", () => {
   it("refuses the example session secret", () => {
     expect(source).toContain("PLACEHOLDER_SECRETS");
     expect(source).toContain("randomBytes(32)");
+  });
+});
+
+/**
+ * The proxy configuration rule.
+ *
+ * Two bugs live here, and both were shipped before being caught.
+ *
+ * The first: `TRUST_PROXY` unset in production means `clientIp()` returns null
+ * for every request, so sign-in gets no per-address limit and `sessions.ip`
+ * records nothing. Neither symptom announces itself.
+ *
+ * The second was the fix for the first. Asserting it at module load also
+ * asserted it during `next build`, which runs with `NODE_ENV=production` and
+ * imports every route module: the build failed with "Failed to collect page
+ * data for /api/v1/auth/providers". A build is not a deployment. The check now
+ * lives in `src/instrumentation.ts`, which Next runs on server start and not
+ * during the build, and the rule itself lives in a module with no imports so
+ * that file can be bundled for the edge runtime.
+ */
+describe("proxy configuration", () => {
+  it("is satisfied outside production, whatever the value", () => {
+    expect(proxyConfigurationError("development", undefined)).toBeNull();
+    expect(proxyConfigurationError("test", undefined)).toBeNull();
+  });
+
+  it("is satisfied in production when the answer is given either way", () => {
+    expect(proxyConfigurationError("production", "1")).toBeNull();
+    expect(proxyConfigurationError("production", "0")).toBeNull();
+  });
+
+  it("refuses production with no answer", () => {
+    expect(proxyConfigurationError("production", undefined)).toMatch(/TRUST_PROXY must be set/);
+    expect(proxyConfigurationError("production", "")).toMatch(/TRUST_PROXY must be set/);
+  });
+
+  /**
+   * The instrumentation hook is what runs it, and it must not reach anything
+   * that cannot be bundled for the edge runtime. Importing `env.ts` there pulls
+   * in dotenv, which needs node's `crypto`, and the build fails outright.
+   */
+  it("is checked from instrumentation, which imports nothing heavy", () => {
+    const hook = readFileSync(`${process.cwd()}/src/instrumentation.ts`, "utf8");
+    expect(hook, "the startup check has to actually call the rule").toContain("proxyConfigurationError");
+    expect(hook, "importing env.ts here breaks the edge bundle").not.toMatch(/from ["']@\/server\/env["']/);
+
+    const rule = readFileSync(`${process.cwd()}/src/server/proxy-check.ts`, "utf8");
+    expect(rule, "the rule module must stay import-free so it bundles for edge").not.toMatch(/^\s*import\s/m);
+  });
+
+  /** And the value has to be one the reader understands. */
+  it("declares TRUST_PROXY as a closed set, not a free string", () => {
+    expect(
+      source,
+      'TRUST_PROXY is read as `v === "1" || v === "true"`, so a free string lets ' +
+        "TRUST_PROXY=yes look configured while meaning false"
+    ).toMatch(/TRUST_PROXY:\s*z[\s\S]{0,120}?\.enum\(/);
   });
 });
