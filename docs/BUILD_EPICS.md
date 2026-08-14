@@ -138,6 +138,33 @@ The working checklist for the backend build and the frontend wiring. Tick items 
 
 ---
 
+## Known limits, written down rather than discovered
+
+Deliberate, measured, and left as they are because the fix is available when the
+number moves rather than because nobody noticed.
+
+- **The four report pages compute their figures in the browser from the raw
+  entries for the period.** The server has correct grouped endpoints for all
+  four (`/api/v1/reports/*`), and the client's arithmetic was changed to match
+  the server's exactly (aggregate the products, divide once), so the two agree
+  to the cent. What the client version costs is bandwidth: measured on the
+  seeded data, one month is 176 entries and 105 KB, a full year is 2,057 entries
+  and 1.2 MB. That is fine for eleven people over broadband and it is not fine
+  in 2031. Switching `TimeReport`, `ProfitabilityReport`, `TeamReport` and
+  `InvoicingReport` to the endpoints that already exist is the fix, and it is a
+  contained one because the row shapes were designed to match.
+
+- **Collections are capped rather than paginated.** Invoices at 1,000, expenses
+  at 5,000, approvals at 500. Each route fetches one row past its cap and
+  reports `meta.hasMore`, and the client surfaces that, so a truncated list can
+  never read as a complete one. Real pagination waits until a list actually
+  reaches its cap.
+
+- **The endpoints in BACKEND_PRD section 6.2 that are not built** are the ones
+  that need a credential (receipt upload, PDF, email sends) plus saved reports,
+  custom reports, and the export queue. Nothing that is built is missing a
+  route; nothing has a route that is a stub.
+
 ## Permissions and credentials needed
 
 Collected as they come up; nothing here blocked the build. The full version,
