@@ -133,7 +133,13 @@ pnpm authz:sweep     # the profile-by-endpoint permission matrix
 pnpm authz:scope     # proves a Member gets only their own rows and no money
 pnpm db:invariants   # ten invariants checked against the data itself
 pnpm sweep           # the nightly housekeeping, safe to run any time
+pnpm jobs:recurring  # raises the recurring invoices due today
 ```
+
+`jobs:recurring` takes `--dry` to list what is due without issuing anything, and
+`--on 2026-09-01` to bill as if it were that date, which is how you check next
+month's run before it happens. Both are safe to repeat: the run rechecks the due
+date under a row lock, so a second run raises nothing.
 
 `authz:sweep` and `authz:scope` create their own accounts and delete them
 afterwards. `db:invariants` is read-only and is the one to run after the Harvest

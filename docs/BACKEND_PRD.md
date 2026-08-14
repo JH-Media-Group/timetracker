@@ -1264,6 +1264,45 @@ This is why an event can never describe a change that did not commit.
 
 ## 9. Background jobs
 
+### 9.0 What is built, and why it is not BullMQ yet
+
+**Amended 2026-08-14 (TALLY-26).** The table below is the target once jobs exist that
+need real retry semantics. It is not what runs today, and the difference is deliberate.
+
+Two jobs are built, and both run from cron rather than a queue:
+
+| Script | `pnpm` | Cron | Does |
+|---|---|---|---|
+| `scripts/sweep.mts` | `pnpm sweep` | `0 3 * * *` | Purges dead sessions and expired idempotency claims |
+| `scripts/recurring.mts` | `pnpm jobs:recurring` | `0 6 * * *` | Raises the recurring invoices due today |
+
+The reasoning, so this is a decision and not a shortcut:
+
+- **Neither job talks to anything that can fail transiently.** They talk to Postgres, in a
+  transaction. Retry with backoff, the thing a queue is actually for, has nothing to retry.
+- **Idempotency lives in the data, which is the stronger place for it.** `issueIfDue` takes a
+  row lock and rechecks the due date under it, so a second run raises nothing, two overlapping
+  runs cannot both bill a schedule, and a person pressing Issue now mid-run is serialised
+  against the job. A queue's exactly-once guarantee would sit above the database and be weaker
+  than the one the database already gives.
+- **A queue would make Redis load-bearing for correctness.** Today Redis is an optimisation for
+  rate limiting with an in-process fallback, and the droplet survives losing it. Billing must
+  not acquire that dependency for nothing.
+- **It would add a second process to deploy and watch,** on a single droplet, for about thirty
+  invoices a month.
+
+**Adopt BullMQ when the first job that calls something flaky ships** - `email` (TALLY-19) or
+`pdf` (TALLY-21). Those genuinely need attempts, backoff and a dead-letter queue. At that point
+the two cron jobs move onto it for consistency, not because cron failed them.
+
+Until then, the operational contract is: **safe to run at any time, safe to run twice, and a
+missed day is fixed by running it again.** The failure mode is "late", never "billed twice".
+`tests/recurring-job.test.ts` asserts each of those against the database, and
+`tests/jobs.test.ts` asserts that every job script has a `pnpm` entry and a cron line in this
+table, because a job nobody scheduled is the failure that looks exactly like everything working.
+
+### 9.1 Target design
+
 BullMQ over Redis. The `worker` container runs every processor. Queues, concurrency, and retry policy:
 
 | Queue | Trigger | Concurrency | Retry |

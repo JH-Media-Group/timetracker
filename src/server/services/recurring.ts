@@ -20,7 +20,7 @@
  * The calendar arithmetic is in `src/domain/recurrence.ts` and tested there.
  */
 
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, lte } from "drizzle-orm";
 import { assertCan, withTransaction, type Ctx } from "@/server/ctx";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
@@ -149,6 +149,104 @@ export async function getRecurring(ctx: Ctx, id: string): Promise<RecurringDto> 
     .limit(1);
   if (!row) throw notFound("That schedule");
   return serialize(row);
+}
+
+/**
+ * The same read, holding a row lock until the transaction ends.
+ *
+ * Anything that advances a schedule takes this. Two runs of the daily job
+ * overlapping, or a person pressing Issue now while the job is mid-flight,
+ * would otherwise both read the same `nextIssueOn` and both raise an invoice
+ * for it. The lock serialises them, and the due-date recheck after it means the
+ * second one finds the schedule already moved on and does nothing.
+ *
+ * This is why the whole run does not need a global lock: correctness lives on
+ * the row, where the contention actually is.
+ */
+async function lockRecurring(ctx: Ctx, id: string): Promise<RecurringDto> {
+  const [row] = await ctx.db
+    .select()
+    .from(s.recurringInvoices)
+    .where(eq(s.recurringInvoices.id, id))
+    .limit(1)
+    .for("update");
+  if (!row) throw notFound("That schedule");
+  return serialize(row);
+}
+
+/* -------------------------------------------------------------------- job */
+
+export interface RunOutcome {
+  /** The day the run billed for. Every schedule due on or before it is issued. */
+  on: IsoDate;
+  issued: { scheduleId: string; invoiceId: string }[];
+  skipped: { scheduleId: string; why: string }[];
+  failed: { scheduleId: string; why: string }[];
+}
+
+/**
+ * Issue every schedule that is due, and say what happened to each.
+ *
+ * SAFE TO RUN TWICE, WHICH IS THE WHOLE DESIGN
+ *
+ * There is no queue and no worker. This runs from cron, like `pnpm sweep`
+ * already does, and the correctness lives in the data rather than in the
+ * scheduler: `issueIfDue` takes a row lock and rechecks the due date under it,
+ * so a second run finds `nextIssueOn` already advanced and raises nothing. That
+ * means a missed day can be fixed by running it again, an overlapping run is
+ * harmless, and the operational failure mode is "late", never "billed twice".
+ *
+ * A queue would buy retries and backoff for jobs that call something flaky.
+ * This one only talks to Postgres, in a transaction, so it would buy a second
+ * process to deploy and watch, and a hard dependency on Redis for correctness
+ * where today Redis is an optimisation with a fallback. Revisit when the first
+ * job that renders a PDF or calls an email API needs real retry semantics.
+ *
+ * ONE BAD SCHEDULE DOES NOT STOP THE RUN
+ *
+ * Each schedule is its own transaction, and a failure is collected rather than
+ * thrown. A client whose template lost its lines should not mean the other
+ * thirty go unbilled, and the run has to be able to report which one is broken.
+ */
+async function accountTimezone(ctx: Ctx): Promise<string> {
+  const [row] = await ctx.db.select({ timezone: s.settings.timezone }).from(s.settings).limit(1);
+  return row?.timezone ?? ctx.actor.timezone;
+}
+
+export async function runDueRecurring(ctx: Ctx, today?: IsoDate): Promise<RunOutcome> {
+  assertCan(ctx, "invoice:manage");
+
+  // The account's timezone, not the actor's. "Due on the 1st" is a fact about
+  // the business, and it must not shift because the job ran as somebody whose
+  // own timezone is set differently.
+  const on = today ?? dayIn(await accountTimezone(ctx), ctx.now());
+  const outcome: RunOutcome = { on, issued: [], skipped: [], failed: [] };
+
+  const due = await ctx.db
+    .select({ id: s.recurringInvoices.id })
+    .from(s.recurringInvoices)
+    .where(
+      and(
+        eq(s.recurringInvoices.state, "active"),
+        lte(s.recurringInvoices.nextIssueOn, on)
+      )
+    )
+    .orderBy(asc(s.recurringInvoices.nextIssueOn));
+
+  for (const { id } of due) {
+    try {
+      const result = await issueIfDue(ctx, id, on);
+      if ("skipped" in result) outcome.skipped.push({ scheduleId: id, why: result.skipped });
+      else outcome.issued.push({ scheduleId: id, invoiceId: result.invoiceId });
+    } catch (error) {
+      outcome.failed.push({
+        scheduleId: id,
+        why: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return outcome;
 }
 
 /* ----------------------------------------------------------------- writes */
@@ -373,10 +471,45 @@ export async function deleteRecurring(ctx: Ctx, id: string): Promise<void> {
  * lives here rather than in the caller.
  */
 export async function issueRecurringNow(ctx: Ctx, id: string): Promise<{ invoiceId: string }> {
+  const result = await issueOnce(ctx, id, null);
+  if ("skipped" in result) throw validationFailed({ _: [result.skipped] });
+  return result;
+}
+
+/**
+ * Issue a schedule only if it is still due on `today`.
+ *
+ * What the daily job calls. Separate from `issueRecurringNow` because the two
+ * want opposite things from a schedule that is not due: a person who pressed
+ * Issue now wants to be told why nothing happened, and the job wants to move on
+ * quietly to the next of thirty-odd schedules.
+ */
+export async function issueIfDue(
+  ctx: Ctx,
+  id: string,
+  today: IsoDate
+): Promise<{ invoiceId: string } | { skipped: string }> {
+  return issueOnce(ctx, id, today);
+}
+
+async function issueOnce(
+  ctx: Ctx,
+  id: string,
+  dueOnOrBefore: IsoDate | null
+): Promise<{ invoiceId: string } | { skipped: string }> {
   assertCan(ctx, "invoice:manage");
 
   return withTransaction(ctx, async (tx) => {
-    const schedule = await getRecurring(tx, id);
+    const schedule = await lockRecurring(tx, id);
+
+    // Rechecked under the lock, not before it. This is what makes a second run
+    // of the job harmless: the first run advanced `nextIssueOn` past today, so
+    // the second finds nothing due and raises nothing.
+    if (dueOnOrBefore) {
+      if (schedule.state !== "active") return { skipped: `not active (${schedule.state})` };
+      if (!schedule.nextIssueOn) return { skipped: "no next date" };
+      if (schedule.nextIssueOn > dueOnOrBefore) return { skipped: "not due yet" };
+    }
 
     if (schedule.state === "completed") {
       throw validationFailed({ _: ["This schedule has finished."] });
@@ -398,7 +531,36 @@ export async function issueRecurringNow(ctx: Ctx, id: string): Promise<{ invoice
     });
 
     const anchor = anchorDayOf(schedule.startsOn);
-    const following = nextOccurrence(issueDate, schedule.frequency, schedule.interval, anchor);
+    let following = nextOccurrence(issueDate, schedule.frequency, schedule.interval, anchor);
+
+    /**
+     * A neglected schedule catches up in one step, not one invoice a day.
+     *
+     * Advancing by exactly one period is right for the Issue now button, and
+     * `tests/recurring.test.ts` holds it. It is wrong for the job: if the cron
+     * entry is forgotten for six months, advancing one period leaves the
+     * schedule still due, so tomorrow's run raises another, and the client gets
+     * six invoices on six consecutive days. That is a backfill, just a slow and
+     * confusing one.
+     *
+     * `src/domain/recurrence.ts` already states the rule for the other place
+     * this arises, resuming a paused schedule: raise the next one due, do not
+     * backfill what was missed. Being a month late is a smaller failure than six
+     * unexpected invoices. The job follows the same rule, so the two ways a
+     * schedule can fall behind behave the same way.
+     *
+     * Only on the job path. `dueOnOrBefore` is what distinguishes it.
+     */
+    if (dueOnOrBefore && following <= dueOnOrBefore) {
+      following = nextOccurrenceAfter(
+        following,
+        schedule.frequency,
+        schedule.interval,
+        anchor,
+        dueOnOrBefore
+      );
+    }
+
     const remaining =
       schedule.occurrencesRemaining == null ? null : Math.max(0, schedule.occurrencesRemaining - 1);
     const finished = hasFinished(following, schedule.endsOn, remaining);
