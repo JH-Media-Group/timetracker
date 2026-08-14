@@ -16,9 +16,22 @@
  *     storage would otherwise put an empty column heading on an invoice.
  *   - **Unknown keys are dropped, not carried.** Storage is jsonb, so anything
  *     could be in there; only the keys defined here survive resolution.
- *   - **A mangled token renders as it stands.** Somebody will delete a bracket
- *     from `Net [days]`. That should print "Net days" rather than throw on an
- *     invoice a client is waiting for.
+ *   - **A mangled token renders as it stands.** Somebody will delete a brace
+ *     from `Net {{days}}`. That should print what is left rather than throw on
+ *     an invoice a client is waiting for.
+ *
+ * TOKEN SYNTAX
+ *
+ * `{{name}}`, which is Handlebars and Mustache and what most people have seen
+ * before. Harvest uses `%name%` and an earlier draft here used `[name]`; both
+ * work and neither is recognisable on sight. Since these templates are read and
+ * edited by people rather than parsed by anything else, the familiar spelling
+ * wins.
+ *
+ * One collision worth naming: the invoice **number** pattern uses single braces
+ * (`{seq}`, `{year}`). That is a different surface with a different renderer
+ * (`renderInvoiceNumber` in `domain/invoices.ts`) and the two never meet, but
+ * doubling up here rather than there keeps them visually distinct as well.
  */
 
 /* ------------------------------------------------------------ field labels */
@@ -43,8 +56,8 @@ export const FIELD_LABELS = [
   {
     key: "netDays",
     name: "Net days",
-    default: "Net [days]",
-    hint: "Use [days] to represent the number of days.",
+    default: "Net {{days}}",
+    hint: "Use {{days}} for the number of days.",
   },
   { key: "tax", name: "Tax", default: "Tax" },
   { key: "tax2", name: "Tax 2", default: "Tax 2" },
@@ -62,8 +75,8 @@ export const FIELD_LABELS = [
   {
     key: "pdfPageNumbering",
     name: "PDF page numbering",
-    default: "Page [page] of [toPage]",
-    hint: "Use [page] for the current page and [toPage] for the total.",
+    default: "Page {{page}} of {{toPage}}",
+    hint: "Use {{page}} for the current page and {{toPage}} for the total.",
   },
   { key: "fileAttachments", name: "File attachments", default: "File Attachments" },
   { key: "payments", name: "Payments", default: "Payments" },
@@ -112,15 +125,16 @@ export function resolveLabels(stored: unknown): FieldLabels {
 export const defaultLabels = (): FieldLabels => ({ ...LABEL_DEFAULTS });
 
 /**
- * Substitute `[token]` placeholders in a label.
+ * Substitute `{{token}}` placeholders in a label or a message.
  *
- * Unknown tokens are left alone rather than blanked, so a typo is visible and
- * fixable instead of silently producing "Net ". An unclosed bracket simply does
- * not match, and the text renders as written: this must never throw, because it
- * runs while somebody is looking at an invoice.
+ * Whitespace inside the braces is tolerated, because somebody will type
+ * `{{ days }}`. Unknown tokens are left alone rather than blanked, so a typo
+ * stays visible and fixable instead of silently producing "Net ". An unclosed
+ * brace simply does not match and the text renders as written: this must never
+ * throw, because it runs while somebody is looking at an invoice.
  */
 export function renderLabel(template: string, tokens: Record<string, string | number>): string {
-  return template.replace(/\[(\w+)\]/g, (whole, token: string) =>
+  return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (whole, token: string) =>
     token in tokens ? String(tokens[token]) : whole
   );
 }
@@ -235,15 +249,15 @@ export interface InvoiceMessages {
 }
 
 export const INVOICE_MESSAGES: InvoiceMessages = {
-  sendSubject: "Invoice [number] from [company]",
+  sendSubject: "Invoice {{number}} from {{company}}",
   sendBody:
-    "Hello [client],\n\nPlease find invoice [number] for [amount], due [dueDate].\n\nThank you,\n[company]",
-  reminderSubject: "Reminder: invoice [number] is due [dueDate]",
+    "Hello {{client}},\n\nPlease find invoice {{number}} for {{amount}}, due {{dueDate}}.\n\nThank you,\n{{company}}",
+  reminderSubject: "Reminder: invoice {{number}} is due {{dueDate}}",
   reminderBody:
-    "Hello [client],\n\nThis is a reminder that invoice [number] for [amount] is due [dueDate].\n\nThank you,\n[company]",
-  thanksSubject: "Payment received for invoice [number]",
+    "Hello {{client}},\n\nThis is a reminder that invoice {{number}} for {{amount}} is due {{dueDate}}.\n\nThank you,\n{{company}}",
+  thanksSubject: "Payment received for invoice {{number}}",
   thanksBody:
-    "Hello [client],\n\nThank you for your payment of [amount] against invoice [number].\n\n[company]",
+    "Hello {{client}},\n\nThank you for your payment of {{amount}} against invoice {{number}}.\n\n{{company}}",
 };
 
 /** The tokens the message editor offers, so the screen and the sender agree. */

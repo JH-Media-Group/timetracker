@@ -29,15 +29,42 @@ export const budgetGrain = (by: BudgetBy): BudgetGrain =>
   by === "none" ? "none" : by.startsWith("project_") ? "project" : by.startsWith("task_") ? "task" : "person";
 
 /**
- * Health thresholds. Under 80% is fine, 80 to 100% wants attention, over 100%
- * is over. The bands come from FRONTEND_PRD section 2 so the meter colours and
- * this function cannot disagree.
+ * The account-wide fallback when a project sets no threshold of its own.
+ *
+ * FRONTEND_PRD section 2 fixes the meter colours to these bands, so the number
+ * lives here rather than being written into each caller.
  */
-export function budgetHealth(percentUsed: number | null): BudgetHealth {
+export const DEFAULT_ALERT_PERCENT = 80;
+
+/**
+ * Which band a budget is in: fine, wants attention, or over.
+ *
+ * `alertPercent` is the project's `budgetAlertPercent`, **as a percentage**
+ * (80, not 0.8), because that is how the column stores it and how the editor
+ * asks for it. Null means the project never chose one and takes the default.
+ *
+ * TALLY-37: this took no threshold at all and compared against a hard-coded
+ * 0.8, so every project warned at 80% no matter what its editor said. The
+ * feature was never missing; one number was written where a column should have
+ * been read, which is why nothing looked broken.
+ */
+export function budgetHealth(
+  percentUsed: number | null,
+  alertPercent: number | null = null
+): BudgetHealth {
   if (percentUsed == null) return "none";
   if (percentUsed > 1) return "over";
-  if (percentUsed >= 0.8) return "near";
-  return "ok";
+
+  /**
+   * The write path holds 1 to 100 (`projectSchema`), so this is a backstop for
+   * a row that arrived another way: an import, a hand-edit, an older value from
+   * when the schema allowed 0 to 999. Out of range falls back rather than making
+   * a project either permanently fine or permanently alarming.
+   */
+  const percent = alertPercent ?? DEFAULT_ALERT_PERCENT;
+  const safe = percent >= 1 && percent <= 100 ? percent : DEFAULT_ALERT_PERCENT;
+
+  return percentUsed >= safe / 100 ? "near" : "ok";
 }
 
 export interface BudgetView {
@@ -63,6 +90,8 @@ export interface BudgetInput {
   spentSeconds: number;
   /** Billable value tracked in the relevant window at the relevant grain. */
   spentCents: Cents;
+  /** The project's own alert threshold as a percentage. Null takes the default. */
+  alertPercent?: number | null;
 }
 
 export function computeBudget(input: BudgetInput): BudgetView {
@@ -82,7 +111,7 @@ export function computeBudget(input: BudgetInput): BudgetView {
     spent,
     remaining: budget == null ? null : budget - spent,
     percentUsed,
-    health: budgetHealth(percentUsed),
+    health: budgetHealth(percentUsed, input.alertPercent ?? null),
     monthly: input.resetsMonthly,
   };
 }

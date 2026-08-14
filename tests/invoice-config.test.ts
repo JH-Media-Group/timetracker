@@ -433,17 +433,32 @@ describe("field labels", () => {
   });
 
   it("substitutes tokens", () => {
-    expect(renderLabel("Net [days]", { days: 30 })).toBe("Net 30");
-    expect(renderLabel("Page [page] of [toPage]", { page: 1, toPage: 3 })).toBe("Page 1 of 3");
+    expect(renderLabel("Net {{days}}", { days: 30 })).toBe("Net 30");
+    expect(renderLabel("Page {{page}} of {{toPage}}", { page: 1, toPage: 3 })).toBe("Page 1 of 3");
   });
 
-  /** Somebody will delete a bracket, and an invoice must still render. */
+  it("tolerates whitespace inside the braces, which somebody will type", () => {
+    expect(renderLabel("Net {{ days }}", { days: 30 })).toBe("Net 30");
+  });
+
+  /** Somebody will delete a brace, and an invoice must still render. */
   it("renders a mangled token without throwing", () => {
-    expect(renderLabel("Net [days", { days: 30 })).toBe("Net [days");
-    expect(renderLabel("Net days]", { days: 30 })).toBe("Net days]");
-    expect(renderLabel("Net [dayz]", { days: 30 }), "an unknown token stays visible").toBe(
-      "Net [dayz]"
+    expect(renderLabel("Net {{days", { days: 30 })).toBe("Net {{days");
+    expect(renderLabel("Net days}}", { days: 30 })).toBe("Net days}}");
+    expect(renderLabel("Net {days}", { days: 30 }), "a single brace is not a token").toBe(
+      "Net {days}"
     );
+    expect(renderLabel("Net {{dayz}}", { days: 30 }), "an unknown token stays visible").toBe(
+      "Net {{dayz}}"
+    );
+  });
+
+  /**
+   * The number pattern is a different surface with a different renderer, and
+   * single braces belong to it. Asserted so nobody unifies them by accident.
+   */
+  it("leaves invoice-number pattern tokens alone", () => {
+    expect(renderLabel("{seq:5}", { seq: 1 })).toBe("{seq:5}");
   });
 
   it("resolves a stored value that is not a string at all", () => {
@@ -625,11 +640,11 @@ describe("messages", () => {
     const ctx = await ctxFor("administrator");
     await updateInvoiceConfig(ctx, {
       section: "messages",
-      value: { sendSubject: "Your invoice [number]" },
+      value: { sendSubject: "Your invoice {{number}}" },
     });
 
     const config = await getInvoiceConfig(ctx);
-    expect(config.messages.sendSubject).toBe("Your invoice [number]");
+    expect(config.messages.sendSubject).toBe("Your invoice {{number}}");
     expect(config.messages.reminderSubject, "the others keep their defaults").toContain(
       "Reminder"
     );
@@ -638,6 +653,6 @@ describe("messages", () => {
   it("falls back to the default when a message is cleared", async () => {
     const ctx = await ctxFor("administrator");
     await updateInvoiceConfig(ctx, { section: "messages", value: { sendSubject: "  " } });
-    expect((await getInvoiceConfig(ctx)).messages.sendSubject).toContain("Invoice [number]");
+    expect((await getInvoiceConfig(ctx)).messages.sendSubject).toContain("Invoice {{number}}");
   });
 });

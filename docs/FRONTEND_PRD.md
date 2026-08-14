@@ -1210,6 +1210,10 @@ Seven sections, which is Harvest's list without E-invoicing (PRD-OVERVIEW sectio
 
 **Saving is per section.** Two people editing different sections cannot overwrite each other, and the audit row names which part of the configuration changed.
 
+**Tokens are `{{name}}`,** in both field labels and messages. Handlebars and Mustache spelling, which most people have seen before. Harvest uses `%name%` and an earlier draft here used `[name]`; both work and neither is recognisable on sight, and these templates are read and edited by people rather than parsed by anything else.
+
+The invoice **number** pattern is the exception and keeps single braces (`{seq}`, `{year}`). It is a different surface with a different renderer, and the two never meet; doubling up on one and not the other keeps them visually distinct as well. Whitespace inside the braces is tolerated, an unknown token stays visible rather than blanking, and a mangled one renders as written, because this runs while somebody is looking at an invoice.
+
 **Three rules the screens depend on:**
 
 - **Empty means default, never nothing.** Clearing a field label puts its default text back. A blank column heading on an invoice is never what somebody meant, and only the override is stored, so a later change to a default reaches an account that never overrode it.

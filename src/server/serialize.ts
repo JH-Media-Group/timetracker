@@ -218,7 +218,13 @@ export interface ProjectDto {
   budgetAlertPercent: number | null;
   startsOn: string | null;
   endsOn: string | null;
-  notes: string | null;
+  /**
+   * Absent when the actor may not see them.
+   *
+   * Not null-when-hidden: absent, so "there are no notes" and "you may not read
+   * the notes" are different states on the wire and the UI cannot conflate them.
+   */
+  notes?: string | null;
   reportVisibility: string;
   archivedAt: string | null;
   tags: string[];
@@ -231,10 +237,28 @@ export interface ProjectDto {
   budgetFeeCents?: number | null;
 }
 
+/**
+ * `notes` is opt-in, which is deliberate.
+ *
+ * `settings.projectNotesVisibility` decides who may read a project's notes, and
+ * the decision is made on the server: a field the actor may not see must not be
+ * in the payload at all. Hiding it in a component ships it to the browser and
+ * calls that privacy.
+ *
+ * The default is to omit. A caller that forgets to pass `notesVisible` hides
+ * the notes rather than leaking them, which is the direction a mistake here
+ * should fail (TALLY-36).
+ */
 export function serializeProject(
   ctx: Ctx,
   row: s.ProjectRow,
-  extra: { tags?: string[]; taskIds?: string[]; memberIds?: string[]; managerIds?: string[] } = {}
+  extra: {
+    tags?: string[];
+    taskIds?: string[];
+    memberIds?: string[];
+    managerIds?: string[];
+    notesVisible?: boolean;
+  } = {}
 ): ProjectDto {
   const dto: ProjectDto = {
     id: row.id,
@@ -249,7 +273,7 @@ export function serializeProject(
     budgetAlertPercent: num(row.budgetAlertPercent),
     startsOn: row.startsOn,
     endsOn: row.endsOn,
-    notes: row.notes,
+    ...(extra.notesVisible ? { notes: row.notes } : {}),
     reportVisibility: row.reportVisibility,
     archivedAt: iso(row.archivedAt),
     tags: extra.tags ?? [],

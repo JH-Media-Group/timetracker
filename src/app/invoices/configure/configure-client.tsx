@@ -562,7 +562,7 @@ function MessagesSection({ config, readOnly }: { config: api.InvoiceConfig; read
           <div className="mb-1 text-sm font-medium text-ink-secondary">Tokens</div>
           <div className="flex flex-wrap gap-1.5">
             {MESSAGE_TOKENS.map((t) => (
-              <Badge key={t} variant="neutral">[{t}]</Badge>
+              <Badge key={t} variant="neutral">{`{{${t}}}`}</Badge>
             ))}
           </div>
         </div>
@@ -615,7 +615,7 @@ function LabelsSection({ config, readOnly }: { config: api.InvoiceConfig; readOn
           <div className="mt-1 text-base text-ink">
             A Net 30 client sees{" "}
             <span className="font-medium">
-              {renderLabel(form.netDays || "Net [days]", { days: 30 })}
+              {renderLabel(form.netDays || "Net {{days}}", { days: 30 })}
             </span>
             , and the total reads{" "}
             <span className="font-medium">{form.amountDue || "Amount Due"}</span>.

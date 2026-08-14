@@ -66,7 +66,12 @@ export const projectSchema = z.object({
   budgetSeconds: z.number().int().min(0).nullable().optional(),
   budgetFeeCents: z.number().int().min(0).nullable().optional(),
   budgetResetsMonthly: z.boolean().optional(),
-  budgetAlertPercent: z.number().min(0).max(999).nullable().optional(),
+  /**
+   * A percentage, 1 to 100. It was 0 to 999, which let a fraction (0.8) be
+   * stored where a percentage was meant and made the project alarm from its
+   * first tracked minute (TALLY-37).
+   */
+  budgetAlertPercent: z.number().min(1).max(100).nullable().optional(),
   startsOn: isoDate.nullable().optional(),
   endsOn: isoDate.nullable().optional(),
   notes: z.string().max(10000).nullable().optional(),

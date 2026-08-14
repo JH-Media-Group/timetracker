@@ -21,7 +21,7 @@ import { PageBody, PageHeader } from "@/components/app/page-chrome";
 import { BarChart, LineChart, Legend } from "@/components/app/charts";
 import { useToast } from "@/components/ui/toast";
 import { useApp, useCan } from "@/components/app/providers";
-import { InvoiceBadge, Kpi, KpiRow } from "@/components/app/kpi";
+import { InvoiceBadge, Kpi, KpiRow, SectionTitle } from "@/components/app/kpi";
 
 export default function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -144,9 +144,10 @@ export default function ProjectDetailPage() {
     return {
       ...raw,
       kind: raw.by.endsWith("_hours") ? ("hours" as const) : raw.by === "none" ? ("none" as const) : ("fees" as const),
-      health: budgetHealth(raw.percentUsed),
+      // The project's own alert threshold, not a constant (TALLY-37).
+      health: budgetHealth(raw.percentUsed, project?.budgetAlertPercent ?? null),
     };
-  }, [summary]);
+  }, [summary, project?.budgetAlertPercent]);
 
   const byPerson = React.useMemo(() => {
     const m = new Map<string, TimeEntry[]>();
@@ -263,6 +264,24 @@ export default function ProjectDetailPage() {
             )}
           </div>
         </Card>
+
+        {/*
+          Project notes (TALLY-36).
+
+          They have been captured by the editor and stored since the first
+          migration, and no screen has ever shown them. Whether they arrive at
+          all is decided on the server from `settings.projectNotesVisibility`,
+          so a Member who may not read them does not receive them: `notes` is
+          absent from the payload rather than present and hidden here.
+
+          Absent and empty are therefore different, and both render nothing.
+        */}
+        {project.notes?.trim() && (
+          <Card className="mb-6">
+            <SectionTitle>Notes</SectionTitle>
+            <p className="whitespace-pre-line text-base text-ink-secondary">{project.notes}</p>
+          </Card>
+        )}
 
         {/* KPI row */}
         {reportRestricted && (

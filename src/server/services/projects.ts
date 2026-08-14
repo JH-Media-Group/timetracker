@@ -13,13 +13,14 @@
  */
 
 import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
-import { assertCan, withTransaction, type Ctx } from "@/server/ctx";
+import { assertCan, can, withTransaction, type Ctx } from "@/server/ctx";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
 import { clientScope, projectScope } from "@/server/auth/scope";
 import { AppError, notFound, validationFailed } from "@/server/errors";
 import { serializeProject, type ProjectDto } from "@/server/serialize";
 import { validateBudgetShape, type BudgetBy } from "@/domain/budgets";
+import { getSettings } from "./settings";
 import { commonTaskIds } from "./tasks";
 
 export interface ProjectInput {
@@ -102,14 +103,48 @@ export async function listProjects(
   const managerMap = group(members.filter((m) => m.isManager), "projectId", (r) => r.userId);
   const tagMap = group(tags, "projectId", (r) => r.name);
 
+  const notesVisible = await canSeeProjectNotes(ctx);
+
   return rows.map((r) =>
     serializeProject(ctx, r, {
       taskIds: taskMap.get(r.id) ?? [],
       memberIds: memberMap.get(r.id) ?? [],
       managerIds: managerMap.get(r.id) ?? [],
       tags: tagMap.get(r.id) ?? [],
+      notesVisible,
     })
   );
+}
+
+/**
+ * Whether this actor may read project notes.
+ *
+ * `settings.projectNotesVisibility` is either `managers` or `everyone`.
+ * "Managers" means whoever can manage projects, which is the capability the
+ * rest of this service already gates writes on, so the setting needs no
+ * separate notion of who a manager is.
+ *
+ * TALLY-36: this setting was stored, editable and read by nothing, and the
+ * notes it governs were captured, saved, sent to the browser and never shown.
+ */
+export async function canSeeProjectNotes(ctx: Ctx): Promise<boolean> {
+  // Managers may always read them, and that answer needs no settings lookup.
+  if (can(ctx, "project:manage")) return true;
+
+  /**
+   * Failing closed rather than throwing.
+   *
+   * Reading a project should not stop working because the settings row cannot
+   * be read: a display gate must not be able to take down the project list.
+   * Hiding the notes is the safe direction for that failure, and a database
+   * missing its settings row will announce itself loudly everywhere else, since
+   * the timesheet, invoices and reports all read it.
+   */
+  try {
+    return (await getSettings(ctx)).projectNotesVisibility === "everyone";
+  } catch {
+    return false;
+  }
 }
 
 export async function getProject(ctx: Ctx, id: string): Promise<ProjectDto> {
@@ -141,6 +176,7 @@ export async function getProject(ctx: Ctx, id: string): Promise<ProjectDto> {
     memberIds: members.map((m) => m.userId),
     managerIds: members.filter((m) => m.isManager).map((m) => m.userId),
     tags: tags.map((t) => t.name),
+    notesVisible: await canSeeProjectNotes(ctx),
   });
 }
 

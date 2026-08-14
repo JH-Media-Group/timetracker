@@ -8,13 +8,21 @@
  * No test fails, because there is no code to test, and the screen is a promise
  * the product does not keep.
  *
- * Three of these were found in this codebase, and the third was found while
- * reviewing the ticket written about the second:
+ * Five of these were found in this codebase. The third turned up while reviewing
+ * the ticket written about the second, and the last two were found by this file
+ * on its first run, which is the argument for it:
  *
- *   1. `budgetAlertPercent`  editable on the project editor, alerts nobody
+ *   1. `budgetAlertPercent`  a threshold nothing read, so every project warned
+ *      at a hard-coded 80%. Fixed in TALLY-37.
  *   2. `invoiceDefaults`, `invoiceAppearance`, `invoiceMessages`,
  *      `invoiceFieldLabels`  four jsonb columns read only by their own writer
  *   3. `invoice_item_types`  a designed table, a foreign key into it, no rows
+ *   4. `taxId`  stored, editable, printed on nothing. Now on the invoice.
+ *   5. `projectNotesVisibility`  gating notes that were captured, stored, sent
+ *      to the browser and displayed nowhere. Fixed in TALLY-36.
+ *
+ * All five are connected now. The only entries left in `EXEMPT` are waiting on
+ * a credential, and each says which one.
  *
  * Prose did not stop it. `tests/routes.test.ts` proved the shape that does:
  * enumerate the thing structurally, require each entry to be either satisfied
@@ -83,12 +91,6 @@ const EXEMPT: Record<string, string> = {
   fiscalYearStartMonth:
     "Reporting periods are calendar-year today. The fiscal-year report grouping in " +
     "FRONTEND_PRD section 11 is the consumer, and it is not built.",
-  projectNotesVisibility:
-    "Found by this check on its first run, and it is a fourth instance of exactly the " +
-    "pattern the check was written for: the setting chooses who may see project notes, " +
-    "and project notes do not exist. There is no column on `projects` and nothing " +
-    "renders them. Either the feature gets built or the setting comes out, and both " +
-    "are outside the invoicing epic.",
   invoiceMessages:
     "The send, reminder and thank-you email bodies. Stored and editable now so the " +
     "wording is ready and reviewable, but nothing sends mail until SendGrid " +

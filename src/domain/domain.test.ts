@@ -469,12 +469,53 @@ describe("budgets", () => {
     expect(none.remaining).toBeNull();
   });
 
-  it("bands health at 80 and 100 percent", () => {
+  it("bands health at 80 and 100 percent by default", () => {
     expect(budgetHealth(0.79)).toBe("ok");
     expect(budgetHealth(0.8)).toBe("near");
     expect(budgetHealth(1)).toBe("near");
     expect(budgetHealth(1.01)).toBe("over");
     expect(budgetHealth(null)).toBe("none");
+  });
+
+  /**
+   * TALLY-37. The threshold used to be a hard-coded 0.8, so a project asking to
+   * be flagged at 50% was flagged at 80% like everything else. Nothing looked
+   * broken, because the band still appeared; it just appeared at the wrong time.
+   */
+  it("uses the project's own alert threshold", () => {
+    expect(budgetHealth(0.5, 50), "flagged at the point the project asked for").toBe("near");
+    expect(budgetHealth(0.49, 50)).toBe("ok");
+
+    expect(budgetHealth(0.6, 95), "and not flagged before it").toBe("ok");
+    expect(budgetHealth(0.95, 95)).toBe("near");
+  });
+
+  it("takes a percentage, not a fraction", () => {
+    // The column is numeric(5,2) holding 80, not 0.8.
+    expect(budgetHealth(0.5, 80)).toBe("ok");
+    expect(budgetHealth(0.85, 80)).toBe("near");
+  });
+
+  /**
+   * The write path holds 1 to 100, so these can only arrive from an import or a
+   * hand-edited row. Falling back beats alarming from the first tracked minute.
+   */
+  it("falls back when the stored threshold is out of range", () => {
+    expect(budgetHealth(0.5, 0.8), "a fraction stored where a percentage belongs").toBe("ok");
+    expect(budgetHealth(0.5, 0)).toBe("ok");
+    expect(budgetHealth(0.5, 900)).toBe("ok");
+    expect(budgetHealth(0.85, 900), "and still bands at the default").toBe("near");
+  });
+
+  it("keeps the old behaviour for a project that set no threshold", () => {
+    // Or every existing project silently changes on deploy.
+    expect(budgetHealth(0.8, null)).toBe("near");
+    expect(budgetHealth(0.79, null)).toBe("ok");
+  });
+
+  it("stays over budget regardless of the threshold", () => {
+    expect(budgetHealth(1.01, 50)).toBe("over");
+    expect(budgetHealth(1.01, 99)).toBe("over");
   });
 
   it("rejects a budget whose amount does not match its type", () => {

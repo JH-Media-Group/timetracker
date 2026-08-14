@@ -254,13 +254,23 @@ function ProjectForm({ existing }: { existing?: Project }) {
                     <Checkbox checked={form.budgetResetsMonthly} onCheckedChange={(v) => patch("budgetResetsMonthly", v)} />
                     Budget resets every month
                   </label>
+                  {/*
+                    This said "Send email alerts", which nothing did (TALLY-37).
+                    The threshold is real and now colours the budget meter; the
+                    email is not, and will not be until TALLY-19. Copy that
+                    promises a message nobody receives is worse than copy that
+                    describes a colour.
+                  */}
                   <label className="flex flex-wrap items-center gap-2 text-base">
                     <Checkbox checked={form.alertOn} onCheckedChange={(v) => patch("alertOn", v)} />
-                    Send email alerts if the project exceeds
+                    Flag this project once it passes
                     <Input className="w-[74px]" align="right" value={form.alertPercent} disabled={!form.alertOn}
                       onChange={(e) => patch("alertPercent", e.target.value)} />
                     % of budget
                   </label>
+                  <p className="text-sm text-ink-tertiary">
+                    The budget meter turns amber at this point. Nothing is emailed.
+                  </p>
                 </div>
               )}
             </div>
