@@ -13,7 +13,7 @@ Auto-loaded into every Claude Code session in this repo. Read it before doing an
 ## TL;DR
 
 - **Product:** Tally (working codename). An in-house replacement for JH Media Group's Harvest account: time tracking, project profitability, and invoicing. Internal only, never sold, served from a single DigitalOcean droplet.
-- **Status (2026-08-14):** PRDs v1.1, design system complete, and the **whole front end is built and running against a mock API**. `pnpm dev -p 3200` opens it. Every route renders clean in both themes; `next build` passes. No backend yet: `src/lib/api.ts` is the only file that knows it is missing.
+- **Status (2026-08-14):** PRDs v1.1, design system complete, and the **whole thing runs end to end against Postgres**. `pnpm db:setup` then `pnpm dev -p 3200`, sign in as `person01@example.com` / `tally-dev-password`. 235 tests, clean typecheck, clean `next build`, clean dependency audit. Not built yet: Google SSO, email delivery, receipt and PDF storage, the job queue, and the Harvest import itself. Each of those is waiting on a credential; see [docs/PERMISSIONS-AND-CREDENTIALS.md](docs/PERMISSIONS-AND-CREDENTIALS.md).
 - **Replaces:** the private Harvest account. Migration must reconcile to the cent; see BACKEND_PRD section 16.3.
 - **User:** Jason. PowerShell on Windows. No em dashes in any generated user-facing text, docs included.
 
@@ -44,15 +44,17 @@ Don't re-derive what is documented; cite back to it. If code and PRD disagree, t
 - Design tokens descend from Toado (`C:\Users\jason\Documents\GitHub\visual-debugger`, see its `app.css` and `design-system.html`). Chart palettes must pass `node scripts/validate-palette.mjs` against both surfaces.
 - Theming is CSS `light-dark()` on bare `:root`, driven by `color-scheme`. Do not write `prefers-color-scheme` blocks or `[data-theme]` colour overrides.
 
-## The front end as it stands
+## How it fits together
 
-- **Run it:** `pnpm dev -p 3200` (or `npx next dev -p 3200`). Sample data seeds itself into `localStorage`; Settings, Import and export, Reset the sample data puts it back.
-- **Routes:** `/timesheet` (day, week, calendar), `/expenses`, `/approvals`, `/team` + `/team/[id]`, `/clients` + new/detail/edit, `/projects` + new/detail/edit, `/tasks`, `/invoices` + new/detail (plus recurring and retainer views), `/reports` (time, profitability, team, invoicing), `/settings`.
-- **`src/lib/api.ts` is the seam.** Every function returns a Promise over an in-memory store. Swapping to the real `/api/v1` means rewriting the bodies; no signature and no component changes.
-- **Responses are cloned, never handed out live** (`clone()` in `api.ts`). Returning a live reference into the store mutates the object already inside the React Query cache, structural sharing then sees no change, and a record you just created renders as "not found". A real `fetch` returns fresh objects, so the mock does too.
-- **Forms that edit an existing record wait for it.** Field state initialises once from the record, so an editor must not mount until the record is in hand, or a cold load shows a blank form and saves the blanks. See `ClientEditor` / `ProjectEditor`.
-- **Column types come from the app, not the design system** (`DataGrid` builds them): duration formatting is an account setting and money formatting depends on the row's currency. Custom cell renderers never run on the pinned totals row.
-- **Verification scripts** used while building are in the session scratchpad, not the repo: a route sweep (both themes, checks for page errors and horizontal overflow), an interaction pass, and the mechanical no-shift check across all seven tables.
+- **Run it:** `pnpm db:setup` once (Docker Postgres on 5434, Redis on 6382, migrate, seed), then `pnpm dev -p 3200`. Every seeded account shares the password `tally-dev-password`. `pnpm db:seed --force` reseeds.
+- **Routes:** `/timesheet` (day, week, calendar), `/expenses`, `/approvals`, `/team` + `/team/[id]`, `/clients` + new/detail/edit, `/projects` + new/detail/edit, `/tasks`, `/invoices` + new/detail (plus recurring and retainer views), `/reports` (time, profitability, team, invoicing), `/settings`, `/signin`.
+- **`src/lib/api.ts` is the seam, and it is the only file that speaks HTTP.** It unwraps the `{ data, meta }` envelope, turns `application/problem+json` into an `ApiError` with the server's code and field errors, and adapts between the two vocabularies: `null` on the wire is `undefined` in the UI, `avatarKey` becomes `photo`, `profileId` becomes a profile name. No component knows a wire shape.
+- **`src/server/http.ts` is the seam on the other side.** Every mutating request runs in a transaction whose commit also writes the audit rows and outbox events, every route declares a rate-limit class, idempotency claims its key before the handler runs, and mutations are refused from another origin. A service cannot opt out of being audited.
+- **Capabilities come from the server.** `useCan()` reads the set the bootstrap returns, which the API computed from the same constant it gates on, so a button cannot appear for an action the request would refuse. Before the bootstrap lands the set is empty, so the shell renders its floor rather than flashing controls and taking them away.
+- **Money is aggregated then divided, on both sides.** `sumValue` and `ValueAccumulator` in `src/lib/derive.ts` do what `ROUND(SUM(seconds * rate) / 3600)` does in SQL. Rounding per row and adding the results drifts in one direction, and the client and the server would disagree by a growing number of cents.
+- **Forms that edit an existing record wait for it.** Field state initialises once from the record, so an editor must not mount until the record is in hand, or a cold load shows a blank form and saves the blanks. See `ClientEditor` / `ProjectEditor`. On save they seed the cached bootstrap and then navigate, rather than awaiting a refetch in front of the redirect.
+- **Column types come from the app, not the design system** (`DataGrid` builds them): duration formatting is an account setting and money formatting depends on the row's currency. Custom cell renderers never run on the pinned totals row. Export writes what is on screen to CSV through AG Grid Community.
+- **Security scripts live in the repo:** `pnpm authz:sweep` prints the profile-by-endpoint matrix, `pnpm authz:scope` checks that a Member gets only their own rows and none of the money. Both create their own accounts and clean up. The Playwright route sweep and interaction pass are in the session scratchpad.
 
 ## Reference material
 
@@ -63,6 +65,8 @@ Don't re-derive what is documented; cite back to it. If code and PRD disagree, t
 
 **Last updated:** 2026-08-14. Maintain this section manually.
 
-- Front end complete against the mock API and handed to Jason for testing. Next: his feedback, then the backend (BACKEND_PRD, starting with schema and the services layer).
-- Not built yet, deliberately: real auth, the PDF renderer, email, the job queue, integrations beyond the settings placeholders, and the Harvest import itself (the UI for it exists).
-- Open decisions parked for Jason: final product name ("Tally" is a placeholder), droplet size (4 vCPU/8 GB proposed), whether contractors keep password auth or everyone lands in Workspace.
+- Backend and wiring complete. E0 through E13 in [docs/BUILD_EPICS.md](docs/BUILD_EPICS.md) are ticked. Handed to Jason for testing.
+- Not built, each waiting on a credential rather than on a decision about scope: Google SSO, email delivery, receipt and PDF storage, the deployment, and running the Harvest import against real data. [docs/PERMISSIONS-AND-CREDENTIALS.md](docs/PERMISSIONS-AND-CREDENTIALS.md) says what does not work until each arrives.
+- Deliberately disabled in the UI rather than faked: the full account export, CSV import, and the integration connect buttons. Per-grid CSV export does work.
+- Open decisions parked for Jason: final product name ("Tally" is a placeholder), droplet size (4 vCPU/8 GB proposed), whether contractors keep password auth or everyone lands in Workspace, and whether invoice numbering continues Harvest's sequence.
+- **Two adversarial reviews found real defects, and their lesson is worth keeping:** every money bug was a violation of a rule stated in prose at the top of a file and asserted nowhere executable. `tests/invoices.test.ts` now asserts the three invariants that were being broken: a preview equals the invoice it produces, stored totals equal the sum of the stored lines, and a retainer's balance equals the sum of its transactions. Add to that list rather than adding another comment.
