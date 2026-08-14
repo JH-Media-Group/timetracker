@@ -15,9 +15,16 @@
 import Image from "next/image";
 import { cn } from "@/lib/cn";
 
-/** Full wordmark. Used in the top bar and on the sign-in screen. */
+/**
+ * Full wordmark. Used in the top bar and on the sign-in screen.
+ *
+ * The ratio is the artwork's own viewBox, 307 by 143. It is passed to `Image`
+ * so Next reserves the right box before the file arrives; getting it wrong
+ * shifts the top bar as the logo loads, which is the layout shift the priority
+ * flag exists to avoid. Changing the artwork means changing this number.
+ */
 export function Logo({ className, height = 24 }: { className?: string; height?: number }) {
-  const width = Math.round(height * (534 / 245));
+  const width = Math.round(height * (307 / 143));
   return (
     <span className={cn("inline-flex shrink-0 items-center", className)} aria-label="Tally">
       <Image src="/tally-logo.svg" alt="Tally" width={width} height={height}
