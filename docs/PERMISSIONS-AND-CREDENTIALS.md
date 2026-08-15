@@ -180,7 +180,7 @@ the migration.
 
 ---
 
-## 5. The Harvest export
+## 5. The Harvest export: arrived, imported, reconciled
 
 The CSV importer and reconciliation scripts are implemented. Keep all source exports, account totals, personnel decisions, and reconciliation reports outside Git. Confirm the billing cutoff privately before import. Invoice checks requiring records absent from the source must be reported as skipped.
 
@@ -208,6 +208,7 @@ not, rather than because they were out of scope:
 - Receipt upload and the invoice PDF renderer (needs item 3).
 - The deployment itself: Caddy config, systemd units, the backup cron (needs
   item 4).
-- Running the Harvest import against real data (needs item 5).
+- Bringing the Harvest *invoice* history across. The export holds invoices only
+  as PDFs, so there is nothing structured to import (item 5).
 
 Everything else in the plan is built, tested, and running against Postgres.

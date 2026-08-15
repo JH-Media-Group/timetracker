@@ -20,7 +20,7 @@ The build did not follow this plan's ordering. The front end was built first aga
 **Built and working**
 
 - **Phase 0 except CI.** Repo, scaffold, tokens, the `DataGrid` wrapper, the local Postgres and Redis stack, migrations, and a deterministic server-side seed. Item 0.4 is *not* done: there is no `.github/` directory, so the typecheck, lint, test, palette and em-dash gates run only when somebody runs them by hand.
-- **Phase 1 except three things.** The Harvest import waits on the export, Google SSO waits on OAuth credentials, and item 1.7's SSE stream was never written: reconciliation between tabs is a 30-second poll (`src/components/app/timer.tsx`), so 1.7's "two tabs reconcile within a second" cannot pass as stated.
+- **Phase 1 except two things.** Google SSO waits on OAuth credentials, and item 1.7's SSE stream was never written: reconciliation between tabs is a 30-second poll (`src/components/app/timer.tsx`), so 1.7's "two tabs reconcile within a second" cannot pass as stated.
 - **Phase 2 except alerts.** Rates, budgets, project detail, expenses, approvals, and the profitability, team and invoicing reports. There is no separate contractor report; contractor is a scope inside the Team report.
 - **Phase 3 core.** Invoices end to end, payments, the invoicing report, and the retainer ledger with its draw-at-send.
 
@@ -61,7 +61,7 @@ The seam is still one file. Every service the front end calls goes through `src/
 - [ ] **1.5 App shell.** Top bar, sidebar with permission-aware sections, page header pattern, toast system, error boundaries. No command palette yet.
 - [ ] **1.6 Organize CRUD.** Clients (list, new, edit, archive guard), Tasks (library with common-task propagation), Projects (list grouped by client, editor with type/bill-by/budget panels, member and task assignment), Team (members list, person settings: basic info, assigned projects, permissions). Rate resolution runs but returns 0 + `rate_missing` until Phase 2 populates rates.
 - [ ] **1.7 Timer + Day view.** `services/time` CRUD, start/stop with the stop-then-insert transaction, `GET /timesheet/summary`, SSE stream carrying `timer.*` events, timer widget, Day view with inline editor, quick timer popover, copy-from-previous-day. Verify acceptance: cold load to running timer in four keystrokes; two tabs reconcile within a second.
-- [ ] **1.8 Harvest import.** `scripts/harvest-import.ts` per [BACKEND_PRD.md §16](BACKEND_PRD.md#16-harvest-migration), including `billed_externally` from Harvest's `is_billed` and the six reconciliation checks. Output the reconciliation report to `docs/migration/`. This lands *before* the Time report so the report has real data to prove itself against.
+- [x] **1.8 Harvest import.** CSV import and reconciliation are implemented; see BACKEND_PRD section 16.0. Natural keys replace unavailable Harvest IDs. Keep source files and reconciliation results outside Git. Checks without source invoice records are skipped, not passed.
 - [ ] **1.9 Time report, read-only.** Summary band + Clients/Projects/Tasks/Teammates tabs + detailed view, ETag caching. Verify: figures match Harvest for the same filters.
 - [ ] **1.10 Phase gate.** Run the Phase 1 acceptance subset (FRONTEND §20 items 1-3, 6-7, 9; BACKEND §20 items 2, 6-9, 15). Jason dogfoods for one week.
 
