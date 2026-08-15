@@ -39,6 +39,7 @@ import { newId } from "@/server/db/ids";
 import { assertCan } from "@/server/ctx";
 import { AppError, notFound } from "@/server/errors";
 import { hashPassword, checkPasswordPolicy } from "@/server/auth/password";
+import { revokeAllSessions } from "@/server/auth/session";
 import { queueMail } from "@/server/services/mail";
 import { env } from "@/server/env";
 
@@ -184,6 +185,23 @@ export async function inviteUser(ctx: Ctx, userId: string): Promise<{ queued: bo
  * the list of who works somewhere is worth having if you are choosing a
  * phishing target.
  */
+/**
+ * The least time between two reset emails to the same address.
+ *
+ * This replaces a per-address rate-limit bucket, which was the wrong tool
+ * twice over. Enforced, it let anybody lock a chosen person out of the only
+ * self-service recovery path by spending their allowance. Consumed silently
+ * instead, it was worse: the victim got a cheerful "a reset link is on its
+ * way" and no link, which a reviewer demonstrated.
+ *
+ * A floor between issuances cannot be weaponised, because it always expires.
+ * A minute after any flood the victim can ask again and get one. It caps the
+ * inbox flooding at one message a minute, and when it does suppress a send the
+ * reassuring response is still true: a link went out moments ago and is valid
+ * for an hour.
+ */
+const MIN_SECONDS_BETWEEN_RESETS = 60;
+
 export async function requestPasswordReset(email: string): Promise<void> {
   const [user] = await db
     .select({
@@ -212,6 +230,27 @@ export async function requestPasswordReset(email: string): Promise<void> {
     The cast was the tell: it hid both the missing transaction and a context
     with none of the fields `issue` would need the moment it grew.
   */
+  /*
+    Suppress a duplicate, do not refuse the person.
+
+    The window is read from the tokens themselves rather than a counter, so it
+    needs no extra state and cannot drift out of step with what was actually
+    issued.
+  */
+  const [recent] = await db
+    .select({ id: s.authTokens.id })
+    .from(s.authTokens)
+    .where(
+      and(
+        eq(s.authTokens.userId, user.id),
+        eq(s.authTokens.purpose, "password_reset"),
+        gt(s.authTokens.createdAt, new Date(Date.now() - MIN_SECONDS_BETWEEN_RESETS * 1000))
+      )
+    )
+    .limit(1);
+
+  if (recent) return;
+
   const ctx = createCtx({ actor: systemActor(user.id), db });
   await withTransaction(ctx, (tx) => issue(tx, user, "password_reset", null));
 }
@@ -320,10 +359,10 @@ export async function consumeToken(token: string, password: string): Promise<{ u
       the password changed and every hostile session still live, which is the
       one case a reset is usually for. Either all three happen or none do.
     */
-    await tx
-      .update(s.sessions)
-      .set({ revokedAt: new Date() })
-      .where(and(eq(s.sessions.userId, row.userId), isNull(s.sessions.revokedAt)));
+    // Through the shared helper rather than a copy of its update: the inlined
+    // version left `revokeAllSessions` with no caller in `src/`, which is how
+    // an exported function and the thing it is supposed to do drift apart.
+    await revokeAllSessions(row.userId, tx);
 
     return row.userId;
   });

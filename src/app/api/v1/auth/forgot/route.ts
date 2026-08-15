@@ -19,7 +19,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { requestPasswordReset } from "@/server/services/auth-tokens";
-import { consume, enforce } from "@/server/auth/rate-limit";
+import { enforce } from "@/server/auth/rate-limit";
 import { toProblem } from "@/server/errors";
 import { clientIp, parseOrThrow } from "@/server/http";
 import { newId } from "@/server/db/ids";
@@ -58,22 +58,19 @@ export async function POST(req: NextRequest) {
     if (ip) await enforce("auth", `forgot:ip:${ip}`);
 
     /*
-      The per-address bucket limits *sending*, and never refuses the request.
+      No per-address bucket. The service throttles by interval instead.
 
-      It used to `enforce`, which threw a 429 once the bucket was empty. That
-      let anybody lock a chosen person out of the only self-service recovery
-      path there is, now that SSO is gone: thirty posts an hour at somebody's
-      address and their own reset attempts start bouncing. A reviewer did it in
-      31 requests.
+      A bucket keyed on the victim's address was a weapon either way round.
+      Enforced, thirty posts locked a real person out of recovery for an hour.
+      Consumed silently, they got "a reset link is on its way" and no link,
+      which is the same denial with the honesty removed. `requestPasswordReset`
+      now declines to issue only if it issued one in the last minute, which
+      always expires and leaves the reassuring answer true.
 
-      Consuming without throwing keeps the protection that matters, which is a
-      cap on how much mail one address can be sent, and drops the part that was
-      a weapon. When the bucket is empty we simply do not issue: any link
-      already sent stays valid for its full hour, and the caller cannot tell,
-      because the answer and the timing are the same either way.
+      The per-address volume cap that bucket was nominally for is the same
+      minute floor: one message per address per minute.
     */
-    const budget = await consume("email", `forgot:addr:${email}`);
-    if (budget.allowed) await requestPasswordReset(email);
+    await requestPasswordReset(email);
 
     await settle();
     return NextResponse.json(SAME_ANSWER, { headers: { "Cache-Control": "no-store" } });

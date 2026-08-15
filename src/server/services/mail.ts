@@ -93,6 +93,8 @@ export interface DrainReport {
   sent: number;
   retrying: number;
   failed: number;
+  /** Rows a dead process left behind that had no attempts left, moved to `failed`. */
+  reconciled: number;
   skipped: "no_transport" | null;
 }
 
@@ -104,13 +106,15 @@ export interface DrainReport {
  * log in machine noise. The thing that produced the message audited it.
  */
 export async function drainMail(options: { limit?: number } = {}): Promise<DrainReport> {
-  const report: DrainReport = { claimed: 0, sent: 0, retrying: 0, failed: 0, skipped: null };
+  const report: DrainReport = { claimed: 0, sent: 0, retrying: 0, failed: 0, reconciled: 0, skipped: null };
 
   // One question, one answer. `canSend` already accounts for the disk sink.
   if (!canSend()) {
     report.skipped = "no_transport";
     return report;
   }
+
+  report.reconciled = await reconcileStranded();
 
   const limit = options.limit ?? 50;
 
@@ -179,6 +183,39 @@ export async function drainMail(options: { limit?: number } = {}): Promise<Drain
   }
 
   return report;
+}
+
+/**
+ * Move abandoned, exhausted rows to `failed` so nothing is invisible.
+ *
+ * **This exists because the previous fix created the hole it closes.** Adding
+ * `attempts < MAX_ATTEMPTS` to the claim predicate correctly stopped a crash
+ * loop re-incrementing for ever, and in doing so made a row that died mid-send
+ * on its last attempt unclaimable: it sat in `sending`, was counted by neither
+ * `queued` nor `failed`, and an operator looking at the queue saw nothing
+ * wrong while a message was never going to be sent. Silent non-delivery is the
+ * outcome this whole design is arranged to avoid, and a fix to a smaller
+ * problem reintroduced it.
+ *
+ * The timeout still applies, so a row being sent right now is not touched.
+ */
+async function reconcileStranded(): Promise<number> {
+  const rows = await db
+    .update(s.outboundMessages)
+    .set({
+      state: "failed",
+      lastError: sql`coalesce(${s.outboundMessages.lastError}, 'abandoned mid-send with no attempts left')`,
+    })
+    .where(
+      and(
+        eq(s.outboundMessages.state, "sending"),
+        sql`${s.outboundMessages.attempts} >= ${MAX_ATTEMPTS}`,
+        sql`${s.outboundMessages.nextAttemptAt} <= now() - make_interval(secs => ${SENDING_TIMEOUT_SECONDS})`
+      )
+    )
+    .returning({ id: s.outboundMessages.id });
+
+  return rows.length;
 }
 
 /**
@@ -254,14 +291,25 @@ async function claimOne() {
   return rows[0] ?? null;
 }
 
-/** What is waiting, for the job's own reporting and for a health view. */
-export async function mailQueueDepth(): Promise<{ queued: number; failed: number }> {
-  const [row] = await db.execute<{ queued: string; failed: string }>(sql`
-    SELECT count(*) FILTER (WHERE state = 'queued')::text AS queued,
-           count(*) FILTER (WHERE state = 'failed')::text AS failed
+/**
+ * What is waiting, for the job's own reporting and for a health view.
+ *
+ * `sending` is counted too. It was omitted, so a row stuck in that state was
+ * absent from every number an operator could look at, which is the same as not
+ * existing right up until a client asks where their invoice is.
+ */
+export async function mailQueueDepth(): Promise<{ queued: number; sending: number; failed: number }> {
+  const [row] = await db.execute<{ queued: string; sending: string; failed: string }>(sql`
+    SELECT count(*) FILTER (WHERE state = 'queued')::text  AS queued,
+           count(*) FILTER (WHERE state = 'sending')::text AS sending,
+           count(*) FILTER (WHERE state = 'failed')::text  AS failed
       FROM outbound_messages
   `);
-  return { queued: Number(row?.queued ?? 0), failed: Number(row?.failed ?? 0) };
+  return {
+    queued: Number(row?.queued ?? 0),
+    sending: Number(row?.sending ?? 0),
+    failed: Number(row?.failed ?? 0),
+  };
 }
 
 /**

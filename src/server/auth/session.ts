@@ -19,6 +19,7 @@ import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import type { NextRequest } from "next/server";
 import { cookies } from "next/headers";
 import { db } from "@/server/db/client";
+import type { Db } from "@/server/db/client";
 import * as s from "@/server/db/schema";
 import { newId, randomToken } from "@/server/db/ids";
 import { env } from "@/server/env";
@@ -82,8 +83,18 @@ export async function revokeSession(token: string): Promise<void> {
     .where(eq(s.sessions.tokenHash, hashToken(token)));
 }
 
-export async function revokeAllSessions(userId: string): Promise<number> {
-  const rows = await db
+/**
+ * End every live session for one person.
+ *
+ * Takes an optional handle so it can run inside a caller's transaction. A
+ * password reset has to revoke in the same transaction that sets the password,
+ * or a failure between the two leaves the new password saved and a hostile
+ * session still signed in, which is the case a reset is usually for. Without
+ * this parameter the caller had to inline the same update, and the copy then
+ * had to be kept honest by hand.
+ */
+export async function revokeAllSessions(userId: string, handle: Db = db): Promise<number> {
+  const rows = await handle
     .update(s.sessions)
     .set({ revokedAt: new Date() })
     .where(and(eq(s.sessions.userId, userId), isNull(s.sessions.revokedAt)))

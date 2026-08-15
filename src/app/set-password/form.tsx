@@ -28,20 +28,31 @@ export function SetPasswordForm({ subject }: { subject: TokenSubject | null }) {
   const [token, setToken] = React.useState("");
 
   React.useEffect(() => {
-    const url = new URL(window.location.href);
-    const value = url.searchParams.get("token") ?? "";
-    setToken(value);
-
-    if (value) {
-      url.searchParams.delete("token");
-      window.history.replaceState(null, "", url.pathname + url.search + url.hash);
-    }
+    setToken(new URL(window.location.href).searchParams.get("token") ?? "");
   }, []);
+
   const [password, setPassword] = React.useState("");
   const [confirm, setConfirm] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
   const [busy, setBusy] = React.useState(false);
   const [done, setDone] = React.useState(false);
+
+  /*
+    Clear the token from the address bar only once it has been spent.
+
+    Doing it on mount looked tidier and broke refresh: the token left the URL,
+    so reloading the page asked the server about nothing and showed "that link
+    does not work" for a link that was fine. Waiting until the password is set
+    keeps refresh working, and by then the token is single-use and already used,
+    so what stays in history is inert.
+  */
+  React.useEffect(() => {
+    if (!done) return;
+    const url = new URL(window.location.href);
+    if (!url.searchParams.has("token")) return;
+    url.searchParams.delete("token");
+    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+  }, [done]);
 
   const invite = subject?.purpose === "invite";
 

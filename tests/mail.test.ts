@@ -18,11 +18,11 @@ vi.mock("@/server/mail/transport", async () => {
   };
 });
 
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { db } from "@/server/db/client";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
-import { drainMail, queueMail } from "@/server/services/mail";
+import { drainMail, mailQueueDepth, queueMail } from "@/server/services/mail";
 import { PermanentSendFailure, send } from "@/server/mail/transport";
 
 const sent = vi.mocked(send);
@@ -205,6 +205,40 @@ describe("drainMail", () => {
     const report = await drainMail();
     expect(report.claimed).toBe(0);
     expect(sent).not.toHaveBeenCalled();
+  });
+
+  it("rescues a row abandoned mid-send with no attempts left", async () => {
+    /*
+      The hole the previous fix opened. Refusing to claim an exhausted row was
+      right, and it made a row that died on its last attempt unclaimable: stuck
+      in `sending`, counted by neither `queued` nor `failed`, invisible to
+      anybody looking at the queue while the message was never going to be sent.
+    */
+    const id = await queue();
+    await db.execute(
+      sql`UPDATE outbound_messages SET state = 'sending', attempts = 6,
+              next_attempt_at = now() - interval '1 hour' WHERE id = ${id}`
+    );
+
+    const report = await drainMail();
+    expect(report.reconciled).toBe(1);
+
+    const row = await rowFor(id);
+    expect(row.state).toBe("failed");
+    expect(row.lastError).toMatch(/abandoned mid-send/);
+    expect((await mailQueueDepth()).failed).toBe(1);
+  });
+
+  it("does not disturb a row that is genuinely being sent right now", async () => {
+    const id = await queue();
+    await db
+      .update(s.outboundMessages)
+      .set({ state: "sending", attempts: 6 })
+      .where(eq(s.outboundMessages.id, id));
+
+    const report = await drainMail();
+    expect(report.reconciled, "inside the timeout, so it is still in flight").toBe(0);
+    expect((await rowFor(id)).state).toBe("sending");
   });
 
   it("respects the limit so one run cannot hold the process forever", async () => {

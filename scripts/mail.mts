@@ -84,8 +84,14 @@ try {
   } else {
     console.log(
       `Mail run: ${report.sent} sent, ${report.retrying} retrying, ${report.failed} failed, ` +
-        `${after.queued} still queued (${ms}ms)`
+        `${after.queued} still queued, ${after.sending} in flight (${ms}ms)`
     );
+    if (report.reconciled) {
+      console.warn(
+        `  ! ${report.reconciled} message(s) were abandoned mid-send with no attempts left and have been ` +
+          `marked failed. A process died while sending; they were invisible until now.`
+      );
+    }
   }
 
   // A message that has run out of attempts will not move again on its own, so

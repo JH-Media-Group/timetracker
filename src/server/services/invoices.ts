@@ -1279,31 +1279,35 @@ async function renderInvoiceMessage(
         ? { s: messages.reminderSubject, b: messages.reminderBody }
         : { s: messages.thanksSubject, b: messages.thanksBody };
 
-  const rendered = {
-    subject: subject ?? renderLabel(pick.s, tokens),
-    body: bodyText ?? renderLabel(pick.b, tokens),
-  };
-
   /*
-    Refuse to send a half-rendered message.
+    Check the TEMPLATE, before substitution, not the rendered output.
 
-    `renderLabel` leaves an unknown token exactly as written, which is right for
-    a label on a screen somebody can fix, and wrong for an email to a client:
-    the failure is silent and lands outside the building. A template offering a
-    token the sender cannot fill is a bug in one of the two, and this is where
-    it becomes visible instead of arriving in somebody's inbox.
+    Scanning the output was wrong in a way a reviewer found immediately: the
+    client's own name goes into the text, so an invoice for a company called
+    "{{ACME}}" was refused, and the error blamed a template that was fine. The
+    template is the only thing that can promise a token, so it is the only thing
+    worth checking, and checking it first means no amount of odd punctuation in
+    a client name, a note or an amount can trip it.
+
+    Caller-supplied text is not checked. That is somebody typing in the send
+    dialog, and their braces are their business; the template is the shared
+    thing that has to keep its promises.
   */
-  const unresolved = `${rendered.subject}
-${rendered.body}`.match(/\{\{\s*\w+\s*\}\}/g);
-  if (unresolved) {
+  const promised = [pick.s, pick.b].flatMap((t) => [...t.matchAll(/\{\{\s*(\w+)\s*\}\}/g)].map((m) => m[1]!));
+  const unfillable = [...new Set(promised)].filter((name) => !(name in tokens));
+
+  if (unfillable.length) {
     throw new AppError(
       "validation_failed",
-      `This message template uses ${[...new Set(unresolved)].join(", ")}, which nothing fills in. ` +
+      `This message template uses ${unfillable.map((n) => `{{${n}}}`).join(", ")}, which nothing fills in. ` +
         `Edit it in Invoices, Configure, Messages.`
     );
   }
 
-  return rendered;
+  return {
+    subject: subject ?? renderLabel(pick.s, tokens),
+    body: bodyText ?? renderLabel(pick.b, tokens),
+  };
 }
 
 export async function writeOff(ctx: Ctx, id: string): Promise<InvoiceDetail> {

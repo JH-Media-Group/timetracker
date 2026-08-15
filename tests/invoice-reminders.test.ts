@@ -253,6 +253,20 @@ describe("sendDueReminders", () => {
 
   });
 
+  it("does not refuse an invoice because the client's name has braces in it", async () => {
+    /*
+      The guard used to scan the rendered output, which contains the client's
+      own name, so a company called "{{ACME}}" had its invoice refused and the
+      error blamed a template that was perfectly fine. Only the template can
+      promise a token, so only the template is checked.
+    */
+    const { id, clientId } = await seedInvoice({ dueDaysAgo: 2 });
+    await db.update(s.clients).set({ name: "{{ACME}} Media {{ Ltd }}" }).where(eq(s.clients.id, clientId));
+
+    await expect(sendDueReminders(ctx, TODAY)).resolves.toMatchObject({ sent: 1 });
+    expect(await reminderCount(id)).toBe(1);
+  });
+
   it("formats money the same way the invoice screen does", async () => {
     // A local formatter drifted on currencies without two decimal places, so a
     // client could read one total in the email and another on the invoice.
