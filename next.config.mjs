@@ -38,6 +38,20 @@ const nextConfig = {
   // The version banner is free reconnaissance.
   poweredByHeader: false,
 
+  /*
+   * Emit `.next/standalone`: server.js plus only the node_modules actually
+   * reached, traced from the entry points.
+   *
+   * Required by the Dockerfile. Without it the runtime image has to carry the
+   * whole dependency tree, dev dependencies and all, which is both large and a
+   * larger attack surface than the thing needs.
+   *
+   * BACKEND_PRD §17.1 describes the multi-stage build that depends on this and
+   * the setting was never added, so the Dockerfile it describes could not have
+   * worked as written.
+   */
+  output: "standalone",
+
   async headers() {
     return [
       { source: "/:path*", headers: securityHeaders },

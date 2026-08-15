@@ -1,0 +1,36 @@
+# Keep the build context small and keep local secrets out of it.
+#
+# .env.local is the important line. It holds the real DATABASE_URL and
+# AUTH_SECRET for this machine, and anything copied into the context can end up
+# in an image layer whether or not the Dockerfile references it.
+
+.env
+.env.*
+!.env.example
+
+node_modules
+.next
+out
+dist
+ops
+
+.git
+.github
+.claude
+.atlassian-sync
+
+# Tests, fixtures and tooling: the image runs the app, it does not test it.
+tests
+playwright-report
+test-results
+coverage
+*.log
+
+# Local-only.
+docker/compose.dev.yml
+docs
+design system
+.vscode
+.idea
+Thumbs.db
+.DS_Store

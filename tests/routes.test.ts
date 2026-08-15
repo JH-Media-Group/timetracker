@@ -26,6 +26,22 @@ import { describe, expect, it } from "vitest";
 const API_ROOT = join(process.cwd(), "src/app/api/v1");
 
 /**
+ * Everything under `src/app/api`, versioned or not.
+ *
+ * This check used to scan only `v1`, which meant it did not cover the whole API
+ * surface while reading as though it did. `src/app/api/health` was outside it
+ * and had never been considered by the rule at all, and nothing would have
+ * stopped somebody adding `src/app/api/anything/route.ts` with no capability
+ * and no exemption. A guard with a hole in it is worse than no guard, because
+ * the passing test is taken as evidence.
+ *
+ * Ids stay relative to `v1` for routes inside it, so the exemption list below
+ * did not have to be rewritten, and relative to `api` for routes outside it.
+ * `assert no duplicate ids` below is what makes that safe.
+ */
+const API_PARENT = join(process.cwd(), "src/app/api");
+
+/**
  * Routes that deliberately declare no capability, and why.
  *
  * "Everyone" means every signed-in person may call it: their own record, their
@@ -85,6 +101,13 @@ const EXEMPT: Record<string, string> = {
     "review compared it to the code; the behaviour was right and the sentence " +
     "meant to make it checkable was not.)",
   "users/[id]/rates/[rateId]": "service: gated by rates:manage inside",
+
+  // Outside v1. These are infrastructure endpoints, not part of the API the
+  // app calls, and they are deliberately unauthenticated so that a proxy and a
+  // container runtime can poll them before anybody has a session.
+  health: "unauthenticated by design: the legacy combined probe, behaves as ready",
+  "health/live": "unauthenticated by design: process liveness, touches nothing",
+  "health/ready": "unauthenticated by design: readiness, reports only ok or degraded",
 };
 
 function routeFiles(dir: string, out: string[] = []): string[] {
@@ -96,9 +119,11 @@ function routeFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-const routes = routeFiles(API_ROOT).map((file) => {
+const routes = routeFiles(API_PARENT).map((file) => {
   const source = readFileSync(file, "utf8");
-  const id = relative(API_ROOT, file).split(sep).slice(0, -1).join("/");
+  const inV1 = !relative(API_ROOT, file).startsWith("..");
+  const root = inV1 ? API_ROOT : API_PARENT;
+  const id = relative(root, file).split(sep).slice(0, -1).join("/");
   return {
     id,
     source,
@@ -111,6 +136,16 @@ const routes = routeFiles(API_ROOT).map((file) => {
 describe("the API surface", () => {
   it("has routes to check", () => {
     expect(routes.length).toBeGreaterThan(50);
+  });
+
+  it("gives every route a unique id", () => {
+    // Ids come from two roots, so a v1 route sharing a name with a top-level
+    // one would silently take its exemption. Nothing does today; this is what
+    // keeps that true.
+    const seen = new Map<string, string[]>();
+    for (const r of routes) seen.set(r.id, [...(seen.get(r.id) ?? []), r.source.length.toString()]);
+    const dupes = [...seen.entries()].filter(([, v]) => v.length > 1).map(([k]) => k);
+    expect(dupes, `two routes share an id: ${dupes.join(", ")}`).toEqual([]);
   });
 
   it("gives every route a capability or a documented reason not to have one", () => {

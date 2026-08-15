@@ -134,3 +134,48 @@ describe("proxy configuration", () => {
     ).toMatch(/TRUST_PROXY:\s*z[\s\S]{0,120}?\.enum\(/);
   });
 });
+
+/**
+ * The build-phase escape hatch, and its limits.
+ *
+ * `src/server/env.ts` skips validation when NEXT_PHASE says a build is running,
+ * so the Docker image can be built without production secrets. That is a hole
+ * in a fail-fast guard, and a hole in a guard is exactly the kind of thing this
+ * repo keeps finding written in a comment and asserted nowhere. These are the
+ * assertions.
+ */
+describe("the build-phase escape hatch", () => {
+  const source = readFileSync(resolve(process.cwd(), "src/server/env.ts"), "utf8");
+
+  it("keys only off NEXT_PHASE, which only a build sets", () => {
+    const guard = /const IS_NEXT_BUILD = ([^;]+);/.exec(source);
+    expect(guard, "IS_NEXT_BUILD is gone or renamed; this test needs updating").not.toBeNull();
+    expect(guard![1]).toBe('process.env.NEXT_PHASE === "phase-production-build"');
+  });
+
+  it("never keys off NODE_ENV or CI, which a running server also sets", () => {
+    // The failure this prevents: widening the condition to "|| process.env.CI"
+    // or "|| NODE_ENV !== production" so a test run stops complaining, which
+    // would let a real server boot with a placeholder session secret and mint
+    // cookies anybody who read this file could forge.
+    const guardLine = /const IS_NEXT_BUILD = [^;]+;/.exec(source)?.[0] ?? "";
+    expect(guardLine).not.toMatch(/NODE_ENV|CI\b|VERCEL|DOCKER/);
+  });
+
+  it("substitutes only the two variables a build cannot supply", () => {
+    const block = /const BUILD_PLACEHOLDERS = \{[\s\S]*?\} as const;/.exec(source)?.[0] ?? "";
+    const keys = [...block.matchAll(/^\s{2}([A-Z_]+):/gm)].map((m) => m[1]);
+    expect(keys.sort()).toEqual(["DATABASE_URL", "SESSION_SECRET"]);
+  });
+
+  it("uses a placeholder session secret that could never be a real one", () => {
+    // Zero bytes, computed rather than written down. If somebody replaces this
+    // with real-looking entropy, a leaked build image becomes a leaked secret,
+    // and a literal would also trip the credential scan in repo-hygiene.
+    expect(source).toContain('SESSION_SECRET: Buffer.alloc(32).toString("base64")');
+    const block = /const BUILD_PLACEHOLDERS = \{[\s\S]*?\} as const;/.exec(source)?.[0] ?? "";
+    expect(block, "a base64 literal here would be indistinguishable from a real key").not.toMatch(
+      /SESSION_SECRET:\s*"[A-Za-z0-9+/]{20,}={0,2}"/
+    );
+  });
+});

@@ -1596,6 +1596,36 @@ The output is a markdown report committed to `docs/migration/reconciliation-{dat
 
 ## 17. Deployment
 
+### 17.0 What was actually built, and why it differs (TALLY-22)
+
+§17.1 to §17.4 were written before anything was deployed and describe a system that does not match what exists. The `Dockerfile` and the health endpoints are now real and verified; the rest of this section stays as the target. What follows is what is true.
+
+**There is no worker, because there is no queue.** §17.1 specifies a `worker` service running `worker.js` and §17.1's note explains a BullMQ eviction policy. BullMQ was never added; it is not a dependency. Scheduled work is a cron entry calling `node ops/recurring.mjs`, which takes a row lock and is safe to run twice. Deploying the compose file as written would start a container whose command does not exist.
+
+**The image is `node:22-bookworm-slim`, not `node:22-alpine`.** `@node-rs/argon2` is a native Rust binding shipped as prebuilt per-platform binaries. The glibc build is the well-trodden one, and password hashing is a poor thing to discover is broken in production.
+
+**One image, three commands**, so a job can never run against a different build than the one serving traffic:
+
+| Command | What it is |
+|---|---|
+| `node server.js` | the web process |
+| `node ops/migrate.mjs` | migrations, run before the new containers start |
+| `node ops/recurring.mjs` | the daily recurring-invoice job, from cron |
+
+The two ops scripts are TypeScript run through `tsx`, which is a devDependency, so they are compiled with esbuild during the build stage rather than shipping the dev toolchain into the runtime. `dotenv` is aliased to a stub in that bundle: it is CommonJS, its internal `require("fs")` becomes an unsupported dynamic require inside an ESM bundle, and compiling to CommonJS instead fails because both scripts use top-level await.
+
+**`output: "standalone"` was missing from `next.config.mjs`.** The multi-stage build §17.1 describes depends on it and could not have worked without it.
+
+**The build required production secrets, and no longer does.** `next build` imports every route module to collect page data, which reached `src/server/env.ts` and validated an environment a build has no business needing. That meant the image could not be built without a live `DATABASE_URL` and a real `SESSION_SECRET`, so CI would have had to hold production credentials in order to compile. Validation is now skipped when `NEXT_PHASE` says a build is running, and stays eager everywhere else so a misconfigured container still dies at boot. `tests/env.test.ts` asserts the escape hatch keys only off `NEXT_PHASE` and substitutes only those two variables.
+
+**Health is three endpoints, not one.** §17.4 polls `/api/health/live` and `/api/health/ready`; only `/api/health` existed, and it reported 503 when Postgres was unreachable. Used as a container healthcheck that restarts a web process which is itself fine, turning a database blip into a restart loop. They are now separate: `live` touches nothing and answers whether the process should be replaced, `ready` reaches Postgres and answers whether traffic should be sent. `/api/health` remains, behaving as `ready`. None of the three echoes the connection error any more, because they are unauthenticated and a Postgres error names the host, port and user.
+
+**Verified, not assumed.** The image builds clean (427 MB), and against the real database all three commands were run: the web process serves `/signin` with the per-request CSP nonce, `ready` returns 200 while `live` stays 200 even when the database is unreachable, migrations report `✓ migrated`, and the recurring job completes.
+
+**Still not built:** `compose.prod.yml`, the reverse-proxy configuration, backups with the restore verification §17 promises, the CI pipeline (there is no `.github/`), and Sentry. Backups are the gap that matters: an invoicing system of record without them is the risk, not the missing integrations.
+
+**§17.3 names the wrong email provider.** It lists `RESEND_API_KEY`; the credentials doc and TALLY-19 say SendGrid. One of them is wrong and it should be settled before the key is issued.
+
 ### 17.1 Compose
 
 ```yaml

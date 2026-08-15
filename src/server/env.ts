@@ -150,7 +150,50 @@ function read() {
   return parsed.data;
 }
 
-const parsed = read();
+/**
+ * `next build` imports every route module to collect page data, which reaches
+ * this file and validates an environment the build has no business needing.
+ *
+ * That is not a Docker inconvenience, it is a real defect: it means the image
+ * cannot be built without handing the builder a live DATABASE_URL and a real
+ * SESSION_SECRET. Build-time inputs and run-time secrets should not be the same
+ * set, and CI should never hold production credentials just to compile.
+ *
+ * `NEXT_PHASE` is set by Next itself and only during a build, so this cannot
+ * apply to a running server. **Validation stays eager everywhere else**, which
+ * is the property worth keeping: a misconfigured container dies at boot with a
+ * readable message rather than on the first request that happens to need the
+ * database. `tests/env.test.ts` asserts that the escape hatch is limited to the
+ * build phase.
+ *
+ * Nothing here queries the database at build time; every route is dynamic and
+ * server-rendered on demand, so no placeholder value is ever read for anything.
+ */
+const IS_NEXT_BUILD = process.env.NEXT_PHASE === "phase-production-build";
+
+/**
+ * Syntactically valid stand-ins, used only to satisfy the parse during a build.
+ *
+ * The session secret is computed rather than written as a literal, and that is
+ * deliberate on two counts. Thirty-two zero bytes cannot be mistaken for a real
+ * key by a person reading the file. And `tests/repo-hygiene.test.ts` scans every
+ * tracked file for `SESSION_SECRET` assigned a base64-looking string, which is
+ * exactly what a literal here would be: the scanner flagged the first version of
+ * this, correctly, since it has no way to know the bytes are all zero. Removing
+ * the literal keeps that scan strict instead of teaching it an exception.
+ */
+const BUILD_PLACEHOLDERS = {
+  DATABASE_URL: "postgres://build:build@127.0.0.1:5432/build",
+  SESSION_SECRET: Buffer.alloc(32).toString("base64"),
+} as const;
+
+const parsed = IS_NEXT_BUILD ? readForBuild() : read();
+
+function readForBuild() {
+  process.env.DATABASE_URL ||= BUILD_PLACEHOLDERS.DATABASE_URL;
+  process.env.SESSION_SECRET ||= BUILD_PLACEHOLDERS.SESSION_SECRET;
+  return read();
+}
 
 if (parsed.NODE_ENV === "production") {
   if (!parsed.GOOGLE_CLIENT_ID) {
