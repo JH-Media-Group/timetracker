@@ -13,8 +13,30 @@ import { Button, Field, Input } from "@/components/ui/primitives";
 import { Logo } from "@/components/app/logo";
 import type { TokenSubject } from "@/server/services/auth-tokens";
 
-export function SetPasswordForm({ token, subject }: { token: string; subject: TokenSubject | null }) {
+export function SetPasswordForm({ subject }: { subject: TokenSubject | null }) {
   const router = useRouter();
+
+  /*
+    The token comes from the address bar, not from a prop.
+
+    Passing it down from the server component serialised it into the RSC
+    payload, putting the credential in the response body as well as the URL.
+    Reading it here keeps it in the one place it already had to be, and the
+    effect below then removes it from the address bar so it does not sit in the
+    history entry or get handed to anything through a Referer.
+  */
+  const [token, setToken] = React.useState("");
+
+  React.useEffect(() => {
+    const url = new URL(window.location.href);
+    const value = url.searchParams.get("token") ?? "";
+    setToken(value);
+
+    if (value) {
+      url.searchParams.delete("token");
+      window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+    }
+  }, []);
   const [password, setPassword] = React.useState("");
   const [confirm, setConfirm] = React.useState("");
   const [error, setError] = React.useState<string | null>(null);
@@ -111,7 +133,7 @@ export function SetPasswordForm({ token, subject }: { token: string; subject: To
 
           {error && <p className="text-md text-danger">{error}</p>}
 
-          <Button type="submit" disabled={busy || !password} className="w-full">
+          <Button type="submit" disabled={busy || !password || !token} className="w-full">
             {busy ? "Saving" : "Set password"}
           </Button>
         </form>

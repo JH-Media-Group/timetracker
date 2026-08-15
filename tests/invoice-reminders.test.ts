@@ -15,16 +15,47 @@ vi.mock("@/server/mail/transport", async () => {
 });
 
 import { eq, sql } from "drizzle-orm";
+import { createCtx, systemActor } from "@/server/ctx";
 import { db } from "@/server/db/client";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
 import { ESCALATION_DAYS, sendDueReminders } from "@/server/services/invoice-reminders";
+import { formatMoney } from "@/lib/format";
+import { invalidateSettings } from "@/server/services/settings";
 
-const ctx = {
-  db,
-  audit: () => {},
-  actor: { userId: null as unknown as string, capabilities: new Set(["invoice:send"]) },
-} as never;
+/*
+  A real Ctx, not a hand-rolled one.
+
+  The first version of this file built `{ db, audit, actor }` by hand, which was
+  enough for the services as they were then and stopped being enough the moment
+  the reminder pass started using `withTransaction`: the buffers it flushes were
+  simply absent. A fake context that diverges from the real one makes a test
+  less faithful exactly where it matters, so this uses the same constructor the
+  application does.
+*/
+/*
+  Built against a real user row, because `invoice_messages.sent_by` is a real
+  foreign key. The default system actor uses a zero uuid, which no `users` row
+  has; in production `systemCtx()` resolves the account owner, so this mirrors
+  that rather than the placeholder.
+*/
+let ctx: ReturnType<typeof createCtx>;
+
+async function actorUser(): Promise<string> {
+  const [existing] = await db.select({ id: s.users.id }).from(s.users).limit(1);
+  if (existing) return existing.id;
+
+  const [profile] = await db.select().from(s.permissionProfiles).limit(1);
+  const id = newId();
+  await db.insert(s.users).values({
+    id,
+    email: `reminder-actor-${id}@example.test`,
+    firstName: "Job",
+    lastName: "Runner",
+    profileId: profile!.id,
+  });
+  return id;
+}
 
 const DAY = 86_400_000;
 const isoDaysAgo = (n: number) => new Date(Date.now() - n * DAY).toISOString().slice(0, 10);
@@ -69,6 +100,16 @@ const reminderCount = async (invoiceId: string) =>
   ).filter((m) => m.kind === "reminder").length;
 
 beforeEach(async () => {
+  ctx = createCtx({ actor: systemActor(await actorUser()), db });
+
+  /*
+    Undo the shared settings row here, not at the end of the test that changes
+    it. `settings` is a singleton, so a test that fails partway through leaves
+    its override in place and every later test in the file renders from it. That
+    happened: one genuine failure became six.
+  */
+  await db.update(s.settings).set({ invoiceMessages: {} });
+  invalidateSettings();
   await db.delete(s.outboundMessages);
   await db.delete(s.invoiceMessages);
   await db.delete(s.invoices);
@@ -99,12 +140,36 @@ describe("sendDueReminders", () => {
     expect(await reminderCount(id)).toBe(1);
   });
 
-  it("sends again only when the next escalation step is crossed", async () => {
-    const { id } = await seedInvoice({ dueDaysAgo: ESCALATION_DAYS[1] });
+  /**
+   * This test used to assert the bug.
+   *
+   * It said an invoice several steps late "catches up one per run", which
+   * sounded orderly and, with the mail job on a five-minute cadence, meant
+   * three emails to a client inside a quarter of an hour. A review pointed at
+   * it. Crossing several steps at once now sends exactly one message, and it is
+   * the one that fits: nobody needs the "one day late" note when they are a
+   * month past due.
+   */
+  it("sends one message when several steps are crossed at once", async () => {
+    const { id } = await seedInvoice({ dueDaysAgo: ESCALATION_DAYS[2] });
     await sendDueReminders(ctx, TODAY);
-    // Two steps passed at once, and it is behind by two, so it catches up one
-    // per run rather than sending two emails in the same minute.
     expect(await reminderCount(id)).toBe(1);
+
+    for (let i = 0; i < 5; i++) await sendDueReminders(ctx, TODAY);
+    expect(await reminderCount(id), "the job runs every five minutes").toBe(1);
+  });
+
+  it("sends again once a later step is genuinely reached", async () => {
+    const { id } = await seedInvoice({ dueDaysAgo: ESCALATION_DAYS[0] });
+    await sendDueReminders(ctx, TODAY);
+    expect(await reminderCount(id)).toBe(1);
+
+    // Time passes: the invoice is now past the second step.
+    await db
+      .update(s.invoices)
+      .set({ dueDate: isoDaysAgo(ESCALATION_DAYS[1]) })
+      .where(eq(s.invoices.id, id));
+
     await sendDueReminders(ctx, TODAY);
     expect(await reminderCount(id)).toBe(2);
     await sendDueReminders(ctx, TODAY);
@@ -114,7 +179,35 @@ describe("sendDueReminders", () => {
   it("stops after the last step, however late the invoice gets", async () => {
     const { id } = await seedInvoice({ dueDaysAgo: 400 });
     for (let i = 0; i < 10; i++) await sendDueReminders(ctx, TODAY);
-    expect(await reminderCount(id)).toBe(ESCALATION_DAYS.length);
+    expect(await reminderCount(id)).toBe(1);
+  });
+
+  it("two overlapping runs send one reminder, not two", async () => {
+    // The scan runs outside a transaction, so both runs can see the same
+    // invoice. The per-invoice lock and the level recheck under it are what
+    // stop both of them deciding to send.
+    const { id } = await seedInvoice({ dueDaysAgo: 3 });
+    await Promise.all([sendDueReminders(ctx, TODAY), sendDueReminders(ctx, TODAY)]);
+    expect(await reminderCount(id)).toBe(1);
+  });
+
+  it("does not spend an escalation step on an invoice it could not chase", async () => {
+    // Advancing the level without sending would mean that once a contact is
+    // added, the invoice is silently already "chased".
+    const { id, clientId } = await seedInvoice({ dueDaysAgo: 3, withContact: false });
+    await sendDueReminders(ctx, TODAY);
+    expect(await reminderCount(id)).toBe(0);
+
+    await db.insert(s.clientContacts).values({
+      id: newId(),
+      clientId,
+      firstName: "A",
+      lastName: "Contact",
+      email: `late-${clientId}@example.test`,
+    });
+
+    await sendDueReminders(ctx, TODAY);
+    expect(await reminderCount(id)).toBe(1);
   });
 
   it("still chases a partly paid invoice", async () => {
@@ -139,6 +232,35 @@ describe("sendDueReminders", () => {
     expect(report.sent).toBe(0);
     expect(report.skippedNoContact).toHaveLength(1);
     expect(await reminderCount(id)).toBe(0);
+  });
+
+  it("refuses to send a template with a token nothing fills", async () => {
+    /*
+      `renderLabel` leaves an unknown token exactly as written, which is fine on
+      a screen somebody can fix and wrong in an email to a client. The editor
+      used to offer `{{link}}` with nothing supplying it, so a template using it
+      sent a client that literal text.
+    */
+    await db
+      .update(s.settings)
+      .set({ invoiceMessages: { reminderBody: "Pay here: {{link}}", reminderSubject: "Invoice {{number}}" } });
+    // getSettings caches for five seconds, so a direct write needs this too.
+    invalidateSettings();
+
+    const { id } = await seedInvoice({ dueDaysAgo: 2 });
+    await expect(sendDueReminders(ctx, TODAY)).rejects.toThrow(/\{\{link\}\}, which nothing fills in/);
+    expect(await reminderCount(id)).toBe(0);
+
+  });
+
+  it("formats money the same way the invoice screen does", async () => {
+    // A local formatter drifted on currencies without two decimal places, so a
+    // client could read one total in the email and another on the invoice.
+    await seedInvoice({ dueDaysAgo: 2 });
+    await sendDueReminders(ctx, TODAY);
+
+    const [queued] = await db.select().from(s.outboundMessages);
+    expect(queued!.bodyText).toContain(formatMoney(100_00, "USD"));
   });
 
   it("queues real mail, not just a record of intent", async () => {

@@ -56,9 +56,6 @@ function transporter(): Transporter {
   return cached;
 }
 
-/** Whether mail can be sent at all. The drain checks this before claiming anything. */
-export const canSend = (): boolean => Boolean(env.smtp);
-
 /**
  * Where a development send goes instead of the internet.
  *
@@ -68,6 +65,21 @@ export const canSend = (): boolean => Boolean(env.smtp);
  * `.mail/` and the drain treats it as sent.
  */
 const toDisk = (): boolean => process.env.MAIL_TO_DISK === "1" || process.env.MAIL_TO_DISK === "true";
+
+/**
+ * Whether mail can leave this process at all, by any route.
+ *
+ * **Includes the disk sink**, and that omission was a real bug. `queueMail`
+ * asked this to decide between `queued` and `not_configured`, so with
+ * `MAIL_TO_DISK=1` and no `SMTP_URL` every message was written
+ * `not_configured`, the drain never claimed one (it only looks at `queued`),
+ * and the job cheerfully reported success having sent nothing. Worse, those
+ * rows stayed unsendable for ever, because configuring `SMTP_URL` later does
+ * not revisit them. And `scripts/mail.mts` was actively telling the operator to
+ * set the variable that did this.
+ */
+export const canSend = (): boolean => Boolean(env.smtp) || toDisk();
+
 
 export async function send(message: Outgoing): Promise<SendResult> {
   if (toDisk()) {

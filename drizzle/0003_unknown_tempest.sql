@@ -1,0 +1,1 @@
+ALTER TABLE "invoices" ADD COLUMN "reminder_level" integer DEFAULT 0 NOT NULL;

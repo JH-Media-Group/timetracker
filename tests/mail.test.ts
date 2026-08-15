@@ -147,6 +147,66 @@ describe("drainMail", () => {
     expect(rows.every((r) => r.state === "sent")).toBe(true);
   });
 
+  /**
+   * The case the original concurrency test missed.
+   *
+   * It queued fresh rows, whose `next_attempt_at` is now, and a fresh row can
+   * never satisfy the stuck-row predicate. Every row in a backlog, and every
+   * retry whose backoff has elapsed, is already overdue, and those used to
+   * become reclaimable the instant they were claimed.
+   */
+  it("does not let a second drain reclaim a row the first is still sending", async () => {
+    const id = await queue();
+    // Overdue by an hour, which is ordinary for a backlog or a late retry.
+    await db
+      .update(s.outboundMessages)
+      .set({ nextAttemptAt: new Date(Date.now() - 60 * 60_000) })
+      .where(eq(s.outboundMessages.id, id));
+
+    /*
+      The second drain has to start AFTER the first has claimed and committed,
+      and WHILE it is still sending. Running both with Promise.all does not
+      reproduce it: both reach the claim at once, and SKIP LOCKED already
+      handles that, which is why the first version of this test passed against
+      the bug it was written for.
+    */
+    let claimed!: () => void;
+    const hasClaimed = new Promise<void>((r) => (claimed = r));
+
+    sent.mockImplementation(async () => {
+      claimed();
+      await new Promise((r) => setTimeout(r, 200));
+      return { messageId: null };
+    });
+
+    const first = drainMail();
+    await hasClaimed;
+    const second = await drainMail();
+    const a = await first;
+
+    expect(second.claimed, "a row being sent must not be reclaimed").toBe(0);
+    expect(a.sent).toBe(1);
+    expect(sent).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops reclaiming a row whose attempts are spent, however it died", async () => {
+    // Only the catch path used to mark exhaustion, so a process dying inside
+    // send() reclaimed and re-incremented for ever, well past the cap.
+    const id = await queue();
+    await db
+      .update(s.outboundMessages)
+      .set({
+        state: "sending",
+        attempts: 6,
+        nextAttemptAt: new Date(Date.now() - 60 * 60_000),
+      })
+      .where(eq(s.outboundMessages.id, id));
+
+    const report = await drainMail();
+    expect(report.claimed).toBe(0);
+    expect(sent).not.toHaveBeenCalled();
+  });
+
   it("respects the limit so one run cannot hold the process forever", async () => {
     sent.mockResolvedValue({ messageId: null });
     for (let i = 0; i < 5; i++) await queue(`person${i}@example.invalid`);

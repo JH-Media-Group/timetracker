@@ -20,7 +20,7 @@
  * and looks sent is a payment nobody chases.
  */
 
-import { and, asc, eq, isNotNull, lte, or, sql } from "drizzle-orm";
+import { and, asc, eq, isNotNull, lt, or, sql } from "drizzle-orm";
 import type { Ctx } from "@/server/ctx";
 import { db } from "@/server/db/client";
 import * as s from "@/server/db/schema";
@@ -41,8 +41,11 @@ export interface QueuedMail {
 /** Attempts after which a message stops being retried. */
 const MAX_ATTEMPTS = 6;
 
+/** Kinds whose body carries a single-use credential in its link. */
+const AUTH_KINDS = new Set(["invite", "password_reset"]);
+
 /** A row claimed for longer than this is assumed abandoned by a dead run. */
-const SENDING_TIMEOUT_MS = 5 * 60_000;
+const SENDING_TIMEOUT_SECONDS = 5 * 60;
 
 /**
  * Exponential, in minutes: 1, 2, 4, 8, 16, 32.
@@ -50,8 +53,13 @@ const SENDING_TIMEOUT_MS = 5 * 60_000;
  * Long enough that a greylist has cleared by the second attempt and an outage
  * is not hammered, short enough that a password reset still arrives while the
  * person is waiting for it.
+ *
+ * Takes the number of attempts already made, so the first failure (attempts=1)
+ * waits one minute. The comment used to say 1,2,4,... while the code produced
+ * 2,4,8,... because it was handed the post-increment count; the sequence a
+ * reviewer measured did not match the sequence written directly above it.
  */
-const backoffMs = (attempts: number) => Math.min(2 ** attempts, 32) * 60_000;
+const backoffSeconds = (attemptsMade: number) => Math.min(2 ** (attemptsMade - 1), 32) * 60;
 
 /**
  * Queue a message. Call inside the transaction that produced it.
@@ -98,7 +106,8 @@ export interface DrainReport {
 export async function drainMail(options: { limit?: number } = {}): Promise<DrainReport> {
   const report: DrainReport = { claimed: 0, sent: 0, retrying: 0, failed: 0, skipped: null };
 
-  if (!canSend() && process.env.MAIL_TO_DISK !== "1") {
+  // One question, one answer. `canSend` already accounts for the disk sink.
+  if (!canSend()) {
     report.skipped = "no_transport";
     return report;
   }
@@ -120,7 +129,27 @@ export async function drainMail(options: { limit?: number } = {}): Promise<Drain
 
       await db
         .update(s.outboundMessages)
-        .set({ state: "sent", sentAt: new Date(), providerMessageId: result.messageId, lastError: null })
+        .set({
+          state: "sent",
+          sentAt: sql`now()`,
+          providerMessageId: result.messageId,
+          lastError: null,
+          /*
+            A single-use credential must not outlive its use.
+
+            `body_text` holds the rendered email, and for an invite or a reset
+            that includes the set-password link, token and all. A reviewer
+            proved the point by hashing a stored token and matching it to
+            `auth_tokens.token_hash` in the next table along: the raw token sat
+            beside its own digest, which makes the hashing this file argues for
+            worth nothing to anybody holding a backup. Redacted on the way to a
+            terminal state, so the exposure lasts one drain interval rather than
+            for ever.
+          */
+          bodyText: AUTH_KINDS.has(claimed.kind)
+            ? sql`regexp_replace(${s.outboundMessages.bodyText}, 'token=[A-Za-z0-9_-]+', 'token=[redacted]', 'g')`
+            : undefined,
+        })
         .where(eq(s.outboundMessages.id, claimed.id));
       report.sent++;
     } catch (e) {
@@ -134,7 +163,13 @@ export async function drainMail(options: { limit?: number } = {}): Promise<Drain
         .set({
           state: exhausted ? "failed" : "queued",
           lastError: detail.slice(0, 1000),
-          nextAttemptAt: new Date(Date.now() + backoffMs(attempts)),
+          nextAttemptAt: sql`now() + make_interval(secs => ${backoffSeconds(attempts)})`,
+          // Same reasoning as the success path: a message that will never be
+          // sent must not keep a live token in the table.
+          bodyText:
+            exhausted && AUTH_KINDS.has(claimed.kind)
+              ? sql`regexp_replace(${s.outboundMessages.bodyText}, 'token=[A-Za-z0-9_-]+', 'token=[redacted]', 'g')`
+              : undefined,
         })
         .where(eq(s.outboundMessages.id, claimed.id));
 
@@ -153,6 +188,22 @@ export async function drainMail(options: { limit?: number } = {}): Promise<Drain
  * anything the first is holding rather than blocking on it. `attempts` is
  * incremented here rather than on failure, so a row that kills the process
  * still counts its try and cannot loop forever.
+ *
+ * TWO THINGS A REVIEW BROKE, BOTH ABOUT ROWS THAT ARE ALREADY LATE
+ *
+ * The claim used to leave `next_attempt_at` alone. For a row queued a moment
+ * ago that is harmless, which is exactly what the concurrency test used and
+ * why it passed. For any row already more than `SENDING_TIMEOUT_MS` overdue,
+ * which is every row in a backlog and every retry whose backoff has elapsed,
+ * the row satisfied the stuck-row predicate the instant it was claimed: a
+ * second drain could pick it up and send it while the first was still sending.
+ * The claim now stamps `next_attempt_at`, so the timeout is measured from the
+ * claim rather than from whenever the row became due.
+ *
+ * And the claim did not look at `attempts`. Only the catch path marked a row
+ * exhausted, so a process dying inside `send()` reclaimed and re-incremented
+ * for ever, well past the cap. The predicate now refuses a row that has spent
+ * its attempts, whatever state it is in.
  */
 async function claimOne() {
   const rows = await db.transaction(async (tx) => {
@@ -161,13 +212,25 @@ async function claimOne() {
       .from(s.outboundMessages)
       .where(
         and(
-          lte(s.outboundMessages.nextAttemptAt, new Date()),
+          /*
+            Both sides of every time comparison come from the database clock.
+
+            `next_attempt_at` is written by Postgres, and this used to compare it
+            against `new Date()` from Node. Two clocks, and any skew between the
+            app container and the database makes a due row look not yet due. It
+            showed up first as a test that failed about one run in five, which is
+            the polite version of the same bug: on a droplet whose clock has
+            drifted a second, mail simply sits there.
+          */
+          sql`${s.outboundMessages.nextAttemptAt} <= now()`,
+          lt(s.outboundMessages.attempts, MAX_ATTEMPTS),
           or(
             eq(s.outboundMessages.state, "queued"),
-            // Reclaim a row a dead run left behind.
+            // Reclaim a row a dead run left behind. Measured from the claim,
+            // which is what `next_attempt_at` records once a row is `sending`.
             and(
               eq(s.outboundMessages.state, "sending"),
-              lte(s.outboundMessages.nextAttemptAt, new Date(Date.now() - SENDING_TIMEOUT_MS))
+              sql`${s.outboundMessages.nextAttemptAt} <= now() - make_interval(secs => ${SENDING_TIMEOUT_SECONDS})`
             )
           )
         )
@@ -180,7 +243,9 @@ async function claimOne() {
 
     await tx
       .update(s.outboundMessages)
-      .set({ state: "sending", attempts: row.attempts + 1 })
+      // `next_attempt_at` becomes the claim time, so the stuck-row timeout runs
+      // from now rather than from whenever this row first became due.
+      .set({ state: "sending", attempts: row.attempts + 1, nextAttemptAt: sql`now()` })
       .where(eq(s.outboundMessages.id, row.id));
 
     return [row];
@@ -199,17 +264,19 @@ export async function mailQueueDepth(): Promise<{ queued: number; failed: number
   return { queued: Number(row?.queued ?? 0), failed: Number(row?.failed ?? 0) };
 }
 
-/** Messages about one thing, newest first. Used by the invoice timeline. */
+/**
+ * Messages about one thing, oldest first, for a timeline.
+ *
+ * Its comment used to say "newest first" while it ordered ascending, which a
+ * reviewer noticed precisely because nothing calls it: an unused function whose
+ * documentation disagrees with its code is a trap set for whoever calls it
+ * first. Kept because the invoice timeline wants it, with the comment now
+ * matching what it does.
+ */
 export async function messagesFor(relatedType: string, relatedId: string) {
   return db
     .select()
     .from(s.outboundMessages)
-    .where(
-      and(
-        eq(s.outboundMessages.relatedType, relatedType),
-        eq(s.outboundMessages.relatedId, relatedId),
-        isNotNull(s.outboundMessages.id)
-      )
-    )
+    .where(and(eq(s.outboundMessages.relatedType, relatedType), eq(s.outboundMessages.relatedId, relatedId)))
     .orderBy(asc(s.outboundMessages.createdAt));
 }

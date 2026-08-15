@@ -32,14 +32,13 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { and, eq, gt, isNull } from "drizzle-orm";
-import type { Ctx } from "@/server/ctx";
+import { createCtx, systemActor, withTransaction, type Ctx } from "@/server/ctx";
 import { db } from "@/server/db/client";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
-import { AppError, notFound } from "@/server/errors";
 import { assertCan } from "@/server/ctx";
+import { AppError, notFound } from "@/server/errors";
 import { hashPassword, checkPasswordPolicy } from "@/server/auth/password";
-import { revokeAllSessions } from "@/server/auth/session";
 import { queueMail } from "@/server/services/mail";
 import { env } from "@/server/env";
 
@@ -202,8 +201,19 @@ export async function requestPasswordReset(email: string): Promise<void> {
   // caller cannot tell the difference, which is the point.
   if (!user || user.archivedAt || user.email.endsWith("@imported.invalid")) return;
 
-  const ctx = { db, audit: () => {}, actor: { userId: user.id } } as unknown as Ctx;
-  await issue(ctx, user, "password_reset", null);
+  /*
+    A real context, and one transaction.
+
+    This used to fabricate a Ctx with `as unknown as Ctx` and run the three
+    writes (supersede, insert, queue) as separate autocommits. Two concurrent
+    requests could both supersede before either inserted, leaving two live reset
+    links, which is exactly what superseding exists to prevent. A failure
+    between the insert and the queue left a valid token nobody was ever sent.
+    The cast was the tell: it hid both the missing transaction and a context
+    with none of the fields `issue` would need the moment it grew.
+  */
+  const ctx = createCtx({ actor: systemActor(user.id), db });
+  await withTransaction(ctx, (tx) => issue(tx, user, "password_reset", null));
 }
 
 export interface TokenSubject {
@@ -249,8 +259,32 @@ export async function consumeToken(token: string, password: string): Promise<{ u
   const problem = checkPasswordPolicy(password);
   if (problem) throw new AppError("validation_failed", problem.message);
 
-  const hash = await hashPassword(password);
   const tokenHash = digest(token);
+
+  /*
+    Check the token before hashing the password, not after.
+
+    argon2id here is deliberately expensive: 19 MiB and two passes, about 25ms.
+    Doing that first meant anybody could spend it by posting a junk token, and a
+    reviewer measured exactly that. It matters more than it sounds, because with
+    `TRUST_PROXY=0` (which is what `.env.example` ships) `clientIp()` returns
+    null and this route's rate limit does not apply at all. A cheap sha256
+    lookup now decides whether the expensive work is worth doing.
+
+    The lookup is repeated inside the transaction below under a row lock. This
+    one is a filter, not the decision.
+  */
+  const [candidate] = await db
+    .select({ id: s.authTokens.id })
+    .from(s.authTokens)
+    .where(and(eq(s.authTokens.tokenHash, tokenHash), isNull(s.authTokens.usedAt), gt(s.authTokens.expiresAt, new Date())))
+    .limit(1);
+
+  if (!candidate) {
+    throw new AppError("validation_failed", "That link has expired or has already been used. Ask for another.");
+  }
+
+  const hash = await hashPassword(password);
 
   const userId = await db.transaction(async (tx) => {
     /*
@@ -279,9 +313,20 @@ export async function consumeToken(token: string, password: string): Promise<{ u
       .set({ passwordHash: hash, updatedAt: new Date() })
       .where(eq(s.users.id, row.userId));
 
+    /*
+      Inside the transaction, not after it.
+
+      Revoking afterwards meant a failure between the commit and the revoke left
+      the password changed and every hostile session still live, which is the
+      one case a reset is usually for. Either all three happen or none do.
+    */
+    await tx
+      .update(s.sessions)
+      .set({ revokedAt: new Date() })
+      .where(and(eq(s.sessions.userId, row.userId), isNull(s.sessions.revokedAt)));
+
     return row.userId;
   });
 
-  await revokeAllSessions(userId);
   return { userId };
 }

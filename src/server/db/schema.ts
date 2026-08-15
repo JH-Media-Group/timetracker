@@ -499,6 +499,20 @@ export const invoices = pgTable(
     showTotalHours: boolean().notNull().default(false),
     payToken: text().unique(),
     sentAt: ts(),
+
+    /**
+     * The highest overdue escalation step this invoice has been chased about.
+     *
+     * Counting the reminders already sent looks equivalent and is not. An
+     * invoice discovered when it is already thirty days late has crossed three
+     * steps at once, and a count-based rule sends one per run to catch up: with
+     * the mail job on a five-minute cadence that is three emails to a client
+     * inside a quarter of an hour. Recording the level instead means crossing
+     * straight to the last step sends exactly one message, which is also the
+     * only one worth sending. Nobody needs the "one day late" note when they
+     * are a month past due.
+     */
+    reminderLevel: integer().notNull().default(0),
     paidAt: ts(),
     closedAt: ts(),
     recurringInvoiceId: uuid().references(() => recurringInvoices.id, { onDelete: "set null" }),

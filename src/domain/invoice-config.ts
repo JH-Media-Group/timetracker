@@ -260,7 +260,16 @@ export const INVOICE_MESSAGES: InvoiceMessages = {
     "Hello {{client}},\n\nThank you for your payment of {{amount}} against invoice {{number}}.\n\n{{company}}",
 };
 
-/** The tokens the message editor offers, so the screen and the sender agree. */
+/**
+ * The tokens the message editor offers, so the screen and the sender agree.
+ *
+ * `link` was here and nothing filled it, so a template using it sent a client
+ * the literal text `{{link}}`. It points at a client-facing pay page that does
+ * not exist yet (BACKEND_PRD 3.5, Stripe). Put it back in the same change that
+ * builds that page, not before: the editor offering a token is a promise that
+ * the sender will substitute it, and `renderInvoiceMessage` now refuses to send
+ * a message with anything left unsubstituted.
+ */
 export const MESSAGE_TOKENS = [
   "number",
   "client",
@@ -268,7 +277,6 @@ export const MESSAGE_TOKENS = [
   "amount",
   "dueDate",
   "issueDate",
-  "link",
 ] as const;
 
 export function resolveMessages(stored: unknown): InvoiceMessages {

@@ -11,15 +11,26 @@
  * The rule the notifications epic sets out applies here too: an alert that
  * repeats gets filtered, and then the one that mattered gets filtered with it.
  *
- * The escalation steps below are days past due. A reminder is sent when an
- * invoice has crossed a step it has not been reminded about yet, which is
- * decided by counting the reminders already recorded against it rather than by
- * storing a separate cursor. `invoice_messages` is already the record of what
- * was sent; a second place to look would be a second place to be wrong.
+ * The escalation steps below are days past due. A reminder goes out when an
+ * invoice crosses into a step above the one it was last chased about, which
+ * `invoices.reminder_level` records.
+ *
+ * **Counting the reminders already sent was the first attempt and it was
+ * wrong.** An invoice discovered when it is already thirty days late has
+ * crossed three steps at once, and a count-based rule sends one per run to
+ * catch up. The mail job runs every five minutes, so that is three emails to a
+ * client inside a quarter of an hour, which is worse than sending nothing. A
+ * review caught it. Recording the level means crossing straight to the last
+ * step sends exactly one message, and it is the right one: nobody needs the
+ * "one day late" note when they are a month past due.
+ *
+ * Each invoice is handled in its own transaction with the row locked, so two
+ * overlapping runs cannot both decide to send. The lock is per invoice rather
+ * than around the whole pass: a long run must not hold every invoice.
  */
 
-import { and, count, eq, isNull, lte, sql } from "drizzle-orm";
-import type { Ctx } from "@/server/ctx";
+import { and, eq, isNull, lte, sql } from "drizzle-orm";
+import { withTransaction, type Ctx } from "@/server/ctx";
 import * as s from "@/server/db/schema";
 import { recordMessage } from "./invoices";
 
@@ -76,41 +87,53 @@ export async function sendDueReminders(ctx: Ctx, today: string): Promise<Reminde
     const daysLate = Math.floor(
       (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${invoice.dueDate}T00:00:00Z`)) / 86_400_000
     );
-
-    /*
-      How many steps this invoice has passed, against how many it has been told
-      about. Equal means it is up to date; nothing to do.
-
-      Counted with its own query rather than a correlated subquery in the select
-      above. The subquery came back undefined, `Number(undefined)` is NaN, and
-      every comparison against NaN is false, so the guard silently never fired
-      and a day-late invoice was mailed once per run. There are only ever a
-      handful of overdue invoices, so a query each is the cheaper mistake.
-    */
-    const [counted] = await ctx.db
-      .select({ n: count() })
-      .from(s.invoiceMessages)
-      .where(and(eq(s.invoiceMessages.invoiceId, invoice.id), eq(s.invoiceMessages.kind, "reminder")));
-
     const stepsPassed = ESCALATION_DAYS.filter((d) => daysLate >= d).length;
-    if (stepsPassed <= (counted?.n ?? 0)) continue;
+    if (stepsPassed === 0) continue;
 
-    const contacts = await ctx.db
-      .select({ email: s.clientContacts.email })
-      .from(s.clientContacts)
-      .where(and(eq(s.clientContacts.clientId, invoice.clientId), isNull(s.clientContacts.archivedAt)));
+    const outcome = await withTransaction(ctx, async (tx) => {
+      /*
+        Re-read the level under a lock.
 
-    const to = contacts.map((c) => c.email).filter((e): e is string => Boolean(e));
+        The scan above ran outside any transaction, so by now another run may
+        have chased this invoice. Deciding on the value read here, rather than
+        on the one from the scan, is what makes two overlapping jobs safe.
+      */
+      const [locked] = await tx.db
+        .select({ level: s.invoices.reminderLevel })
+        .from(s.invoices)
+        .where(eq(s.invoices.id, invoice.id))
+        .limit(1)
+        .for("update");
 
-    if (!to.length) {
-      // Silence here would be the worst outcome: an invoice nobody is chasing
-      // and nobody knows nobody is chasing. The job reports these.
-      report.skippedNoContact.push(invoice.number ?? invoice.id);
-      continue;
-    }
+      if (!locked || stepsPassed <= locked.level) return "up_to_date" as const;
 
-    await recordMessage(ctx, invoice.id, "reminder", { to });
-    report.sent++;
+      const contacts = await tx.db
+        .select({ email: s.clientContacts.email })
+        .from(s.clientContacts)
+        .where(and(eq(s.clientContacts.clientId, invoice.clientId), isNull(s.clientContacts.archivedAt)));
+
+      const to = contacts.map((c) => c.email).filter((e): e is string => Boolean(e));
+
+      if (!to.length) {
+        // Silence here would be the worst outcome: an invoice nobody is chasing
+        // and nobody knows nobody is chasing. The job reports these. The level
+        // is deliberately not advanced, so it is chased the moment a contact
+        // exists rather than having quietly used up its escalation.
+        return "no_contact" as const;
+      }
+
+      // Straight to the step actually reached, not one per run.
+      await tx.db
+        .update(s.invoices)
+        .set({ reminderLevel: stepsPassed })
+        .where(eq(s.invoices.id, invoice.id));
+
+      await recordMessage(tx, invoice.id, "reminder", { to });
+      return "sent" as const;
+    });
+
+    if (outcome === "sent") report.sent++;
+    else if (outcome === "no_contact") report.skippedNoContact.push(invoice.number ?? invoice.id);
   }
 
   return report;

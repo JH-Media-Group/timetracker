@@ -31,6 +31,7 @@ import { roundGroup } from "@/domain/rounding";
 import { getSettings, roundingRule } from "./settings";
 import { queueMail } from "./mail";
 import { renderLabel, resolveMessages } from "@/domain/invoice-config";
+import { formatMoney } from "@/lib/format";
 import { resolveDefaults } from "@/domain/invoice-config";
 import { defaultItemTypeId } from "./item-types";
 import { ledgerDelta, moveBalance } from "./retainers";
@@ -1245,6 +1246,7 @@ async function renderInvoiceMessage(
   const [row] = await ctx.db
     .select({
       number: s.invoices.number,
+      issueDate: s.invoices.issueDate,
       dueDate: s.invoices.dueDate,
       totalCents: s.invoices.totalCents,
       currency: s.invoices.currency,
@@ -1261,8 +1263,13 @@ async function renderInvoiceMessage(
     number: row.number ?? "",
     client: row.client,
     company: settings.companyName,
-    amount: formatMoneyCents(Number(row.totalCents), row.currency),
+    // The same formatter every screen uses. A local one drifted on currencies
+    // with other than two decimal places: a yen total read 1,235 in the email
+    // and 1,234.56 on the invoice, and a client seeing two different numbers is
+    // the whole failure.
+    amount: formatMoney(Number(row.totalCents), row.currency),
     dueDate: row.dueDate ?? "",
+    issueDate: row.issueDate ?? "",
   };
 
   const pick =
@@ -1272,15 +1279,31 @@ async function renderInvoiceMessage(
         ? { s: messages.reminderSubject, b: messages.reminderBody }
         : { s: messages.thanksSubject, b: messages.thanksBody };
 
-  return {
+  const rendered = {
     subject: subject ?? renderLabel(pick.s, tokens),
     body: bodyText ?? renderLabel(pick.b, tokens),
   };
-}
 
-/** Money for an email, where there is no component to do it. */
-function formatMoneyCents(cents: number, currency: string): string {
-  return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(cents / 100);
+  /*
+    Refuse to send a half-rendered message.
+
+    `renderLabel` leaves an unknown token exactly as written, which is right for
+    a label on a screen somebody can fix, and wrong for an email to a client:
+    the failure is silent and lands outside the building. A template offering a
+    token the sender cannot fill is a bug in one of the two, and this is where
+    it becomes visible instead of arriving in somebody's inbox.
+  */
+  const unresolved = `${rendered.subject}
+${rendered.body}`.match(/\{\{\s*\w+\s*\}\}/g);
+  if (unresolved) {
+    throw new AppError(
+      "validation_failed",
+      `This message template uses ${[...new Set(unresolved)].join(", ")}, which nothing fills in. ` +
+        `Edit it in Invoices, Configure, Messages.`
+    );
+  }
+
+  return rendered;
 }
 
 export async function writeOff(ctx: Ctx, id: string): Promise<InvoiceDetail> {
