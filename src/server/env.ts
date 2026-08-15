@@ -10,6 +10,7 @@
  * `if (process.env.SMTP_URL && process.env.SMTP_URL !== "")`.
  */
 
+import { randomBytes } from "node:crypto";
 import { z } from "zod";
 
 /**
@@ -48,6 +49,16 @@ const PLACEHOLDER_SECRETS = new Set([
   "changeme",
   "secret",
   "test-session-secret-at-least-16-chars",
+  /*
+    The build placeholder, thirty-two zero bytes.
+
+    A review proved this was a working production secret: the poisoned getter
+    below only fires when this module substituted the value itself, so an
+    operator who copied the constant out of this file, or a deploy template
+    filled in from it, got a server that signed happily with a key printed in
+    the source. The getter cannot see that path. This set can.
+  */
+  Buffer.alloc(32).toString("base64"),
 ]);
 
 /** How many bytes a secret actually carries, treating base64 as base64. */
@@ -117,13 +128,13 @@ const schema = z.object({
 
 const blank = (v: string | undefined) => (v == null || v.trim() === "" ? undefined : v);
 
-function read() {
+function read(fallbacks: Partial<Record<"DATABASE_URL" | "SESSION_SECRET", string>> = {}) {
   const raw = {
     NODE_ENV: blank(process.env.NODE_ENV),
-    DATABASE_URL: blank(process.env.DATABASE_URL),
+    DATABASE_URL: blank(process.env.DATABASE_URL) ?? fallbacks.DATABASE_URL,
     TEST_DATABASE_URL: blank(process.env.TEST_DATABASE_URL),
     REDIS_URL: blank(process.env.REDIS_URL),
-    SESSION_SECRET: blank(process.env.SESSION_SECRET),
+    SESSION_SECRET: blank(process.env.SESSION_SECRET) ?? fallbacks.SESSION_SECRET,
     APP_URL: blank(process.env.APP_URL),
     GOOGLE_CLIENT_ID: blank(process.env.GOOGLE_CLIENT_ID),
     GOOGLE_CLIENT_SECRET: blank(process.env.GOOGLE_CLIENT_SECRET),
@@ -159,17 +170,36 @@ function read() {
  * SESSION_SECRET. Build-time inputs and run-time secrets should not be the same
  * set, and CI should never hold production credentials just to compile.
  *
- * `NEXT_PHASE` is set by Next itself and only during a build, so this cannot
- * apply to a running server. **Validation stays eager everywhere else**, which
- * is the property worth keeping: a misconfigured container dies at boot with a
- * readable message rather than on the first request that happens to need the
- * database. `tests/env.test.ts` asserts that the escape hatch is limited to the
- * build phase.
+ * **An earlier version of this comment claimed `NEXT_PHASE` is set by Next
+ * itself and therefore "cannot apply to a running server". That was false, and
+ * an adversarial review proved it by booting the production image with
+ * `NEXT_PHASE=phase-production-build` and no `SESSION_SECRET` at all.** It came
+ * up healthy and served `/signin`, signing sessions with thirty-two zero bytes,
+ * a value printed in this very file. `NEXT_PHASE` is an ordinary environment
+ * variable: a compose file, a Dockerfile `ENV`, an inherited shell or a CI
+ * manifest can set it, and `NODE_ENV=production` did nothing to stop it.
  *
- * Nothing here queries the database at build time; every route is dynamic and
- * server-rendered on demand, so no placeholder value is ever read for anything.
+ * Detecting the build reliably is not possible from inside the process, so the
+ * defence is not detection. **The placeholder is poisoned instead**: it
+ * satisfies the schema so the build can compile, and `env.SESSION_SECRET` throws
+ * if anything ever reads it. Build-time code never does, which is why the build
+ * still works. A spoofed server therefore refuses every request that touches a
+ * session rather than accepting forged ones, which is the failure we can live
+ * with.
+ *
+ * Validation stays eager everywhere else, so a misconfigured container still
+ * dies at boot rather than on the first request that needs the database.
  */
 const IS_NEXT_BUILD = process.env.NEXT_PHASE === "phase-production-build";
+
+/**
+ * Whether the values below are stand-ins rather than real configuration.
+ *
+ * Declared before `parsed` because `readForBuild` sets them and the function is
+ * hoisted; a `let` initialised afterwards would be reset to false.
+ */
+let sessionSecretIsPlaceholder = false;
+let databaseUrlIsPlaceholder = false;
 
 /**
  * Syntactically valid stand-ins, used only to satisfy the parse during a build.
@@ -184,15 +214,39 @@ const IS_NEXT_BUILD = process.env.NEXT_PHASE === "phase-production-build";
  */
 const BUILD_PLACEHOLDERS = {
   DATABASE_URL: "postgres://build:build@127.0.0.1:5432/build",
-  SESSION_SECRET: Buffer.alloc(32).toString("base64"),
+
+  /*
+    Generated per build, not a constant, and that is the whole point.
+
+    This was thirty-two zero bytes written into the file. A review copied it out
+    and used it as a real SESSION_SECRET against the production image, and
+    signed in: the poisoned getter only fires when this module substituted the
+    value, so a value an operator pastes in looks entirely legitimate.
+
+    Adding that constant to PLACEHOLDER_SECRETS closed the paste path and broke
+    the build, because the stand-in supplied here is then refused by the schema
+    it exists to satisfy. Generating it removes the conflict and the paste path
+    together: there is no longer anything in this file to copy, the value never
+    leaves the build process, and the getter below still refuses to hand it to
+    anything that asks.
+  */
+  SESSION_SECRET: randomBytes(32).toString("base64"),
 } as const;
 
 const parsed = IS_NEXT_BUILD ? readForBuild() : read();
 
+/**
+ * Parse with stand-ins filling only what the environment does not supply.
+ *
+ * The stand-ins are passed in rather than written into `process.env`. Mutating
+ * the process environment at import time changes global state for everything
+ * else in the process, including any child it spawns, which is a large side
+ * effect for a module whose job is to read configuration.
+ */
 function readForBuild() {
-  process.env.DATABASE_URL ||= BUILD_PLACEHOLDERS.DATABASE_URL;
-  process.env.SESSION_SECRET ||= BUILD_PLACEHOLDERS.SESSION_SECRET;
-  return read();
+  databaseUrlIsPlaceholder = !blank(process.env.DATABASE_URL);
+  sessionSecretIsPlaceholder = !blank(process.env.SESSION_SECRET);
+  return read(BUILD_PLACEHOLDERS);
 }
 
 if (parsed.NODE_ENV === "production") {
@@ -217,6 +271,34 @@ if (parsed.NODE_ENV === "production") {
 
 export const env = {
   ...parsed,
+
+  /**
+   * The session secret, unless it is the build placeholder, in which case
+   * reading it is a bug and this throws.
+   *
+   * This is the whole defence against a spoofed `NEXT_PHASE`. The build needs a
+   * value that satisfies the schema; nothing at build time needs a value that
+   * works. So the placeholder parses and then refuses to be used.
+   *
+   * A getter rather than a check at the call site, because there is one consumer
+   * today (`auth/session.ts` HMACs with it) and the next one will not remember.
+   */
+  get SESSION_SECRET(): string {
+    if (sessionSecretIsPlaceholder) {
+      throw new Error(
+        "SESSION_SECRET is the build placeholder, which is thirty-two zero bytes and public in the source.\n" +
+          "This process was started with NEXT_PHASE=phase-production-build but no real SESSION_SECRET, so it\n" +
+          "would be signing sessions with a key anybody who has read the repository can reproduce.\n\n" +
+          "Unset NEXT_PHASE, or set a real SESSION_SECRET:\n" +
+          '  node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'base64\'))"'
+      );
+    }
+    return parsed.SESSION_SECRET;
+  },
+
+  /** True when anything above is a stand-in. Never true in a correctly run server. */
+  usingBuildPlaceholders: sessionSecretIsPlaceholder || databaseUrlIsPlaceholder,
+
   isProduction: parsed.NODE_ENV === "production",
   isTest: parsed.NODE_ENV === "test",
 

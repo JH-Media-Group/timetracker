@@ -10,6 +10,11 @@
 
 node_modules
 .next
+
+# Host build state. With incremental:true, RUN pnpm typecheck can replay the
+# host cache instead of checking fresh, which quietly weakens the line above it.
+tsconfig.tsbuildinfo
+*.tsbuildinfo
 out
 dist
 ops

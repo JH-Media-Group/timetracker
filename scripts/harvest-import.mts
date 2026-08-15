@@ -85,6 +85,9 @@ if (BILLED_BEFORE && !/^\d{4}-\d{2}-\d{2}$/.test(BILLED_BEFORE)) {
   throw new Error(`--billed-before wants YYYY-MM-DD, got ${JSON.stringify(BILLED_BEFORE)}`);
 }
 let preCutoff = 0;
+
+/** Rows where the overnight reading does not reproduce the recorded Hours. */
+const overnightRejected: string[] = [];
 const billedExternally = (r: Row, spentOn: string): boolean => {
   if (yes(r["Invoiced?"])) return true;
   if (BILLED_BEFORE && spentOn < BILLED_BEFORE) {
@@ -551,13 +554,35 @@ async function main() {
        * corrupt: they are overnight sessions, and the export writes both times
        * as wall clocks against the start day.
        *
-       * This is not a guess. Reading them as overnight reproduces the recorded
-       * `Hours` to within a rounding error on **all 355**, which is the check
-       * that turns an interpretation into a fact.
+       * This is not a guess, and the assertion below is what makes that true.
+       *
+       * The comment used to claim the overnight reading "reproduces the recorded
+       * `Hours` on all 355, which is the check that turns an interpretation into
+       * a fact", and there was no such check: the shift was unconditional. A
+       * review caught it. The claim held for this export, but a future one with
+       * a genuinely transposed pair of times would have been shifted into a
+       * silent twenty-hour span instead of being reported.
+       *
+       * `durationSeconds` always comes from `Hours`, never from the clock, so a
+       * bad shift corrupts the displayed span rather than the money. That is
+       * still worth refusing to do quietly.
        */
       if (startedAt && endedAt && endedAt < startedAt) {
-        endedAt = new Date(endedAt.getTime() + 86_400_000);
-        bump("overnight sessions, end moved to the next day");
+        const shifted = new Date(endedAt.getTime() + 86_400_000);
+        const impliedSeconds = (shifted.getTime() - startedAt.getTime()) / 1000;
+        const recordedSeconds = Math.round(num(r.Hours) * 3600);
+
+        // A minute of slack: Harvest stores times to the minute and Hours to two
+        // decimal places, so they disagree by seconds even on clean rows.
+        if (Math.abs(impliedSeconds - recordedSeconds) > 60) {
+          overnightRejected.push(
+            `${r.Date} ${r["First Name"]} ${r["Last Name"]}: ${r["Started At"]} to ${r["Ended At"]} ` +
+              `implies ${(impliedSeconds / 3600).toFixed(2)}h overnight but Hours says ${num(r.Hours).toFixed(2)}h`
+          );
+        } else {
+          endedAt = shifted;
+          bump("overnight sessions, end moved to the next day");
+        }
       }
 
       entries.push({
@@ -627,6 +652,13 @@ async function main() {
       bump("expenses");
     }
     if (skippedExpenses) notes.push(`${skippedExpenses} expense rows skipped: a reference could not be resolved.`);
+    if (overnightRejected.length) {
+      notes.push(
+        `${overnightRejected.length} rows end before they start AND do not read as overnight. ` +
+          `Their times were left as found, which the clock-ordered constraint will refuse. First few: ` +
+          overnightRejected.slice(0, 5).join(" | ")
+      );
+    }
     if (preCutoff)
       notes.push(
         `${preCutoff} records before ${BILLED_BEFORE} were marked billed externally by --billed-before, on top of the ones Harvest marks invoiced. They are locked and out of the uninvoiced report.`

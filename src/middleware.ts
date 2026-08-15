@@ -63,12 +63,25 @@ function withPolicy(req: NextRequest, response?: NextResponse): NextResponse {
 }
 
 /** Paths that never need a session. */
-const PUBLIC_PREFIXES = ["/signin", "/api/v1/auth/", "/api/health", "/_next", "/favicon", "/icon", "/tally-"];
+const PUBLIC_PREFIXES = ["/signin", "/api/v1/auth/", "/_next", "/favicon", "/tally-"];
+
+/**
+ * The health probes, matched exactly rather than by prefix.
+ *
+ * `/api/health` used to sit in the prefix list, which exempted every path
+ * beginning with those eleven characters. `/api/health-admin` would have been
+ * unauthenticated, and so would `/api/healthcheck-internal`, and nothing would
+ * have said so. Found by an adversarial review; the same trap is why
+ * `/api/v1/auth/` carries a trailing slash.
+ *
+ * `/icon` came out of the prefix list for the same reason and is matched here.
+ */
+const PUBLIC_EXACT = new Set(["/api/health", "/api/health/live", "/api/health/ready", "/icon.svg"]);
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
-  if (PUBLIC_PREFIXES.some((p) => pathname.startsWith(p))) {
+  if (PUBLIC_EXACT.has(pathname) || PUBLIC_PREFIXES.some((p) => pathname.startsWith(p))) {
     // Somebody already signed in has no use for the sign-in page.
     if (pathname.startsWith("/signin") && req.cookies.has(SESSION_COOKIE)) {
       return withPolicy(req, NextResponse.redirect(new URL("/timesheet", req.url)));

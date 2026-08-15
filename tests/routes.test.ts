@@ -42,6 +42,16 @@ const API_ROOT = join(process.cwd(), "src/app/api/v1");
 const API_PARENT = join(process.cwd(), "src/app/api");
 
 /**
+ * The whole app, because a route handler is legal anywhere under it.
+ *
+ * A review put `src/app/sneaky/route.ts` in the tree with no capability and no
+ * exemption, and every test passed. Scanning only `src/app/api` covered the
+ * paths we happen to use, while the comment above claimed "the whole API
+ * surface". The surface is `src/app/**\/route.*`.
+ */
+const APP_ROOT = join(process.cwd(), "src/app");
+
+/**
  * Routes that deliberately declare no capability, and why.
  *
  * "Everyone" means every signed-in person may call it: their own record, their
@@ -114,16 +124,35 @@ function routeFiles(dir: string, out: string[] = []): string[] {
   for (const name of readdirSync(dir)) {
     const full = join(dir, name);
     if (statSync(full).isDirectory()) routeFiles(full, out);
-    else if (name === "route.ts") out.push(full);
+    // Next resolves a route from any of its pageExtensions, not just .ts. A
+    // review added `route.tsx` with a bare, ungated GET and the suite passed.
+    else if (/^route\.(ts|tsx|mts|js|jsx|mjs)$/.test(name)) out.push(full);
   }
   return out;
 }
 
-const routes = routeFiles(API_PARENT).map((file) => {
-  const source = readFileSync(file, "utf8");
+const routes = routeFiles(APP_ROOT).map((file) => {
+  const raw = readFileSync(file, "utf8");
+
+  /*
+    Comments are stripped before looking for a capability.
+
+    The pattern matched the word inside a doc block, so a route whose only
+    mention of a capability was a sentence describing one satisfied the guard. A
+    review proved it with a GET handler that had no gate and a tidy comment: all
+    nine tests passed.
+  */
+  const source = raw.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
+
   const inV1 = !relative(API_ROOT, file).startsWith("..");
-  const root = inV1 ? API_ROOT : API_PARENT;
-  const id = relative(root, file).split(sep).slice(0, -1).join("/");
+  const inApi = !relative(API_PARENT, file).startsWith("..");
+  // Ids stay relative to v1 for routes inside it, so the exemption list below
+  // did not have to be rewritten. Anything outside `api` is prefixed so it can
+  // never quietly borrow an exemption meant for an API route.
+  const root = inV1 ? API_ROOT : inApi ? API_PARENT : APP_ROOT;
+  const rel = relative(root, file).split(sep).slice(0, -1).join("/");
+  const id = inV1 || inApi ? rel : `app/${rel}`;
+
   return {
     id,
     source,
@@ -191,5 +220,48 @@ describe("the API surface", () => {
         !r.id.startsWith("auth/")
     );
     expect(raw.map((r) => r.id), "mutating routes that bypass route()").toEqual([]);
+  });
+});
+
+/**
+ * The middleware's public-path list.
+ *
+ * An adversarial review found `/api/health` sitting in a `startsWith` list,
+ * which exempted every path beginning with those characters: `/api/health-admin`
+ * would have been served without a session, and nothing said so. Verified at the
+ * time by requesting it against a production build and getting 200; it is 401
+ * now.
+ *
+ * A prefix that is not a directory is the trap, so this asserts the shape rather
+ * than the specific paths.
+ */
+describe("middleware public paths", () => {
+  const source = readFileSync(join(process.cwd(), "src/middleware.ts"), "utf8");
+  const strings = (block: string) => [...block.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+  const prefixes = strings(/const PUBLIC_PREFIXES = \[[^\]]*\]/.exec(source)?.[0] ?? "");
+  const exact = strings(/const PUBLIC_EXACT = new Set\(\[[^\]]*\]\)/.exec(source)?.[0] ?? "");
+  const list = (name: string) => (name === "PUBLIC_PREFIXES" ? prefixes : exact);
+
+  it("has both lists", () => {
+    expect(list("PUBLIC_PREFIXES").length).toBeGreaterThan(0);
+    expect(list("PUBLIC_EXACT").length).toBeGreaterThan(0);
+  });
+
+  it("never prefix-matches an API path that is not a directory", () => {
+    // "/api/v1/auth/" is fine: the trailing slash bounds it to children.
+    // "/api/health" is not: it also matches "/api/healthwhatever".
+    const unbounded = list("PUBLIC_PREFIXES").filter((p) => p.startsWith("/api") && !p.endsWith("/"));
+    expect(
+      unbounded,
+      "these exempt every path that merely starts with them. Add a trailing slash, or move them to PUBLIC_EXACT:\n  " +
+        unbounded.join("\n  ")
+    ).toEqual([]);
+  });
+
+  it("exempts the health probes exactly, so a sibling path is not exempt too", () => {
+    const exact = list("PUBLIC_EXACT");
+    expect(exact).toContain("/api/health");
+    expect(exact).toContain("/api/health/live");
+    expect(exact).toContain("/api/health/ready");
   });
 });

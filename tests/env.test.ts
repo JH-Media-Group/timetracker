@@ -153,13 +153,64 @@ describe("the build-phase escape hatch", () => {
     expect(guard![1]).toBe('process.env.NEXT_PHASE === "phase-production-build"');
   });
 
-  it("never keys off NODE_ENV or CI, which a running server also sets", () => {
-    // The failure this prevents: widening the condition to "|| process.env.CI"
-    // or "|| NODE_ENV !== production" so a test run stops complaining, which
-    // would let a real server boot with a placeholder session secret and mint
-    // cookies anybody who read this file could forge.
-    const guardLine = /const IS_NEXT_BUILD = [^;]+;/.exec(source)?.[0] ?? "";
-    expect(guardLine).not.toMatch(/NODE_ENV|CI\b|VERCEL|DOCKER/);
+  /**
+   * This test used to assert the opposite, and was wrong in a way that mattered.
+   *
+   * It forbade the guard from mentioning NODE_ENV, on the theory that widening
+   * the condition would weaken it. That reasoning assumed `NEXT_PHASE` could
+   * only be set by Next, which is false: it is an ordinary environment variable,
+   * and an adversarial review booted the production image with it set and no
+   * SESSION_SECRET, getting a healthy server signing sessions with zero bytes.
+   *
+   * NODE_ENV cannot be the discriminator either, because `next build` runs with
+   * NODE_ENV=production too. So the defence is not the condition at all, it is
+   * that the placeholder throws when read. That is what these now assert.
+   */
+  it("poisons the placeholder secret rather than trusting the condition", () => {
+    expect(source).toMatch(/get SESSION_SECRET\(\)/);
+    expect(source).toContain("sessionSecretIsPlaceholder");
+    const getter = /get SESSION_SECRET\(\): string \{[\s\S]*?\n  \},/.exec(source)?.[0] ?? "";
+    expect(getter, "the getter must throw, not warn and continue").toMatch(/throw new Error/);
+  });
+
+  it("only marks the placeholder when the environment supplied nothing", () => {
+    const block = /function readForBuild\(\) \{[\s\S]*?\n\}/.exec(source)?.[0] ?? "";
+    expect(block).toMatch(/sessionSecretIsPlaceholder = !blank\(process\.env\.SESSION_SECRET\)/);
+    expect(block).toMatch(/databaseUrlIsPlaceholder = !blank\(process\.env\.DATABASE_URL\)/);
+  });
+
+  it("does not mutate process.env", () => {
+    // Writing the stand-ins into the process environment changes global state
+    // for everything in the process and any child it spawns, and it made the
+    // credential scan flag `SESSION_SECRET = <identifier>` besides. The
+    // stand-ins are passed into read() as fallbacks instead.
+    const block = /function readForBuild\(\) \{[\s\S]*?\n\}/.exec(source)?.[0] ?? "";
+    expect(block).not.toMatch(/process\.env\.\w+\s*=[^=]/);
+    expect(block).toMatch(/return read\(BUILD_PLACEHOLDERS\)/);
+  });
+
+  /**
+   * The hole the poisoned getter cannot see.
+   *
+   * A review signed in against the production image using the placeholder as a
+   * real `SESSION_SECRET`, copied straight out of this file. The getter only
+   * fires when env.ts substituted the value itself, so an operator pasting the
+   * constant, or a deploy template filled in from it, got a working server
+   * signing with a key published in the source.
+   */
+  it("refuses the build placeholder when it arrives as a real secret", async () => {
+    expect(source).toMatch(/PLACEHOLDER_SECRETS = new Set\(\[[\s\S]*Buffer\.alloc\(32\)\.toString\("base64"\)[\s\S]*\]\)/);
+
+    // And prove it, rather than trusting that the set is consulted.
+    const zero = Buffer.alloc(32).toString("base64");
+    const { execFileSync } = await import("node:child_process");
+    const run = () =>
+      execFileSync(process.execPath, ["-e", 'import("./src/server/env.ts").catch(e=>{console.error(e.message);process.exit(3)})'], {
+        env: { ...process.env, SESSION_SECRET: zero, DATABASE_URL: "postgres://x:y@127.0.0.1:5432/z", NEXT_PHASE: "" },
+        encoding: "utf8",
+        stdio: "pipe",
+      });
+    expect(run, "the zero-byte placeholder must be rejected as a session secret").toThrow();
   });
 
   it("substitutes only the two variables a build cannot supply", () => {
@@ -168,14 +219,26 @@ describe("the build-phase escape hatch", () => {
     expect(keys.sort()).toEqual(["DATABASE_URL", "SESSION_SECRET"]);
   });
 
-  it("uses a placeholder session secret that could never be a real one", () => {
-    // Zero bytes, computed rather than written down. If somebody replaces this
-    // with real-looking entropy, a leaked build image becomes a leaked secret,
-    // and a literal would also trip the credential scan in repo-hygiene.
-    expect(source).toContain('SESSION_SECRET: Buffer.alloc(32).toString("base64")');
+  /**
+   * The stand-in is generated, not written down, and that is load bearing.
+   *
+   * It used to be thirty-two zero bytes as a constant. A review copied the
+   * constant out of this file, passed it as a real `SESSION_SECRET` to the
+   * production image, and signed in: the poisoned getter only fires when env.ts
+   * substituted the value itself, so a pasted one looks entirely legitimate.
+   * Generating it per build removes the thing there was to copy.
+   */
+  it("generates the build stand-in rather than hard-coding one to copy", () => {
     const block = /const BUILD_PLACEHOLDERS = \{[\s\S]*?\} as const;/.exec(source)?.[0] ?? "";
-    expect(block, "a base64 literal here would be indistinguishable from a real key").not.toMatch(
+    expect(block).toMatch(/SESSION_SECRET:\s*randomBytes\(32\)\.toString\("base64"\)/);
+    expect(block, "a literal here is a key an operator can paste into a deployment").not.toMatch(
       /SESSION_SECRET:\s*"[A-Za-z0-9+/]{20,}={0,2}"/
     );
+  });
+
+  it("still refuses the old zero-byte constant, which is in the git history", () => {
+    // Removing it from the file does not remove it from every clone and every
+    // published page that quoted it.
+    expect(source).toMatch(/PLACEHOLDER_SECRETS = new Set\(\[[\s\S]*Buffer\.alloc\(32\)\.toString\("base64"\)[\s\S]*\]\)/);
   });
 });

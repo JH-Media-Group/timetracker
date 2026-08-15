@@ -17,6 +17,30 @@ import { NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 
 export async function GET() {
+  /*
+    One exception to "touches nothing": a process running on build placeholders
+    is not alive in any useful sense and must not be reported as healthy.
+
+    A review started this image with `NEXT_PHASE=phase-production-build` and no
+    `SESSION_SECRET`. Validation was skipped, the container came up, Docker
+    marked it healthy, and it served a sign-in page that could never sign anyone
+    in. Throwing from `register()` did not stop it: Next fails the boot on an
+    error while *loading* the instrumentation module, but a throw from inside
+    `register()` did not take the server down.
+
+    So the state is reported where an orchestrator will actually read it. This
+    is also the only consumer of `usingBuildPlaceholders`, which a review
+    correctly called an orphan when nothing read it.
+  */
+  const { env } = await import("@/server/env");
+
+  if (env.usingBuildPlaceholders) {
+    return NextResponse.json(
+      { data: { status: "misconfigured", detail: "running on build placeholders; unset NEXT_PHASE" } },
+      { status: 503, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+
   return NextResponse.json(
     { data: { status: "ok" } },
     { headers: { "Cache-Control": "no-store" } }

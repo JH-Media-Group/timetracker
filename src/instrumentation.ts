@@ -23,7 +23,38 @@
 
 import { proxyConfigurationError } from "@/server/proxy-check";
 
-export function register(): void {
+export async function register(): Promise<void> {
   const problem = proxyConfigurationError(process.env.NODE_ENV, process.env.TRUST_PROXY);
   if (problem) throw new Error(problem);
+
+  /*
+    Validate the environment here, at boot, because nothing else does.
+
+    "A misconfigured container dies at boot with a readable message" was written
+    in env.ts and was not true. `output: "standalone"` loads route modules
+    lazily, so env.ts is not reached until the first request that happens to
+    need it. A review started this image with no DATABASE_URL and no
+    SESSION_SECRET: it stayed up, Docker marked it healthy, and it served a
+    fully rendered sign-in page to anybody who asked. The only sign of trouble
+    was a stack trace per request in stderr.
+
+    A deploy that rolls back on a failing readiness check never sees a problem
+    it cannot detect, so this has to fail loudly at start.
+
+    The import is dynamic and inside the runtime guard because this file is also
+    compiled for the edge runtime, where env.ts cannot be bundled: it reaches
+    dotenv. That is the constraint the comment at the top of this file records,
+    and a static import would break the build rather than the boot.
+  */
+  if (process.env.NEXT_RUNTIME === "nodejs") {
+    const { env } = await import("@/server/env");
+
+    if (env.usingBuildPlaceholders) {
+      throw new Error(
+        "This process is running on build placeholders, not real configuration.\n" +
+          "NEXT_PHASE is set to phase-production-build, which suppresses environment validation.\n" +
+          "That is a build-time setting. Unset it, and supply DATABASE_URL and SESSION_SECRET."
+      );
+    }
+  }
 }
