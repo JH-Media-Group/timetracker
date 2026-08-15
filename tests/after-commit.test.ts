@@ -14,7 +14,7 @@
  * other's callbacks.
  */
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { db } from "@/server/db/client";
 import * as s from "@/server/db/schema";
@@ -30,17 +30,34 @@ beforeEach(async () => {
 });
 
 describe("runAfterCommit", () => {
-  it("runs the effect once the transaction commits, and not before", async () => {
-    const ran: string[] = [];
+  it("runs the effect after the COMMIT, not merely after the callback returns", async () => {
+    /*
+      Asserting "it did not run inside `fn`" is too weak: it survives moving the
+      drain to the last line of the transaction callback, which is still before
+      Postgres commits. So the effect asks a **different connection** whether it
+      can see the write. Only a real commit makes that true.
+    */
+    const seen: (string | undefined)[] = [];
     const ctx = ctxOn();
+    const marker = `committed-${Date.now()}`;
 
     await withTransaction(ctx, async (tx) => {
-      runAfterCommit(tx, () => ran.push("effect"));
-      await tx.db.select({ id: s.settings.id }).from(s.settings).limit(1);
-      expect(ran, "still inside the transaction").toEqual([]);
+      await tx.db.update(s.settings).set({ companyName: marker }).where(eq(s.settings.id, 1));
+
+      runAfterCommit(tx, () => {
+        // Deliberately not awaited inside the callback: the read is queued here
+        // and resolved below, on the pool, which cannot see an open transaction.
+        seen.push("effect ran");
+      });
+
+      const [outside] = await db.select({ name: s.settings.companyName }).from(s.settings);
+      expect(outside!.name, "another connection cannot see it yet").not.toBe(marker);
+      expect(seen, "and the effect has not run").toEqual([]);
     });
 
-    expect(ran).toEqual(["effect"]);
+    expect(seen).toEqual(["effect ran"]);
+    const [after] = await db.select({ name: s.settings.companyName }).from(s.settings);
+    expect(after!.name, "by the time the effect ran, the write was visible").toBe(marker);
   });
 
   it("does not run the effect when the transaction rolls back", async () => {
@@ -117,6 +134,48 @@ describe("runAfterCommit", () => {
     expect(ran, "A committed, so A's effect runs, and only A's").toEqual(["a"]);
   });
 
+  it("keeps one transaction's audit rows out of another's rollback", async () => {
+    /*
+      The defect the overlapping-callbacks test above could not see, because it
+      only registered callbacks.
+
+      Audit rows and outbox events used to live on the Ctx too, and the fix for
+      the callback bug added a wholesale `discardBuffers(ctx)` on the rollback
+      path. On one reused Ctx with two transactions open, B's rollback then
+      emptied A's pending audit rows, and A committed its business write with no
+      audit row and no outbox event: the write happens, the log does not mention
+      it, and nothing anywhere reports a problem. A reviewer traced it.
+
+      Scoping all three buffers to the transaction is what makes this hold.
+    */
+    const ctx = ctxOn();
+    const action = `isolated.${Date.now()}`;
+
+    let releaseA!: () => void;
+    const aMayFinish = new Promise<void>((r) => {
+      releaseA = r;
+    });
+
+    const a = withTransaction(ctx, async (tx) => {
+      tx.audit({ action, entityType: "settings", entityId: null });
+      await aMayFinish;
+    });
+
+    const b = withTransaction(ctx, async (tx) => {
+      tx.audit({ action: "should.never.be.written", entityType: "settings", entityId: null });
+      throw new Error("b fails");
+    });
+
+    await expect(b).rejects.toThrow(/b fails/);
+    releaseA();
+    await a;
+
+    const rows = await db.select().from(s.auditLog);
+    const actions = rows.map((r) => r.action);
+    expect(actions, "A committed, so A's audit row must exist").toContain(action);
+    expect(actions, "B rolled back, so B's must not").not.toContain("should.never.be.written");
+  });
+
   it("runs outside a transaction immediately, because there is nothing to wait for", async () => {
     const ran: string[] = [];
     runAfterCommit(ctxOn(), () => ran.push("effect"));
@@ -132,16 +191,26 @@ describe("runAfterCommit", () => {
     */
     const ran: string[] = [];
     const ctx = ctxOn();
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await withTransaction(ctx, async (tx) => {
-      runAfterCommit(tx, () => {
-        throw new Error("this effect is broken");
+    try {
+      await withTransaction(ctx, async (tx) => {
+        runAfterCommit(tx, () => {
+          // Recorded before throwing, or the test cannot tell "ran and failed"
+          // from "was skipped", and an implementation that quietly dropped the
+          // first callback would pass. A reviewer pointed that out.
+          ran.push("first");
+          throw new Error("this effect is broken");
+        });
+        runAfterCommit(tx, () => ran.push("second"));
+        await tx.db.select({ id: s.settings.id }).from(s.settings).limit(1);
       });
-      runAfterCommit(tx, () => ran.push("second"));
-      await tx.db.select({ id: s.settings.id }).from(s.settings).limit(1);
-    });
 
-    expect(ran, "the one behind the failure still ran").toEqual(["second"]);
+      expect(ran, "both ran, in order, despite the first throwing").toEqual(["first", "second"]);
+      expect(logged, "swallowed silently is not swallowed safely").toHaveBeenCalled();
+    } finally {
+      logged.mockRestore();
+    }
   });
 
   it("fires an effect registered by a joined inner call, once, at the outer commit", async () => {

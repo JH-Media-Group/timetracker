@@ -73,6 +73,15 @@ export interface Ctx {
     events: DomainEvent[];
     /** Side effects outside the database, run only if the transaction commits. */
     afterCommit: (() => void)[];
+    /**
+     * Set once this transaction has written the settings row.
+     *
+     * Read by `getSettings`, which must stop serving the process cache to a
+     * caller that can see further than the cache can. Only that caller: making
+     * every transactional read bypass the cache cost `copyDay` two extra
+     * queries per copied entry, for transactions that never touch settings.
+     */
+    settingsWritten?: boolean;
   };
 }
 
@@ -88,6 +97,7 @@ export function createCtx(opts: {
     audits: [] as AuditInput[],
     events: [] as DomainEvent[],
     afterCommit: [] as (() => void)[],
+    settingsWritten: false,
   };
   return {
     actor: opts.actor,
@@ -169,61 +179,58 @@ export async function withTransaction<T>(ctx: Ctx, fn: (tx: Ctx) => Promise<T>):
   }
 
   /*
-    The queue belongs to this transaction, not to the Ctx.
+    **All three buffers belong to the transaction, not to the Ctx.**
 
-    It used to live on `ctx._buffers`, which a Ctx keeps for its whole life. A
-    job that reuses one Ctx across a loop, or two overlapping
-    `withTransaction(ctx, ...)` calls on the same Ctx, therefore shared one
-    array: whichever transaction finished first drained or discarded the other
-    one's callbacks. A rollback in B could throw away A's committed effect, and
-    a commit in A could fire B's effect while B was still open and might yet
-    roll back. A reviewer found it, and it is the same class of mistake as the
-    settings cache this machinery exists to fix.
+    A Ctx keeps its buffers for its whole life, and a job reuses one Ctx across
+    a loop, so anything held there is shared by every transaction that Ctx ever
+    opens. That produced the same bug twice, one layer apart:
 
-    A local array, captured by the `inner` Ctx, is scoped to exactly the work
-    that can commit. Joined calls receive `inner` and so push into the same
-    scope, which is what nesting should mean. `audits` and `events` are still
-    shared by reference, because those are flushed inside the transaction and
-    the outermost caller owns them.
+      - the after-commit queue: whichever transaction finished first drained or
+        discarded the other's callbacks.
+      - the audit and event arrays: a rollback in B emptied A's pending rows, so
+        A committed its business write with no audit row and no outbox event,
+        and a throw before `flush` left rows behind that the *next* iteration
+        committed, recording the creation of an invoice that does not exist.
+
+    The second one was introduced by the fix for the first, whose comment said
+    audits and events were "still shared by reference, because those are flushed
+    inside the transaction and the outermost caller owns them". Two concurrent
+    outermost calls are both owners, which is exactly the case that breaks.
+
+    So the transaction gets its own buffers, and **`audit` and `emit` are rebound
+    to them**. That last part is not optional: those are closures created in
+    `createCtx` over the original arrays, so replacing `_buffers` alone would
+    leave every `ctx.audit(...)` call writing to the Ctx's arrays while `flush`
+    read the transaction's, and auditing would silently stop.
+
+    Nothing needs discarding now. A transaction that fails takes its buffers out
+    of scope with it, which is what "nothing escapes a rollback" should have
+    meant all along. A joined call receives `inner`, so it writes into the
+    transaction whose fate it shares.
   */
-  const scope: (() => void)[] = [];
+  const buffers = {
+    audits: [] as AuditInput[],
+    events: [] as DomainEvent[],
+    afterCommit: [] as (() => void)[],
+    settingsWritten: false,
+  };
 
-  let result: T;
-  try {
-    result = await (pool as typeof pool).transaction(async (tx) => {
-      const inner: Ctx = { ...ctx, db: tx, _buffers: { ...ctx._buffers, afterCommit: scope } };
-      const out = await fn(inner);
-      await flush(inner);
-      return out;
-    });
-  } catch (e) {
-    /*
-      Empty the audit and event buffers, because nothing committed.
-
-      `flush` clears them on its way out, so they survive only when something
-      threw before it ran. They live on the Ctx, which outlives any one
-      transaction, so a job looping over a reused Ctx carried them into the
-      *next* iteration and committed them there. `runDueRecurring` and
-      `sendDueReminders` both have that shape, with a try/catch per item so one
-      bad row does not stop the run: schedule one throws after buffering an
-      `invoice.create` audit, schedule two commits, and the log now records the
-      creation of an invoice that was rolled back and does not exist. The outbox
-      event goes with it, and an outbox event is a trigger.
-
-      This file's header says the buffers are "flushed inside the transaction,
-      so nothing escapes a rollback. An audit log that records changes which
-      were then rolled back is worse than no audit log, because it is
-      confidently wrong." That was the intent, not the behaviour. The previous
-      round named this exact hazard beside the after-commit queue and then fixed
-      it for that queue alone, which is one buffer out of three.
-    */
-    discardBuffers(ctx);
-    throw e;
-  }
+  const result = await (pool as typeof pool).transaction(async (tx) => {
+    const inner: Ctx = {
+      ...ctx,
+      db: tx,
+      _buffers: buffers,
+      audit: (entry) => buffers.audits.push(entry),
+      emit: (event) => buffers.events.push(event),
+    };
+    const out = await fn(inner);
+    await flush(inner);
+    return out;
+  });
 
   // Only on the way out of a successful commit. A throw skips this, and the
   // array goes out of scope unrun, which is the whole point of scoping it.
-  runAfterCommitCallbacks(scope);
+  runAfterCommitCallbacks(buffers.afterCommit);
   return result;
 }
 
@@ -274,18 +281,6 @@ export function runAfterCommitCallbacks(callbacks: (() => void)[]): void {
 function isTransaction(handle: Db): boolean {
   // Drizzle's transaction handle carries a rollback method; the pool does not.
   return typeof (handle as { rollback?: unknown }).rollback === "function";
-}
-
-/**
- * Throw away everything buffered but not written. Call when nothing committed.
- *
- * Exported only for `http.ts`, which owns the other transaction in this
- * application. The only correct moment to call it is the failure path of the
- * code that owns a transaction.
- */
-export function discardBuffers(ctx: Ctx): void {
-  ctx._buffers.audits.length = 0;
-  ctx._buffers.events.length = 0;
 }
 
 /** Writes the buffered audit rows and outbox events. Call inside the transaction. */

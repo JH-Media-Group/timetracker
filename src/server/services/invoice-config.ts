@@ -183,6 +183,8 @@ export async function updateInvoiceConfig(ctx: Ctx, patch: ConfigPatch): Promise
     }
 
     await tx.db.update(s.settings).set(update as never).where(eq(s.settings.id, 1));
+    // This transaction can now see past the process cache. See getSettings.
+    tx._buffers.settingsWritten = true;
     runAfterCommit(tx, invalidateSettings);
 
     tx.audit({

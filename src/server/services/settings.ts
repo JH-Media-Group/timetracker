@@ -48,26 +48,33 @@ export async function getSettings(ctx?: Ctx): Promise<s.SettingsRow> {
   const handle = ctx?.db ?? db;
 
   /*
-    A transaction reads the database, never the cache. Both directions.
+    The cache belongs to the pool, and a transaction that has written settings
+    stops reading it.
 
-    The write side was already true, and the read side was the half that was
-    missing: this returned the cached row **before** looking at `ctx.db`, so a
-    caller inside a transaction got a process-wide snapshot rather than its own
-    view. `updateInvoiceConfig` wrote the settings row and then returned
+    **Never written from a transaction**, because a transactional read can see
+    uncommitted data and this cache is process-wide.
+
+    **Not read by a transaction that wrote settings**, because that caller can
+    see further than the cache can. This half was missing and the effect was
+    visible: `updateInvoiceConfig` wrote the row and then returned
     `getInvoiceConfig(ctx)`, whose comment says it must return what the request
-    just wrote; on the real route path it returned the values from before the
-    write, because a GET moments earlier had warmed the cache and the
-    invalidation now waits for the commit. A reviewer reproduced it, and the
-    tests missed it because they pass a pool-backed Ctx, where
-    `withTransaction` opens and commits its own transaction before the read.
+    just wrote, and on the real route path it returned the values from *before*
+    the write, because a GET moments earlier had warmed the cache and the
+    invalidation now waits for the commit. The tests missed it because they pass
+    a pool-backed Ctx, where `withTransaction` opens and commits its own
+    transaction before the read.
 
-    The rule is now simple enough to hold in one sentence: the cache belongs to
-    the pool. Inside a transaction it is neither read nor written, so it can
-    neither serve a stale row to somebody who can see further nor learn
-    something that has not committed.
+    **Every other transactional read still uses the cache**, and the first fix
+    for the above did not, which was a poor trade nobody asked for: every
+    mutating request runs in a transaction, so `copyDay` went from zero settings
+    queries to two per copied entry and `upsertWeek` to roughly `2N + 2`. A
+    reviewer counted them. A transaction that has not touched settings cannot
+    see anything the pool cannot, so there is nothing to be gained by making it
+    ask again.
   */
   const transactional = handle !== db;
-  if (!transactional && cached && now - cached.at < CACHE_TTL_MS) return cached.row;
+  const seesFurther = transactional && ctx?._buffers?.settingsWritten === true;
+  if (!seesFurther && cached && now - cached.at < CACHE_TTL_MS) return cached.row;
 
   const startedAt = generation;
   const [row] = await handle.select().from(s.settings).where(eq(s.settings.id, 1)).limit(1);
@@ -152,6 +159,12 @@ export async function updateSettings(ctx: Ctx, patch: Partial<s.SettingsRow>) {
     .set(update as never)
     .where(eq(s.settings.id, 1))
     .returning();
+
+  /*
+    This transaction can now see something the cache cannot, so its own reads
+    must stop using it. Set before the audit below, which reads settings.
+  */
+  ctx._buffers.settingsWritten = true;
 
   /*
     After the commit, not here.

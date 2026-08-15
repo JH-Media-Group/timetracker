@@ -28,7 +28,15 @@ import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { and, eq, isNull } from "drizzle-orm";
 import { AppError, forbidden, fromDatabaseError, toProblem, unauthenticated, validationFailed } from "./errors";
-import { assertCan, createCtx, discardBuffers, flush, runAfterCommitCallbacks, type Ctx } from "./ctx";
+import {
+  assertCan,
+  createCtx,
+  flush,
+  runAfterCommitCallbacks,
+  type AuditInput,
+  type Ctx,
+  type DomainEvent,
+} from "./ctx";
 import { resolveSession } from "./auth/session";
 import { enforce, type RouteClass } from "./auth/rate-limit";
 import { db } from "./db/client";
@@ -138,28 +146,33 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
       const shouldTransact = options.transactional ?? mutating;
       let body: Envelope<T>;
       if (shouldTransact) {
-        // Scoped to this request's transaction, not to the Ctx. See the same
-        // reasoning in withTransaction: a shared array lets one request's
-        // rollback discard another's committed effect.
-        const afterCommit: (() => void)[] = [];
+        // Buffers belong to the transaction, not to the Ctx, and `audit`/`emit`
+        // are rebound to them. See withTransaction in ctx.ts for why both halves
+        // are needed: rebinding is what keeps `ctx.audit(...)` and `flush` from
+        // reading different arrays. A failed transaction takes them out of
+        // scope, so there is nothing to discard.
+        const buffers = {
+          audits: [] as AuditInput[],
+          events: [] as DomainEvent[],
+          afterCommit: [] as (() => void)[],
+          settingsWritten: false,
+        };
 
-        try {
-          body = await db.transaction(async (tx) => {
-            const inner: Ctx = { ...ctx, db: tx, _buffers: { ...ctx._buffers, afterCommit } };
-            const result = await runHandler(inner);
-            await flush(inner);
-            return result;
-          });
-        } catch (e) {
-          // Nothing committed, so nothing buffered may be written. A Ctx is
-          // per-request here, so this matters less than it does for a job that
-          // reuses one, but the rule is the rule and the cost is two lines.
-          discardBuffers(ctx);
-          throw e;
-        }
+        body = await db.transaction(async (tx) => {
+          const inner: Ctx = {
+            ...ctx,
+            db: tx,
+            _buffers: buffers,
+            audit: (entry) => buffers.audits.push(entry),
+            emit: (event) => buffers.events.push(event),
+          };
+          const result = await runHandler(inner);
+          await flush(inner);
+          return result;
+        });
 
         // A throw skips this and the array is discarded unrun.
-        runAfterCommitCallbacks(afterCommit);
+        runAfterCommitCallbacks(buffers.afterCommit);
       } else {
         body = await runHandler(ctx);
       }
