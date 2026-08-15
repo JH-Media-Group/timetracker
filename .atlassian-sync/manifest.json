@@ -63,9 +63,9 @@
       "pageId": "2969370812",
       "title": "Harvest import reconciliation, 2026-08-14",
       "mode": "summary",
-      "localHash": "ec1f441025aea3816ca60d4fc6478426d121d754b27037a8f1e317f1d766b2de",
-      "remoteVersion": 1,
-      "lastSyncedAt": "2026-08-15T01:40:00Z"
+      "localHash": "7370bb2bbe46dbf54dec21fa8bf99df510c867b9a60fea3b9fb3a43d994976f9",
+      "remoteVersion": 2,
+      "lastSyncedAt": "2026-08-15T03:58:00Z"
     }
   },
   "issues": {
@@ -230,6 +230,12 @@
       "type": "Task",
       "title": "Import the real Harvest data from CSV exports, not the API",
       "lastState": "Done"
+    },
+    "notifications-epic": {
+      "key": "TALLY-47",
+      "type": "Epic",
+      "title": "Notifications and email",
+      "lastState": "To Do"
     }
   },
   "session": {
