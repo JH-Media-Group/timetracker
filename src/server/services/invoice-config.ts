@@ -44,7 +44,10 @@ export interface InvoiceConfig {
  *
  * One read rather than six, because the screen shows a left nav over all of it
  * and the document needs the labels on every render. The settings row is cached
- * for a few seconds in `settings.ts`, so this is close to free.
+ * for a few seconds in `settings.ts`, so this is close to free, with one
+ * exception worth knowing: called from `updateInvoiceConfig` after the write,
+ * it deliberately goes to the database, because that transaction can see a row
+ * the cache cannot.
  */
 export async function getInvoiceConfig(ctx: Ctx): Promise<InvoiceConfig> {
   const row = await getSettings(ctx);

@@ -37,27 +37,40 @@ describe("runAfterCommit", () => {
       Postgres commits. So the effect asks a **different connection** whether it
       can see the write. Only a real commit makes that true.
     */
-    const seen: (string | undefined)[] = [];
     const ctx = ctxOn();
     const marker = `committed-${Date.now()}`;
+
+    /*
+      The read is started **inside the effect**, on the pool.
+
+      An earlier version of this test only recorded that the effect had run and
+      did the cross-connection read afterwards, in the test body. A reviewer
+      pointed out that proves nothing: by then `withTransaction` has returned,
+      so the write is visible no matter where the drain sits, and moving the
+      drain to just before COMMIT kept every assertion green. Asking from the
+      effect itself is what makes COMMIT the thing being tested, because a pool
+      connection reading an uncommitted UPDATE sees the old value rather than
+      blocking.
+    */
+    let visibleToOthers: Promise<string | undefined> | null = null;
 
     await withTransaction(ctx, async (tx) => {
       await tx.db.update(s.settings).set({ companyName: marker }).where(eq(s.settings.id, 1));
 
       runAfterCommit(tx, () => {
-        // Deliberately not awaited inside the callback: the read is queued here
-        // and resolved below, on the pool, which cannot see an open transaction.
-        seen.push("effect ran");
+        visibleToOthers = db
+          .select({ name: s.settings.companyName })
+          .from(s.settings)
+          .then((rows) => rows[0]?.name);
       });
 
       const [outside] = await db.select({ name: s.settings.companyName }).from(s.settings);
       expect(outside!.name, "another connection cannot see it yet").not.toBe(marker);
-      expect(seen, "and the effect has not run").toEqual([]);
+      expect(visibleToOthers, "and the effect has not run").toBeNull();
     });
 
-    expect(seen).toEqual(["effect ran"]);
-    const [after] = await db.select({ name: s.settings.companyName }).from(s.settings);
-    expect(after!.name, "by the time the effect ran, the write was visible").toBe(marker);
+    expect(visibleToOthers, "the effect ran").not.toBeNull();
+    expect(await visibleToOthers!, "and when it ran, the commit had happened").toBe(marker);
   });
 
   it("does not run the effect when the transaction rolls back", async () => {
@@ -174,6 +187,27 @@ describe("runAfterCommit", () => {
     const actions = rows.map((r) => r.action);
     expect(actions, "A committed, so A's audit row must exist").toContain(action);
     expect(actions, "B rolled back, so B's must not").not.toContain("should.never.be.written");
+  });
+
+  it("writes an audit row buffered before the transaction opened", async () => {
+    /*
+      Scoping the buffers to the transaction isolates them, and taken literally
+      it also orphans anything the caller buffered first: `ctx.audit(...)` and
+      then `withTransaction(ctx, ...)` wrote the row before that change and
+      dropped it silently after. No caller does this today, which is exactly
+      when a silent drop is cheapest to close and hardest to notice later.
+    */
+    const ctx = ctxOn();
+    const action = `buffered.before.${Date.now()}`;
+
+    ctx.audit({ action, entityType: "settings", entityId: null });
+
+    await withTransaction(ctx, async (tx) => {
+      await tx.db.select({ id: s.settings.id }).from(s.settings).limit(1);
+    });
+
+    const rows = await db.select().from(s.auditLog);
+    expect(rows.map((r) => r.action)).toContain(action);
   });
 
   it("runs outside a transaction immediately, because there is nothing to wait for", async () => {

@@ -151,9 +151,11 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
         // are needed: rebinding is what keeps `ctx.audit(...)` and `flush` from
         // reading different arrays. A failed transaction takes them out of
         // scope, so there is nothing to discard.
+        // Anything buffered before the transaction opened comes with it, rather
+        // than being stranded on the Ctx. See withTransaction in ctx.ts.
         const buffers = {
-          audits: [] as AuditInput[],
-          events: [] as DomainEvent[],
+          audits: ctx._buffers.audits.splice(0),
+          events: ctx._buffers.events.splice(0),
           afterCommit: [] as (() => void)[],
           settingsWritten: false,
         };

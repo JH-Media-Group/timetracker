@@ -6,6 +6,12 @@
  * for a few seconds per process: eleven users generate a lot of reads of a row
  * that changes once a quarter.
  *
+ * **The cache belongs to the pool.** It is never written from inside a
+ * transaction, because a transactional read can see uncommitted data and this
+ * cache is process-wide. It is still *read* inside a transaction, unless that
+ * transaction has itself written the settings row, in which case it can see
+ * further than the cache can and asks the database instead. See `getSettings`.
+ *
  * The cache is deliberately short and deliberately not invalidated across
  * processes. There is one process; if that stops being true, the fix is to drop
  * the TTL to zero, not to build a cache-invalidation protocol.

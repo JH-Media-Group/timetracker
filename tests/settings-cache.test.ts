@@ -24,7 +24,7 @@
  * setting, seeing it saved, and the old value coming back.
  */
 
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { eq } from "drizzle-orm";
 import { db } from "@/server/db/client";
 import * as s from "@/server/db/schema";
@@ -33,26 +33,31 @@ import { getSettings, invalidateSettings } from "@/server/services/settings";
 import { newId } from "@/server/db/ids";
 import { resetDb, seedProfiles, seedSettings } from "./helpers";
 
-/** A Ctx whose only job is to hand `getSettings` a query we control the timing of. */
-function gatedCtx(rows: s.SettingsRow[]) {
+/**
+ * Hold the next **pool** read open, so an invalidation can land mid-flight.
+ *
+ * It has to be the pool. The first version handed `getSettings` a fake Ctx, and
+ * once the cache became pool-only that fake counted as transactional, so the
+ * write it was built to exercise never ran: `!transactional` short-circuited
+ * first and `generation === startedAt` was never evaluated. The test went on
+ * passing, and deleting the guard it names kept it passing, for three rounds.
+ *
+ * Stubbing `db.select` keeps `handle === db` true, which is the whole point.
+ */
+function gateNextPoolRead(rows: s.SettingsRow[]) {
   let release!: () => void;
   const gate = new Promise<void>((r) => {
     release = r;
   });
 
-  const ctx = {
-    db: {
-      select: () => ({
-        from: () => ({
-          where: () => ({
-            limit: () => gate.then(() => rows),
-          }),
-        }),
-      }),
-    },
-  } as never;
+  const spy = vi.spyOn(db, "select").mockImplementationOnce(
+    () =>
+      ({
+        from: () => ({ where: () => ({ limit: () => gate.then(() => rows) }) }),
+      }) as never
+  );
 
-  return { ctx, release };
+  return { release, restore: () => spy.mockRestore() };
 }
 
 /*
@@ -116,15 +121,19 @@ describe("invalidateSettings", () => {
     const stale = { ...(await getSettings()), companyName: "Stale Company" } as s.SettingsRow;
     invalidateSettings();
 
-    const { ctx, release } = gatedCtx([stale]);
-    const inFlight = getSettings(ctx);
+    const { release, restore } = gateNextPoolRead([stale]);
+    try {
+      const inFlight = getSettings();
 
-    // The write happens while that read is outstanding.
-    await db.update(s.settings).set({ companyName: "Written While Reading" }).where(eq(s.settings.id, 1));
-    invalidateSettings();
+      // The write happens while that read is outstanding.
+      await db.update(s.settings).set({ companyName: "Written While Reading" }).where(eq(s.settings.id, 1));
+      invalidateSettings();
 
-    release();
-    expect((await inFlight).companyName, "the read returns what it fetched").toBe("Stale Company");
+      release();
+      expect((await inFlight).companyName, "the read returns what it fetched").toBe("Stale Company");
+    } finally {
+      restore();
+    }
 
     const next = await getSettings();
     expect(next.companyName, "but the next reader must see the write").toBe("Written While Reading");

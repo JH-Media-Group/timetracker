@@ -15,7 +15,7 @@
  */
 
 import { and, asc, desc, eq, exists, inArray, isNull, sql } from "drizzle-orm";
-import { assertCan, lockNamed, withTransaction, type Ctx } from "@/server/ctx";
+import { assertCan, lockNamed, runAfterCommit, withTransaction, type Ctx } from "@/server/ctx";
 import * as s from "@/server/db/schema";
 import { newId, randomToken } from "@/server/db/ids";
 import { invoiceScope } from "@/server/auth/scope";
@@ -28,7 +28,7 @@ import {
 } from "@/domain/invoices";
 import { dayIn, type IsoDate } from "@/domain/calendar";
 import { roundGroup } from "@/domain/rounding";
-import { getSettings, roundingRule } from "./settings";
+import { getSettings, invalidateSettings, roundingRule } from "./settings";
 import { queueMail } from "./mail";
 import { renderLabel, resolveMessages } from "@/domain/invoice-config";
 import { formatMoney } from "@/lib/format";
@@ -654,6 +654,26 @@ async function nextNumber(ctx: Ctx, clientId: string, issueDate: IsoDate): Promi
   });
 
   await ctx.db.execute(sql`UPDATE settings SET invoice_next_seq = invoice_next_seq + 1 WHERE id = 1`);
+
+  /*
+    This is the third writer of the settings row, and the only one that used to
+    say nothing about it.
+
+    Both halves matter. `settingsWritten` stops *this* transaction reading a
+    cached row whose `invoice_next_seq` it has just moved, and the invalidation
+    stops every later reader doing the same. Without them, a numbering PATCH
+    landing within the cache TTL reads a stale sequence as its `before`, and
+    `assertSequenceIsFree` then compares the requested number against a value
+    already drawn and lets it through. The counter goes back onto a number that
+    exists, and the next invoice for that client collides on the unique index,
+    which is the 500 this function's own docstring exists to prevent.
+
+    `tests/settings-writers.test.ts` now fails on any settings write that omits
+    either, because a rule about three call sites is a rule that grows a fourth.
+  */
+  ctx._buffers.settingsWritten = true;
+  runAfterCommit(ctx, invalidateSettings);
+
   return number;
 }
 

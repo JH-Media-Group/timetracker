@@ -105,7 +105,9 @@ export async function sendDueReminders(ctx: Ctx, today?: string): Promise<Remind
     A due date is the same kind of fact.
 
     Still a parameter, so a run can be checked against a future date without
-    waiting for it, the way the recurring job takes `--on`.
+    waiting for it. `scripts/mail.mts` has no `--on` flag to pass one, so today
+    the only caller that supplies it is the test suite; the comment here used to
+    claim the flag existed by pointing at the recurring job, which does have one.
   */
   const on = today ?? dayIn(await accountTimezone(ctx), ctx.now());
 

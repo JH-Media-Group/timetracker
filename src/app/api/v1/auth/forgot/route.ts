@@ -24,7 +24,6 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { requestPasswordReset } from "@/server/services/auth-tokens";
 import { enforce } from "@/server/auth/rate-limit";
-import { toProblem } from "@/server/errors";
 import { clientIp, parseOrThrow, problemResponse } from "@/server/http";
 import { newId } from "@/server/db/ids";
 
@@ -98,8 +97,16 @@ export async function POST(req: NextRequest) {
     await settle();
     return NextResponse.json(SAME_ANSWER, { headers: { "Cache-Control": "no-store" } });
   } catch (e) {
-    const problem = toProblem(e, requestId);
-    if (problem.status >= 500) console.error(`[${requestId}] forgot failed`, e);
+    /*
+      Built once, and logged on the status actually returned.
+
+      This used to call `toProblem` here and again inside `problemResponse`, and
+      then gate the log on the first one. `problemResponse` answers from
+      `fromDatabaseError(e) ?? e`, so the two could disagree: a database error
+      that translates to a 4xx was still logged at error level as a failure.
+    */
+    const response = problemResponse(e, requestId);
+    if (response.status >= 500) console.error(`[${requestId}] forgot failed`, e);
 
     // The floor applies to failures too, or the error path becomes the oracle.
     await settle();
@@ -113,6 +120,6 @@ export async function POST(req: NextRequest) {
       A reviewer noticed. Copying four headers is exactly the kind of duplicate
       that drifts from the original the moment the original gains a fifth.
     */
-    return problemResponse(e, requestId);
+    return response;
   }
 }

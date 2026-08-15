@@ -49,25 +49,34 @@ export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { env } = await import("@/server/env");
 
-    /*
-      Touch the mail configuration, because reading it is what validates it.
-
-      `env.smtp` throws when `SMTP_URL` is set without `MAIL_FROM`, a
-      combination that would send every message from an address the provider
-      rejects with a 5xx. `transport.ts` correctly treats a 5xx as permanent, so
-      nothing would ever be delivered and nothing would ever be retried: a mail
-      system that looks configured and silently fails everything. It is a
-      deployment fact, so it is checked here rather than on import, for the
-      reason this file exists.
-    */
-    void env.smtp;
-
     if (env.usingBuildPlaceholders) {
       throw new Error(
         "This process is running on build placeholders, not real configuration.\n" +
           "NEXT_PHASE is set to phase-production-build, which suppresses environment validation.\n" +
           "That is a build-time setting. Unset it, and supply DATABASE_URL and SESSION_SECRET."
       );
+    }
+
+    /*
+      Read the mail configuration, because reading it is what validates it.
+
+      `env.smtp` throws when `SMTP_URL` is set without `MAIL_FROM`, a
+      combination that would send every message from an address the provider
+      rejects with a 5xx. `transport.ts` correctly treats a 5xx as permanent, so
+      nothing would be delivered and nothing retried: a mail system that looks
+      configured and silently fails everything it is given. That is a deployment
+      fact, so it is checked here rather than on import, for the reason this
+      file exists.
+
+      **After** the placeholder check, not before: a process started with
+      NEXT_PHASE left set and a stray SMTP_URL should be told the more important
+      of the two things. And the value is used in a condition rather than
+      discarded with `void`, so no minifier can decide the read is dead and
+      quietly delete the check.
+    */
+    const smtp = env.smtp;
+    if (smtp && !smtp.from) {
+      throw new Error("SMTP_URL is configured but no sender address was resolved.");
     }
   }
 }

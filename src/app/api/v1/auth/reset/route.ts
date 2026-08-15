@@ -12,7 +12,6 @@ import { NextResponse, type NextRequest } from "next/server";
 import { z } from "zod";
 import { consumeToken } from "@/server/services/auth-tokens";
 import { enforce } from "@/server/auth/rate-limit";
-import { toProblem } from "@/server/errors";
 import { clientIp, parseOrThrow, problemResponse } from "@/server/http";
 import { newId } from "@/server/db/ids";
 
@@ -85,8 +84,16 @@ export async function POST(req: NextRequest) {
       { headers: { "Cache-Control": "no-store" } }
     );
   } catch (e) {
-    const problem = toProblem(e, requestId);
-    if (problem.status >= 500) console.error(`[${requestId}] reset failed`, e);
+    /*
+      Built once, and logged on the status actually returned.
+
+      This used to call `toProblem` here and again inside `problemResponse`, and
+      then gate the log on the first one. `problemResponse` answers from
+      `fromDatabaseError(e) ?? e`, so the two could disagree: a database error
+      that translates to a 4xx was still logged at error level as a failure.
+    */
+    const response = problemResponse(e, requestId);
+    if (response.status >= 500) console.error(`[${requestId}] reset failed`, e);
 
     // The floor applies to failures too, or the cheap path becomes the fast one
     // and the endpoint tells an attacker which tokens exist.
@@ -101,6 +108,6 @@ export async function POST(req: NextRequest) {
       A reviewer noticed. Copying four headers is exactly the kind of duplicate
       that drifts from the original the moment the original gains a fifth.
     */
-    return problemResponse(e, requestId);
+    return response;
   }
 }

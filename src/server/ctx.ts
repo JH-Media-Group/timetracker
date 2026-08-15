@@ -208,9 +208,22 @@ export async function withTransaction<T>(ctx: Ctx, fn: (tx: Ctx) => Promise<T>):
     meant all along. A joined call receives `inner`, so it writes into the
     transaction whose fate it shares.
   */
+  /*
+    Anything already buffered comes with us, rather than being stranded.
+
+    Fresh arrays isolate this transaction from every other one on the same Ctx,
+    which is the point. Taken literally, though, they also orphan whatever the
+    caller buffered *before* opening the transaction: `ctx.audit(...)` followed
+    by `withTransaction(ctx, ...)` would have written its row before this change
+    and silently dropped it after. No live caller does that today, and a silent
+    drop is a poor thing to leave lying around on the strength of "today".
+
+    `splice` moves them, so they belong to exactly one transaction and share its
+    fate. An entry buffered outside a transaction has no other honest home.
+  */
   const buffers = {
-    audits: [] as AuditInput[],
-    events: [] as DomainEvent[],
+    audits: ctx._buffers.audits.splice(0),
+    events: ctx._buffers.events.splice(0),
     afterCommit: [] as (() => void)[],
     settingsWritten: false,
   };
