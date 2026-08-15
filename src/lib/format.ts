@@ -192,6 +192,17 @@ export const formatPercent = (fraction: number | null | undefined, dp = 0): stri
 
 export const formatHours = (seconds: number) => (seconds / 3600).toFixed(2);
 
+/**
+ * Hours with their unit, for anywhere the value sits beside money.
+ *
+ * A project budgeted in hours and one budgeted in fees share the Budget, Spent
+ * and Remaining columns, so the same column shows `26.67` on one row and
+ * `$12,000.00` on the next. Without the unit the first reads as twenty-six
+ * dollars. Use `formatHours` only where the unit is already established by a
+ * label or the field is an editable number.
+ */
+export const formatHoursUnit = (seconds: number) => `${formatHours(seconds)} hrs`;
+
 export const initials = (first: string, last: string) =>
   `${first.charAt(0)}${last.charAt(0)}`.toUpperCase();
 

@@ -26,6 +26,8 @@
     "db:cleanup-probe": "tsx scripts/cleanup-probe.mts",
     "db:invariants": "tsx scripts/invariants.mts",
     "jobs:recurring": "tsx scripts/recurring.mts",
+    "harvest:import": "tsx scripts/harvest-import.mts",
+    "harvest:reconcile": "tsx scripts/harvest-reconcile.mts",
     "sweep": "tsx scripts/sweep.mts"
   },
   "dependencies": {

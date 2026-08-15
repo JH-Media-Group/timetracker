@@ -1505,7 +1505,26 @@ Retention 24 months, then archived to Spaces as newline-delimited JSON and prune
 
 ## 16. Harvest migration
 
-A one-shot script, `scripts/harvest-import.ts`, runnable repeatedly and idempotently.
+A one-shot script, `scripts/harvest-import.mts`, runnable repeatedly and idempotently.
+
+### 16.0 What was actually built, and why it differs (TALLY-46)
+
+This section was written against the Harvest API. The migration was built against CSV exports, because no API credentials exist for the account (see docs/PERMISSIONS-AND-CREDENTIALS.md). §16.1 through §16.4 are kept as written: they remain the specification if a token ever arrives and a delta run becomes possible. What follows is what the shipped importer does instead.
+
+**The source is seven files**, exported from Harvest's own report screens into `harvest exports/`: client, contact, people, project and task lists, a time report covering all history, and an expense report. Invoices are present only as PDFs, in `harvest_invoice_pack`.
+
+**There are no Harvest ids in any of them.** The upsert key §16.1 specifies, `external_ref->'harvest'->>'id'`, cannot exist, so natural keys stand in: a client is its name, a project is its client plus its name, a person is their full name, a task is its name. Re-running is idempotent by deleting the rows the importer owns (`time_entries.source = 'import'`, and expenses by `external_ref`) and reloading them, inside one transaction. A partial load is not a state the database can end up in, which matters because the reconciliation is the only thing that can tell you the import was right and it cannot run against half a load.
+
+**The files disagree about scope.** Current lists omit historical entities referenced by time and expense reports. Import entities from every source and archive those absent from current lists. History-only people receive an `@imported.invalid` address and no password.
+
+**Four of the seventeen steps in §16.1 have no source and were not built:** invoice item types, invoices and lines, payments, and messages. §16.3 checks 3 and 6 depend on them and are reported as skipped rather than passed. `billed_externally` is still set, from the time report's `Invoiced?` column, so the uninvoiced report stays truthful even though the invoices behind it are not in the system.
+
+**Two things needed a decision the data could not make:**
+
+- Overnight entries can have an end time earlier than their start time. Validate the next-day interpretation against recorded hours and count those adjustments in the private reconciliation report.
+- Possible duplicate people must be resolved privately by a human; the importer never merges identities on a guess.
+
+**The reconciliation is a separate script,** `scripts/harvest-reconcile.mts` (`pnpm harvest:reconcile --write`), so it can be re-run against the database without re-importing. It re-reads the CSVs from scratch rather than trusting anything the importer held in memory.
 
 ### 16.1 Order and mapping
 

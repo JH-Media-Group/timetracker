@@ -7,7 +7,7 @@ import type { ColDef } from "ag-grid-community";
 import { Plus, Download, Upload } from "lucide-react";
 import * as api from "@/lib/api";
 import { projectBudget, sumValue } from "@/lib/derive";
-import { formatDuration, formatHours, formatMoney, formatPercent } from "@/lib/format";
+import { formatDuration, formatHoursUnit, formatMoney, formatPercent } from "@/lib/format";
 import type { Project, TimeEntry } from "@/lib/types";
 import { Badge, Button, EmptyState, Meter, Select } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
@@ -107,13 +107,24 @@ export default function ProjectsPage() {
       colId: "budget", headerName: "Budget", width: 130, type: "numeric",
       valueGetter: (p: { data?: Row }) => p.data?.budget ?? null,
       valueFormatter: (p: { data?: Row; value: number | null }) =>
-        p.value == null ? "—" : p.data?.budgetKind === "fees" ? formatMoney(p.value) : formatHours(p.value),
+        p.value == null ? "—" : p.data?.budgetKind === "fees" ? formatMoney(p.value) : formatHoursUnit(p.value),
     },
     {
       colId: "spent", headerName: "Spent", width: 130, type: "numeric",
-      valueGetter: (p: { data?: Row }) => p.data?.spent ?? 0,
-      valueFormatter: (p: { data?: Row; value: number }) =>
-        p.data?.budgetKind === "hours" ? formatHours(p.value) : formatMoney(p.value),
+      /*
+        Null, not 0, when there is nothing to show.
+        The pinned totals row carries no `spent`, and `?? 0` made it read
+        "$0.00" across every project on the page: a total that is not merely
+        absent but wrong, and wrong in the direction someone would act on.
+        Budget and Remaining beside it already return null here.
+
+        The total stays the no-value glyph rather than becoming a sum, because
+        this column holds hours on an hours-budgeted row and money on a
+        fee-budgeted one. Adding them would produce a number with no unit.
+      */
+      valueGetter: (p: { data?: Row }) => p.data?.spent ?? null,
+      valueFormatter: (p: { data?: Row; value: number | null }) =>
+        p.value == null ? "—" : p.data?.budgetKind === "hours" ? formatHoursUnit(p.value) : formatMoney(p.value),
     },
     {
       colId: "progress", headerName: "Progress", width: 170, sortable: false,
@@ -139,7 +150,7 @@ export default function ProjectsPage() {
       cellRenderer: (p: { data?: Row; value: number | null }) => {
         if (p.value == null) return <span className="text-ink-tertiary">—</span>;
         const neg = p.value < 0;
-        const txt = p.data?.budgetKind === "fees" ? formatMoney(p.value) : formatHours(p.value);
+        const txt = p.data?.budgetKind === "fees" ? formatMoney(p.value) : formatHoursUnit(p.value);
         return <span className={neg ? "font-medium text-danger" : ""}>{txt}</span>;
       },
     },

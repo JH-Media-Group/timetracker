@@ -9,7 +9,7 @@ import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { budgetHealth, sumValue } from "@/lib/derive";
 import {
-  addDays, formatDuration, formatHours, formatMoney, formatMoneyShort, formatPercent,
+  addDays, formatDuration, formatHoursUnit, formatMoney, formatMoneyShort, formatPercent,
   isoDate, startOfWeek, toDate,
 } from "@/lib/format";
 import type { TimeEntry } from "@/lib/types";
@@ -236,7 +236,7 @@ export default function ProjectDetailPage() {
                 format={(v) => (project.budgetBy === "project_hours" ? v.toFixed(0) : formatMoneyShort(v * 100))}
                 threshold={b?.budget ? {
                   value: b.kind === "hours" ? b.budget / 3600 : b.budget / 100,
-                  label: `Budget: ${b.kind === "hours" ? `${formatHours(b.budget)} hrs` : formatMoney(b.budget)}`,
+                  label: `Budget: ${b.kind === "hours" ? formatHoursUnit(b.budget) : formatMoney(b.budget)}`,
                 } : undefined}
                 tipRows={(p, i, prev) => ({
                   title: `Week of ${p.label}`,
@@ -304,12 +304,12 @@ export default function ProjectDetailPage() {
             label={<span className="flex items-center gap-1">Budget remaining {b?.percentUsed != null && `(${formatPercent(b.percentUsed)})`}
               <Tooltip content={b?.kind === "hours" ? "Hours tracked against the project's hour budget." : "Billable value against the project's fee budget."}>
                 <Info className="size-3.5 text-ink-tertiary" /></Tooltip></span>}
-            value={b?.remaining == null ? "—" : b.kind === "fees" ? formatMoney(b.remaining) : formatHours(b.remaining)}
+            value={b?.remaining == null ? "—" : b.kind === "fees" ? formatMoney(b.remaining) : formatHoursUnit(b.remaining)}
             danger={(b?.remaining ?? 0) < 0}
           >
             {b?.budget != null && (
               <>
-                <KpiRow label="Total budget" value={b.kind === "fees" ? formatMoney(b.budget) : formatHours(b.budget)} />
+                <KpiRow label="Total budget" value={b.kind === "fees" ? formatMoney(b.budget) : formatHoursUnit(b.budget)} />
                 <div className="pt-1.5">
                   <Meter segments={(b.percentUsed ?? 0) > 1
                     ? [{ value: 1 / (b.percentUsed ?? 1), tone: "near" }, { value: 0.35, tone: "over" }]

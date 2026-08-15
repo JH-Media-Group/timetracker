@@ -77,11 +77,16 @@ Work is tracked in Jira project **TALLY** and documented in Confluence space **T
 
 **Last updated:** 2026-08-14. Maintain this section manually.
 
-- Backend and wiring complete. E0 through E13 in [docs/BUILD_EPICS.md](docs/BUILD_EPICS.md) are ticked. **479 tests, 14 data invariants.**
+- Backend and wiring complete. E0 through E13 in [docs/BUILD_EPICS.md](docs/BUILD_EPICS.md) are ticked. **505 tests, 14 data invariants.**
 - **The invoicing epic (TALLY-24) is built.** Recurring schedules can be created and are raised by a daily cron job (`pnpm jobs:recurring`), there is an Uninvoiced screen, retainers can be opened and funded, and the seven-section configuration area at `/invoices/configure` is live. The invoices area now has five tabs.
 - **Two sections are deliberately incomplete, and say so on the screen:** Appearance has its column toggles but no logo or colour (needs object storage, TALLY-21), and Messages stores its templates but nothing sends mail (needs SendGrid, TALLY-19).
 - **Open question for Jason:** the message templates use `[token]` and TALLY-32 specifies `%token%`. Worth settling before the first email goes out.
-- Still not built, each waiting on a credential: Google SSO, email delivery, receipt and PDF storage, the deployment, and running the Harvest import against real data. See [docs/PERMISSIONS-AND-CREDENTIALS.md](docs/PERMISSIONS-AND-CREDENTIALS.md).
+- **Harvest migration:** the CSV importer and reconciliation scripts are implemented. Source exports and reconciliation results are private operational records and must stay outside Git.
+  - **BACKEND_PRD §16.0 records why the shipped importer differs from §16.1 to §16.4**: no API credentials, so CSVs, so no Harvest ids, so natural keys. Read it before touching the import.
+  - **The export files disagree about scope**, and that is the whole design problem: the lists are current-only, the time report is all history. Entities absent from a current list are created archived.
+  - **The Uninvoiced screen reads $[private total removed]** because Harvest's `Invoiced?` is only true for work invoiced through Harvest. `--billed-before YYYY-MM-DD` fixes it and is off by default; the cutoff is Jason's to name.
+  - Real data immediately found two defects the seed data could not: a pinned-totals row asserting `$0.00` spent, and hours rendered bare in a column shared with money. **Load real data earlier next time.**
+- Still not built, each waiting on a credential: Google SSO, email delivery, receipt and PDF storage, and the deployment. See [docs/PERMISSIONS-AND-CREDENTIALS.md](docs/PERMISSIONS-AND-CREDENTIALS.md).
 - Deliberately disabled rather than faked: the full account export, CSV import, and the integration connect buttons. Per-grid CSV export does work.
 - Open decisions parked: final product name, droplet size (4 vCPU/8 GB proposed), whether contractors keep password auth, and whether invoice numbering continues Harvest's sequence (the screen supports either).
 - **Two orphaned settings the new structural check found and could not fix:** `projectNotesVisibility` gates a project-notes feature that does not exist, and `budgetAlertPercent` still alerts nobody. Both are recorded rather than hidden; each needs its own ticket.
