@@ -50,10 +50,22 @@
  * schedule, so the escalation starts over on its own, and restoring the old
  * date restores the level that goes with it. No reset, no widened scan, no
  * pre-filter, and one less rule to keep true.
+ *
+ * **The pair is one fact, not a history, and that is a real limit.** Restoring
+ * a due date restores its level only if nothing was sent against the date in
+ * between: chase to step 3 for D, move to D2, let a reminder go out against D2,
+ * and the pair now reads (1, D2). Move back to D and the escalation for D
+ * starts again, so a client who is 30 days past D receives step 3 a second
+ * time. Keeping every (date, level) an invoice has ever had would close it, and
+ * is not worth a table for a case that needs two due-date changes with a
+ * reminder between them. Recorded because the alternative is a comment that
+ * claims more than the column can hold.
  */
 
 import { and, eq, isNull, lte, sql } from "drizzle-orm";
 import { withTransaction, type Ctx } from "@/server/ctx";
+import { dayIn } from "@/domain/calendar";
+import { accountTimezone } from "./settings";
 import * as s from "@/server/db/schema";
 import { recordMessage } from "./invoices";
 
@@ -79,7 +91,24 @@ export interface ReminderReport {
  * `today` is a parameter so the run can be checked against a future date
  * without waiting for it, the way the recurring job takes `--on`.
  */
-export async function sendDueReminders(ctx: Ctx, today: string): Promise<ReminderReport> {
+export async function sendDueReminders(ctx: Ctx, today?: string): Promise<ReminderReport> {
+  /*
+    The account's timezone, not UTC.
+
+    The caller used to pass `new Date().toISOString().slice(0, 10)`. JHMG is in
+    America/New_York and the mail job runs every five minutes, so from 20:00 ET
+    every evening that string is already tomorrow: `daysLate` gains a day, the
+    first escalation step is one day, and an invoice **due today** gets a
+    dunning email at eight in the evening on its own due date. The sibling job
+    states the rule three files away, in `recurring.ts`: "The account's
+    timezone, not the actor's. Due on the 1st is a fact about the business."
+    A due date is the same kind of fact.
+
+    Still a parameter, so a run can be checked against a future date without
+    waiting for it, the way the recurring job takes `--on`.
+  */
+  const on = today ?? dayIn(await accountTimezone(ctx), ctx.now());
+
   const report: ReminderReport = { considered: 0, sent: 0, skippedNoContact: [], failed: [] };
 
   /*
@@ -105,7 +134,7 @@ export async function sendDueReminders(ctx: Ctx, today: string): Promise<Reminde
       and(
         eq(s.invoices.state, "open"),
         isNull(s.invoices.deletedAt),
-        lte(s.invoices.dueDate, today),
+        lte(s.invoices.dueDate, on),
         sql`${s.invoices.paidCents} < ${s.invoices.totalCents}`
       )
     );
@@ -151,7 +180,7 @@ export async function sendDueReminders(ctx: Ctx, today: string): Promise<Reminde
       if (!locked) return "up_to_date" as const;
 
       const daysLate = Math.floor(
-        (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${locked.dueDate}T00:00:00Z`)) / 86_400_000
+        (Date.parse(`${on}T00:00:00Z`) - Date.parse(`${locked.dueDate}T00:00:00Z`)) / 86_400_000
       );
       const stepsPassed = ESCALATION_DAYS.filter((d) => daysLate >= d).length;
 

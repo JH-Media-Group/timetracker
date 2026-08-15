@@ -25,7 +25,7 @@ import { z } from "zod";
 import { requestPasswordReset } from "@/server/services/auth-tokens";
 import { enforce } from "@/server/auth/rate-limit";
 import { toProblem } from "@/server/errors";
-import { clientIp, parseOrThrow } from "@/server/http";
+import { clientIp, parseOrThrow, problemResponse } from "@/server/http";
 import { newId } from "@/server/db/ids";
 
 const schema = z.object({
@@ -103,9 +103,16 @@ export async function POST(req: NextRequest) {
 
     // The floor applies to failures too, or the error path becomes the oracle.
     await settle();
-    return NextResponse.json(problem, {
-      status: problem.status,
-      headers: { "Content-Type": "application/problem+json", "Cache-Control": "private, no-store" },
-    });
+
+    /*
+      Through the shared builder, which is the only thing that sets Retry-After.
+
+      Hand-rolling these headers meant a `rate_limited` answer from this route
+      carried no Retry-After at all, so a client had nothing to back off on and
+      the header existed on every other route in the application but this one.
+      A reviewer noticed. Copying four headers is exactly the kind of duplicate
+      that drifts from the original the moment the original gains a fifth.
+    */
+    return problemResponse(e, requestId);
   }
 }

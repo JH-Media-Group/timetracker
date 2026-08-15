@@ -532,7 +532,7 @@ export const invoices = pgTable(
      * level when this column was added: they are treated as chased against
      * their current due date, so the migration sends nobody anything.
      */
-    reminderDueDate: date(),
+    reminderDueDate: day(),
     paidAt: ts(),
     closedAt: ts(),
     recurringInvoiceId: uuid().references(() => recurringInvoices.id, { onDelete: "set null" }),

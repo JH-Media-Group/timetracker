@@ -63,8 +63,10 @@ try {
   */
   if (!args.includes("--no-reminders")) {
     const ctx = await systemCtx();
-    const today = new Date().toISOString().slice(0, 10);
-    const reminders = await sendDueReminders(ctx, today);
+    // No date argument: the service resolves "today" in the account timezone.
+    // Passing a UTC date from here is what made an invoice due today get chased
+    // at eight in the evening.
+    const reminders = await sendDueReminders(ctx);
     if (reminders.sent) console.log(`Queued ${reminders.sent} overdue reminder(s).`);
 
     /*

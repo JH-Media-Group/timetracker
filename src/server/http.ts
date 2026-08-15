@@ -28,14 +28,7 @@ import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { and, eq, isNull } from "drizzle-orm";
 import { AppError, forbidden, fromDatabaseError, toProblem, unauthenticated, validationFailed } from "./errors";
-import {
-  assertCan,
-  createCtx,
-  discardAfterCommitCallbacks,
-  flush,
-  runAfterCommitCallbacks,
-  type Ctx,
-} from "./ctx";
+import { assertCan, createCtx, discardBuffers, flush, runAfterCommitCallbacks, type Ctx } from "./ctx";
 import { resolveSession } from "./auth/session";
 import { enforce, type RouteClass } from "./auth/rate-limit";
 import { db } from "./db/client";
@@ -145,20 +138,28 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
       const shouldTransact = options.transactional ?? mutating;
       let body: Envelope<T>;
       if (shouldTransact) {
+        // Scoped to this request's transaction, not to the Ctx. See the same
+        // reasoning in withTransaction: a shared array lets one request's
+        // rollback discard another's committed effect.
+        const afterCommit: (() => void)[] = [];
+
         try {
           body = await db.transaction(async (tx) => {
-            const inner: Ctx = { ...ctx, db: tx };
+            const inner: Ctx = { ...ctx, db: tx, _buffers: { ...ctx._buffers, afterCommit } };
             const result = await runHandler(inner);
             await flush(inner);
             return result;
           });
         } catch (e) {
-          // The request rolled back, so effects registered outside the database
-          // must not happen. See runAfterCommit in ctx.ts.
-          discardAfterCommitCallbacks(ctx);
+          // Nothing committed, so nothing buffered may be written. A Ctx is
+          // per-request here, so this matters less than it does for a job that
+          // reuses one, but the rule is the rule and the cost is two lines.
+          discardBuffers(ctx);
           throw e;
         }
-        runAfterCommitCallbacks(ctx);
+
+        // A throw skips this and the array is discarded unrun.
+        runAfterCommitCallbacks(afterCommit);
       } else {
         body = await runHandler(ctx);
       }

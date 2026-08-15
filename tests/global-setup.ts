@@ -16,6 +16,14 @@
  * A session-level advisory lock is the whole mechanism. It is held by this
  * connection for the life of the run and released when the connection closes,
  * including when the process is killed, so there is no stale lock to clear.
+ * `pg_try_advisory_lock` never blocks, so a second run fails fast rather than
+ * queueing, and CI cannot deadlock on it.
+ *
+ * Two limits worth knowing. If the connection drops and postgres.js reconnects,
+ * the lock is gone and a second run could start; that is a reconnect during a
+ * test run, which has its own problems. And with no `TEST_DATABASE_URL` this
+ * does nothing at all, which is correct here because `tests/setup.ts` refuses
+ * to run in that case anyway, with a better message than this file could give.
  */
 
 import { config } from "dotenv";
@@ -24,8 +32,15 @@ import postgres from "postgres";
 config({ path: ".env.local", quiet: true });
 
 /**
- * Arbitrary but fixed. Advisory locks share one namespace per database, and
- * nothing else in this application takes one, so any constant would do.
+ * Arbitrary but fixed, and checked rather than assumed.
+ *
+ * The single-key advisory namespace is shared, and this application does take
+ * another lock in it: `lockNamed` in `ctx.ts` uses
+ * `pg_advisory_xact_lock(hashtext(name))`. A collision would hang a test on a
+ * lock this run holds for its whole life, which would be a baffling failure.
+ * `hashtext('invoice-number')` is 1273008898, so there is no collision today;
+ * a reviewer pointed out that the comment here previously claimed no other
+ * lock existed at all, which was simply wrong.
  */
 const SUITE_LOCK_KEY = 8_143_207;
 

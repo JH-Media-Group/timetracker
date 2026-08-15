@@ -330,9 +330,19 @@ export const env = {
       : null,
 
   /*
-    No fallback sender.
+    No fallback sender, and checked lazily.
 
-    This used to default to `tally@localhost` when `SMTP_URL` was set and
+    A getter, not a value, because this file's own neighbours argue the point:
+    `instrumentation.ts` explains at length that a deployment assertion which
+    runs on import turns a deployment fact into a build dependency, and
+    `next build` imports every route module to collect page data. Evaluated
+    eagerly, a build machine that merely inherits `SMTP_URL` from its shell
+    would fail the build, and a health endpoint that sends no mail would refuse
+    to start. Reading `env.smtp` is what needs to be sound, so that is what
+    throws; boot touches it deliberately so a misconfigured server still dies
+    at start rather than at the first email.
+
+    The value used to default to `tally@localhost` when `SMTP_URL` was set and
     `MAIL_FROM` was not. That address is not deliverable and SendGrid refuses it
     with a 5xx, which `transport.ts` correctly classifies as **permanent**, so
     every message would go straight to `failed` on its first attempt with no
@@ -343,7 +353,9 @@ export const env = {
     file, and the alternative is a mail system that looks configured and
     silently fails everything it is given.
   */
-  smtp: parsed.SMTP_URL ? { url: parsed.SMTP_URL, from: requireMailFrom(parsed.MAIL_FROM) } : null,
+  get smtp() {
+    return parsed.SMTP_URL ? { url: parsed.SMTP_URL, from: requireMailFrom(parsed.MAIL_FROM) } : null;
+  },
 
   spaces:
     parsed.SPACES_ENDPOINT && parsed.SPACES_BUCKET && parsed.SPACES_KEY && parsed.SPACES_SECRET

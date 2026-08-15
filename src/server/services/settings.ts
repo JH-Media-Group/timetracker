@@ -45,10 +45,31 @@ let generation = 0;
 
 export async function getSettings(ctx?: Ctx): Promise<s.SettingsRow> {
   const now = Date.now();
-  if (cached && now - cached.at < CACHE_TTL_MS) return cached.row;
+  const handle = ctx?.db ?? db;
+
+  /*
+    A transaction reads the database, never the cache. Both directions.
+
+    The write side was already true, and the read side was the half that was
+    missing: this returned the cached row **before** looking at `ctx.db`, so a
+    caller inside a transaction got a process-wide snapshot rather than its own
+    view. `updateInvoiceConfig` wrote the settings row and then returned
+    `getInvoiceConfig(ctx)`, whose comment says it must return what the request
+    just wrote; on the real route path it returned the values from before the
+    write, because a GET moments earlier had warmed the cache and the
+    invalidation now waits for the commit. A reviewer reproduced it, and the
+    tests missed it because they pass a pool-backed Ctx, where
+    `withTransaction` opens and commits its own transaction before the read.
+
+    The rule is now simple enough to hold in one sentence: the cache belongs to
+    the pool. Inside a transaction it is neither read nor written, so it can
+    neither serve a stale row to somebody who can see further nor learn
+    something that has not committed.
+  */
+  const transactional = handle !== db;
+  if (!transactional && cached && now - cached.at < CACHE_TTL_MS) return cached.row;
 
   const startedAt = generation;
-  const handle = ctx?.db ?? db;
   const [row] = await handle.select().from(s.settings).where(eq(s.settings.id, 1)).limit(1);
   if (!row) {
     throw notFound(
@@ -59,28 +80,26 @@ export async function getSettings(ctx?: Ctx): Promise<s.SettingsRow> {
   /*
     Two conditions, and each closes a different hole.
 
-    **The handle must be the pool, not a transaction.** A read through an open
-    transaction sees that transaction's own uncommitted writes, and this cache
-    is process-wide. `updateInvoiceConfig` does exactly that: it writes the
-    settings row and then returns `getInvoiceConfig(ctx)` with `ctx.db` still
-    the request transaction, because `withTransaction` joins rather than opening
-    a second one. If the request then rolled back, every other request in the
-    process was served settings that never existed, for five seconds, including
-    the rounding rule that money math runs on. A reviewer reproduced it: the row
-    rolled back correctly and the cache kept the phantom.
+    **Never from a transaction**, for the reason above: a transactional read can
+    see uncommitted data, and this cache is process-wide. `updateInvoiceConfig`
+    writes the settings row and reads it straight back on the request's
+    transaction, so caching that would publish a row to every other request that
+    a rollback could then erase, the rounding rule money math runs on included.
+    A reviewer reproduced it: the row rolled back correctly and the cache kept
+    the phantom for five seconds.
 
-    **No invalidation may have happened while the read was in flight.** A read
-    that misses, issues its SELECT, and resolves after a write has invalidated
-    would otherwise put the pre-write row back and serve it for the full TTL.
+    **No invalidation while the read was in flight.** A read that misses, issues
+    its SELECT, and resolves after a write has invalidated would otherwise put
+    the pre-write row back and serve it for the full TTL.
 
-    Neither condition covers the third case, a write that invalidates before it
-    commits, because that is not fixable here: it is fixed by invalidating from
-    an after-commit callback. See `runAfterCommit` in ctx.ts.
+    Neither covers the third case, a write that invalidates before it commits,
+    because that is not fixable here. It is fixed by invalidating from an
+    after-commit callback. See `runAfterCommit` in ctx.ts.
 
     `at` is the timestamp from before the query, not after, so a slow read
     produces an entry that expires sooner rather than later.
   */
-  if (handle === db && generation === startedAt) cached = { at: now, row };
+  if (!transactional && generation === startedAt) cached = { at: now, row };
   return row;
 }
 

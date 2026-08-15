@@ -49,6 +49,19 @@ export async function register(): Promise<void> {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     const { env } = await import("@/server/env");
 
+    /*
+      Touch the mail configuration, because reading it is what validates it.
+
+      `env.smtp` throws when `SMTP_URL` is set without `MAIL_FROM`, a
+      combination that would send every message from an address the provider
+      rejects with a 5xx. `transport.ts` correctly treats a 5xx as permanent, so
+      nothing would ever be delivered and nothing would ever be retried: a mail
+      system that looks configured and silently fails everything. It is a
+      deployment fact, so it is checked here rather than on import, for the
+      reason this file exists.
+    */
+    void env.smtp;
+
     if (env.usingBuildPlaceholders) {
       throw new Error(
         "This process is running on build placeholders, not real configuration.\n" +

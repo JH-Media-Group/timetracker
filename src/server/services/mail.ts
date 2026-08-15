@@ -48,8 +48,19 @@ export interface QueuedMail {
 /** Attempts after which a message stops being retried. */
 const MAX_ATTEMPTS = 6;
 
-/** Kinds whose body carries a single-use credential in its link. */
-const AUTH_KINDS = new Set(["invite", "password_reset"]);
+/**
+ * Kinds whose body carries a single-use credential in its link.
+ *
+ * Typed as `TokenPurpose`, not `string`, so that adding a kind here without a
+ * matching entry in `TOKEN_TTL_MS` fails to compile. Untyped, the expiry sweep
+ * below would compute `undefined / 1000`, bind `NaN` into `make_interval`, and
+ * throw at the top of every drain, which would stop all mail rather than the
+ * one kind somebody had just added.
+ */
+const AUTH_KINDS = new Set<TokenPurpose>(["invite", "password_reset"]);
+
+/** Narrows a row's `kind`, which the database types only as text. */
+const carriesCredential = (kind: string): boolean => AUTH_KINDS.has(kind as TokenPurpose);
 
 /** A row claimed for longer than this is assumed abandoned by a dead run. */
 const SENDING_TIMEOUT_SECONDS = 5 * 60;
@@ -171,7 +182,7 @@ export async function drainMail(options: { limit?: number } = {}): Promise<Drain
             terminal state, so the exposure lasts one drain interval rather than
             for ever.
           */
-          bodyText: AUTH_KINDS.has(claimed.kind)
+          bodyText: carriesCredential(claimed.kind)
             ? sql`regexp_replace(${s.outboundMessages.bodyText}, 'token=[A-Za-z0-9_-]+', 'token=[redacted]', 'g')`
             : undefined,
         })
@@ -204,7 +215,7 @@ export async function drainMail(options: { limit?: number } = {}): Promise<Drain
           // Same reasoning as the success path: a message that will never be
           // sent must not keep a live token in the table.
           bodyText:
-            exhausted && AUTH_KINDS.has(claimed.kind)
+            exhausted && carriesCredential(claimed.kind)
               ? sql`regexp_replace(${s.outboundMessages.bodyText}, 'token=[A-Za-z0-9_-]+', 'token=[redacted]', 'g')`
               : undefined,
         })
@@ -307,7 +318,7 @@ async function expireUndeliverableAuthMail(): Promise<number> {
               eq(s.outboundMessages.kind, kind),
               // The database clock on both sides, as everywhere else here.
               sql`${s.outboundMessages.createdAt} < now() - make_interval(secs => ${
-                TOKEN_TTL_MS[kind as TokenPurpose] / 1000
+                TOKEN_TTL_MS[kind] / 1000
               })`
             )
           )

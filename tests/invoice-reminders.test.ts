@@ -21,6 +21,7 @@ import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
 import { ESCALATION_DAYS, sendDueReminders } from "@/server/services/invoice-reminders";
 import { formatMoney } from "@/lib/format";
+import { dayIn } from "@/domain/calendar";
 import { invalidateSettings } from "@/server/services/settings";
 
 /*
@@ -180,6 +181,36 @@ beforeEach(async () => {
 });
 
 describe("sendDueReminders", () => {
+  it("resolves today in the account timezone, not UTC", async () => {
+    /*
+      The mail job runs every five minutes. With `today` taken from
+      `new Date().toISOString()`, from 20:00 America/New_York onwards that
+      string is already tomorrow, `daysLate` gains a day, and an invoice due
+      **today** crosses the one-day step and gets chased on its own due date.
+
+      The clock is fixed rather than read, or the test only means something for
+      the four hours a day the two happen to disagree. The first version did
+      read it, skipped itself when they agreed, and passed while asserting
+      nothing: mutating the fix back to UTC did not fail it.
+
+      At this instant it is the 15th in UTC and still the evening of the 14th in
+      New York, so an invoice due on the 14th is due today for the business and
+      one day late for anybody reading UTC.
+    */
+    const evening = new Date("2026-08-15T03:00:00Z");
+    expect(evening.toISOString().slice(0, 10)).toBe("2026-08-15");
+    expect(dayIn("America/New_York", evening)).toBe("2026-08-14");
+
+    const tzCtx = createCtx({ actor: systemActor(await actorUser()), db, now: () => evening });
+
+    const { id } = await seedInvoice({ dueDaysAgo: 0 });
+    await db.update(s.invoices).set({ dueDate: "2026-08-14" }).where(eq(s.invoices.id, id));
+
+    const report = await sendDueReminders(tzCtx);
+    expect(report.sent, "due today for the business, so not chased").toBe(0);
+    expect(await reminderCount(id)).toBe(0);
+  });
+
   it("does not chase an invoice that is not yet due", async () => {
     const { id } = await seedInvoice({ dueDaysAgo: -5 });
     const report = await sendDueReminders(ctx, TODAY);
