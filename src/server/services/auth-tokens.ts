@@ -31,7 +31,7 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull, sql } from "drizzle-orm";
 import { createCtx, systemActor, withTransaction, type Ctx } from "@/server/ctx";
 import { db } from "@/server/db/client";
 import * as s from "@/server/db/schema";
@@ -265,7 +265,11 @@ export async function requestPasswordReset(email: string): Promise<void> {
         and(
           eq(s.authTokens.userId, user.id),
           eq(s.authTokens.purpose, "password_reset"),
-          gt(s.authTokens.createdAt, new Date(Date.now() - MIN_SECONDS_BETWEEN_RESETS * 1000))
+          // The database clock on both sides. `created_at` is written by
+          // Postgres, so comparing it to Node's would let a skewed container
+          // suppress every reset while still answering "on its way", which is
+          // the same class of bug `mail.ts` carries a comment about.
+          sql`${s.authTokens.createdAt} > now() - make_interval(secs => ${MIN_SECONDS_BETWEEN_RESETS})`
         )
       )
       .limit(1);

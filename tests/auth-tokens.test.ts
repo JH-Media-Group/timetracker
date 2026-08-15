@@ -15,7 +15,7 @@ vi.mock("@/server/mail/transport", async () => {
 });
 
 import { eq, sql } from "drizzle-orm";
-import { db } from "@/server/db/client";
+import { db, sql as pg } from "@/server/db/client";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
 import { consumeToken, inviteUser, peekToken, requestPasswordReset } from "@/server/services/auth-tokens";
@@ -205,18 +205,43 @@ describe("requestPasswordReset", () => {
     expect(queued!.state).toBe("queued");
   });
 
-  it("issues one link when two requests arrive together", async () => {
-    // The throttle used to check outside its transaction, so two simultaneous
-    // requests both saw no recent token, both superseded, and both issued.
-    const id = await makeUser();
-    const [user] = await db.select().from(s.users).where(eq(s.users.id, id));
+  it("sends one email when two requests arrive together", async () => {
+    /*
+      Three things had to be got right before this test meant anything, and each
+      wrong version passed with the lock deleted.
 
-    await Promise.all([requestPasswordReset(user!.email), requestPasswordReset(user!.email)]);
+      **Asserting one live token proves nothing.** `issue()` supersedes any
+      outstanding token before inserting its own, so two racing issuances still
+      leave one live token. The count of *emails* is the property a person
+      notices, and the one that survives superseding.
 
-    const live = (await db.select().from(s.authTokens).where(eq(s.authTokens.userId, id))).filter(
-      (t) => t.usedAt == null
-    );
-    expect(live).toHaveLength(1);
+      **Holding `FOR UPDATE` from another connection proves nothing either.**
+      Inserting a token takes a key-share lock on its parent user row through
+      the foreign key, which conflicts with the holder's `FOR UPDATE` whether or
+      not this code takes a lock of its own. That version measured Postgres.
+
+      **Racing once proves nothing.** The first `Promise.all` in a process is
+      serialised by connection establishment: the pool has no open connections,
+      so one call gets there while the other is still connecting. Measured with
+      the lock deleted, round 0 sent one email and rounds 1 and 2 sent two. A
+      single-shot race is exactly round 0. Hence the warm-up and the repeat.
+    */
+    await Promise.all(Array.from({ length: 4 }, () => db.execute(sql`select 1`)));
+
+    for (let round = 0; round < 3; round++) {
+      const id = await makeUser();
+      const [user] = await db.select().from(s.users).where(eq(s.users.id, id));
+
+      await Promise.all([requestPasswordReset(user!.email), requestPasswordReset(user!.email)]);
+
+      const mailed = await db.select().from(s.outboundMessages).where(eq(s.outboundMessages.userId, id));
+      expect(mailed, `round ${round}: two racing requests must not both send`).toHaveLength(1);
+
+      const live = (await db.select().from(s.authTokens).where(eq(s.authTokens.userId, id))).filter(
+        (t) => t.usedAt == null
+      );
+      expect(live, `round ${round}: two live reset links defeat superseding`).toHaveLength(1);
+    }
   });
 
   it("does not send a second link within the minute floor", async () => {

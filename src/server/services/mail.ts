@@ -20,7 +20,7 @@
  * and looks sent is a payment nobody chases.
  */
 
-import { and, asc, eq, isNotNull, lt, or, sql } from "drizzle-orm";
+import { and, asc, eq, lt, or, sql } from "drizzle-orm";
 import type { Ctx } from "@/server/ctx";
 import { db } from "@/server/db/client";
 import * as s from "@/server/db/schema";
@@ -279,6 +279,18 @@ async function claimOne() {
           lt(s.outboundMessages.attempts, MAX_ATTEMPTS),
           or(
             eq(s.outboundMessages.state, "queued"),
+            /*
+              Messages written before a transport existed.
+
+              `not_configured` records that nothing was attempted, which is
+              honest, and it was also a state nothing could leave: every invite,
+              reset and invoice queued before SendGrid is configured stayed
+              there for ever, still holding a live token, and the depth report
+              did not count them so the queue looked empty. That is today's
+              deployment, not a hypothetical. Configuring a transport now picks
+              them up on the next run.
+            */
+            eq(s.outboundMessages.state, "not_configured"),
             // Reclaim a row a dead run left behind. Measured from the claim,
             // which is what `next_attempt_at` records once a row is `sending`.
             and(
@@ -316,16 +328,23 @@ async function claimOne() {
  * absent from every number an operator could look at, which is the same as not
  * existing right up until a client asks where their invoice is.
  */
-export async function mailQueueDepth(): Promise<{ queued: number; sending: number; failed: number }> {
-  const [row] = await db.execute<{ queued: string; sending: string; failed: string }>(sql`
-    SELECT count(*) FILTER (WHERE state = 'queued')::text  AS queued,
-           count(*) FILTER (WHERE state = 'sending')::text AS sending,
-           count(*) FILTER (WHERE state = 'failed')::text  AS failed
+export async function mailQueueDepth(): Promise<{
+  queued: number;
+  sending: number;
+  failed: number;
+  notConfigured: number;
+}> {
+  const [row] = await db.execute<Record<string, string>>(sql`
+    SELECT count(*) FILTER (WHERE state = 'queued')::text          AS queued,
+           count(*) FILTER (WHERE state = 'sending')::text         AS sending,
+           count(*) FILTER (WHERE state = 'failed')::text          AS failed,
+           count(*) FILTER (WHERE state = 'not_configured')::text  AS not_configured
       FROM outbound_messages
   `);
   return {
     queued: Number(row?.queued ?? 0),
     sending: Number(row?.sending ?? 0),
     failed: Number(row?.failed ?? 0),
+    notConfigured: Number(row?.not_configured ?? 0),
   };
 }

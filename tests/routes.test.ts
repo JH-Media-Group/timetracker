@@ -271,3 +271,52 @@ describe("middleware public paths", () => {
     expect(exact).toContain("/api/health/ready");
   });
 });
+
+/**
+ * A rate-limit key must identify the caller, never a constant.
+ *
+ * `enforce("auth", "forgot:no-client-ip")` reads like a safe fallback and is a
+ * different mechanism entirely: every caller shares one bucket, so ten
+ * anonymous requests ration the whole company. `auth/signin` carries a long
+ * comment explaining this, and it was reintroduced two files away anyway, which
+ * is why prose is not enough and this is a test.
+ *
+ * `clientIp()` returns null unless a trusted proxy is configured, and
+ * `.env.example` ships `TRUST_PROXY=0`, so the fallback path is the likely one
+ * rather than the rare one.
+ */
+describe("rate-limit keys", () => {
+  const files = routeFiles(APP_ROOT);
+
+  it("has routes to check", () => {
+    expect(files.length).toBeGreaterThan(50);
+  });
+
+  it("never rations every caller through one shared bucket", () => {
+    const offenders: string[] = [];
+
+    for (const file of files) {
+      const text = readFileSync(file, "utf8");
+      /*
+        Any quoted literal anywhere in the key is the finding.
+
+        A legitimate key is a template with interpolation or a helper call, so
+        it never contains a plain quoted string. Matching only a key that IS a
+        literal was too narrow: the first version of this test passed against
+        `ip ? \`forgot:ip:${ip}\` : "forgot:no-client-ip"`, which is precisely
+        the shape the bug took.
+      */
+      for (const m of text.matchAll(/(?:enforce|consume)\(\s*"[^"]+"\s*,([\s\S]*?)\);/g)) {
+        const key = m[1] ?? "";
+        if (/["']/.test(key)) offenders.push(`  ${relative(process.cwd(), file)}:${key.trim()}`);
+      }
+    }
+
+    expect(
+      offenders,
+      "these limiter keys are constant, so one stranger's requests exhaust the bucket for everybody. " +
+        "Key on the caller, and skip the limit when the caller cannot be identified:\n" +
+        offenders.join("\n")
+    ).toEqual([]);
+  });
+});

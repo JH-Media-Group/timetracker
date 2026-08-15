@@ -63,6 +63,12 @@ try {
     const today = new Date().toISOString().slice(0, 10);
     const reminders = await sendDueReminders(ctx, today);
     if (reminders.sent) console.log(`Queued ${reminders.sent} overdue reminder(s).`);
+    // Worth a line: it means somebody moved a due date, and the escalation for
+    // that invoice has started over. Silent, it would look like nothing happened.
+    if (reminders.reset) console.log(`Wound back the escalation on ${reminders.reset} invoice(s) given more time.`);
+    for (const f of reminders.failed) {
+      console.warn(`  ! Invoice ${f.invoice} could not be rendered and was not chased: ${f.reason}`);
+    }
     if (reminders.skippedNoContact.length) {
       console.warn(
         `  ! ${reminders.skippedNoContact.length} overdue invoice(s) have no client contact to chase: ` +
@@ -86,6 +92,23 @@ try {
       `Mail run: ${report.sent} sent, ${report.retrying} retrying, ${report.failed} failed, ` +
         `${after.queued} still queued, ${after.sending} in flight (${ms}ms)`
     );
+    if (after.notConfigured) {
+      console.warn(
+        `  ! ${after.notConfigured} message(s) were written before a transport existed and are waiting. ` +
+          `They will go out on the next run now that one is configured.`
+      );
+    }
+    if (report.lostLease) {
+      /*
+        The one signal that a message may have gone out twice. Counted and not
+        printed is the same as not counted, so it is said out loud: a drain
+        overran its lease, another worker took the row, and both may have sent.
+      */
+      console.warn(
+        `  ! ${report.lostLease} send(s) finished after losing their claim, so another worker had already ` +
+          `taken the row. Those messages may have been sent twice.`
+      );
+    }
     if (report.reconciled) {
       console.warn(
         `  ! ${report.reconciled} message(s) were abandoned mid-send with no attempts left and have been ` +

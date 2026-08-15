@@ -22,10 +22,32 @@ const CACHE_TTL_MS = 5_000;
 
 let cached: { at: number; row: s.SettingsRow } | null = null;
 
+/**
+ * Bumped by every invalidation, so a read can tell whether one happened while
+ * it was in flight.
+ *
+ * Without it, `invalidateSettings()` was losable, and the way it lost was
+ * ordinary: a read misses the cache and issues its SELECT, a write commits and
+ * invalidates, and then the read resolves and stores the row it fetched *before*
+ * the write. The invalidation is overwritten by data older than itself, and the
+ * pre-write settings are then served for a further five seconds. The comment on
+ * `invalidateSettings` said "so the next read does not serve the old row", and
+ * that was the one thing it could not guarantee.
+ *
+ * It was found through a test suite that failed thirteen tests and then passed
+ * six runs in a row. A `beforeEach` reset the invoice templates and invalidated,
+ * an earlier test's read landed after it, and every test that rendered a message
+ * spent the next five seconds rendering from a template that was supposed to be
+ * gone. In production the same shape means an admin saves a setting and requests
+ * already in flight put the old value back.
+ */
+let generation = 0;
+
 export async function getSettings(ctx?: Ctx): Promise<s.SettingsRow> {
   const now = Date.now();
   if (cached && now - cached.at < CACHE_TTL_MS) return cached.row;
 
+  const startedAt = generation;
   const handle = ctx?.db ?? db;
   const [row] = await handle.select().from(s.settings).where(eq(s.settings.id, 1)).limit(1);
   if (!row) {
@@ -34,13 +56,22 @@ export async function getSettings(ctx?: Ctx): Promise<s.SettingsRow> {
     );
   }
 
-  cached = { at: now, row };
+  /*
+    Only cache what is still current. This read still returns what it fetched,
+    which is right: it read the row at a point in time and its caller asked
+    then. What it must not do is hand that row to everybody who asks next.
+
+    `at` is the timestamp from before the query, not after, so a slow read
+    produces an entry that expires sooner rather than later.
+  */
+  if (generation === startedAt) cached = { at: now, row };
   return row;
 }
 
 /** Call after any write, so the next read does not serve the old row. */
 export const invalidateSettings = () => {
   cached = null;
+  generation++;
 };
 
 export async function updateSettings(ctx: Ctx, patch: Partial<s.SettingsRow>) {

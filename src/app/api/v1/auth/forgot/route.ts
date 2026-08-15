@@ -60,16 +60,25 @@ export async function POST(req: NextRequest) {
     const { email } = parseOrThrow(schema, await req.json().catch(() => ({})));
 
     /*
-      A ceiling even when the caller has no address.
+      Per address, and only when the address is known.
 
-      `clientIp()` returns null unless TRUST_PROXY says a proxy is setting
-      X-Forwarded-For, and `.env.example` ships TRUST_PROXY=0, so `if (ip)`
-      meant this endpoint had no limit at all in the configuration most likely
-      to be running. Falling back to a shared bucket is coarse, and coarse is
-      better than absent: the per-address minute floor and the response floor
-      already bound the interesting work, so this only stops the crude case.
+      A previous version fell back to a constant key when `clientIp()` returned
+      null, which it does unless TRUST_PROXY says a proxy is setting
+      X-Forwarded-For, and `.env.example` ships TRUST_PROXY=0. That put every
+      caller on earth in one bucket: ten anonymous posts every fifteen minutes
+      disabled password recovery for the whole company, and with SSO dropped
+      this is the only way back in.
+
+      `auth/signin` already carries this exact argument, three files away, and
+      it was reintroduced here anyway. A shared bucket is not a weaker limit, it
+      is a different mechanism: it rations everybody by the behaviour of one
+      stranger. `tests/routes.test.ts` now fails on a constant limiter key so
+      that it stays gone.
+
+      What bounds this route without an address: the response floor caps one
+      connection at four requests a second, and the per-address minute floor in `requestPasswordReset` caps mail and token writes.
     */
-    await enforce("auth", ip ? `forgot:ip:${ip}` : "forgot:no-client-ip");
+    if (ip) await enforce("auth", `forgot:ip:${ip}`);
 
     /*
       No per-address bucket. The service throttles by interval instead.

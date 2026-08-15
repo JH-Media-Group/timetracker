@@ -16,7 +16,7 @@ vi.mock("@/server/mail/transport", async () => {
 
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { createCtx, systemActor } from "@/server/ctx";
-import { db } from "@/server/db/client";
+import { db, sql as pg } from "@/server/db/client";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
 import { ESCALATION_DAYS, sendDueReminders } from "@/server/services/invoice-reminders";
@@ -58,8 +58,21 @@ async function actorUser(): Promise<string> {
 }
 
 const DAY = 86_400_000;
-const isoDaysAgo = (n: number) => new Date(Date.now() - n * DAY).toISOString().slice(0, 10);
-const TODAY = new Date().toISOString().slice(0, 10);
+
+/**
+ * One clock reading for the whole file, not one per call.
+ *
+ * `isoDaysAgo` used to read `Date.now()` each time it was called while `TODAY`
+ * was captured at module load. Almost always identical, and wrong for the two
+ * minutes a year the run crosses UTC midnight between the import and a seed:
+ * every seeded date comes out a day younger than `TODAY` assumes, `stepsPassed`
+ * lands on zero, and every test that sends fails while every test that does not
+ * passes. Anchoring both to one instant removes the window rather than shrinking
+ * it.
+ */
+const ANCHOR = Date.now();
+const isoDaysAgo = (n: number) => new Date(ANCHOR - n * DAY).toISOString().slice(0, 10);
+const TODAY = isoDaysAgo(0);
 
 /**
  * Every client these tests create, so cleanup can delete by id.
@@ -125,6 +138,15 @@ const reminderCount = async (invoiceId: string) => {
 
   expect(queued, "a recorded reminder that was never queued has not been sent").toBe(history);
   return history;
+};
+
+/** The escalation step the invoice is recorded as having been chased at. */
+const levelOf = async (invoiceId: string) => {
+  const [row] = await db
+    .select({ level: s.invoices.reminderLevel })
+    .from(s.invoices)
+    .where(eq(s.invoices.id, invoiceId));
+  return row!.level;
 };
 
 beforeEach(async () => {
@@ -207,19 +229,104 @@ describe("sendDueReminders", () => {
     expect(await reminderCount(id)).toBe(2);
   });
 
+  it("chases again after an extension, rather than being silenced for good", async () => {
+    /*
+      The ordinary way an invoice used to go quiet for ever.
+
+      A client asks for more time, somebody moves the due date out, and the
+      invoice stops being late. Its level stayed at whatever it had reached, and
+      because the scan only asked for `due_date <= today` it was never looked at
+      again to be corrected. When the new date passed and it was a day late, one
+      step showed against a recorded three, which reads as already chased. The
+      symptom is an invoice nobody is chasing and no error anywhere.
+    */
+    const { id } = await seedInvoice({ dueDaysAgo: ESCALATION_DAYS[2] });
+    await sendDueReminders(ctx, TODAY);
+    expect(await reminderCount(id)).toBe(1);
+
+    // Thirty more days granted. Not late any more.
+    await db.update(s.invoices).set({ dueDate: isoDaysAgo(-30) }).where(eq(s.invoices.id, id));
+
+    const wound = await sendDueReminders(ctx, TODAY);
+    expect(wound.sent, "an extension is not an occasion to send anything").toBe(0);
+    expect(wound.reset).toBe(1);
+    expect(await levelOf(id), "back to the step it is actually at").toBe(0);
+
+    // The extension runs out.
+    await db.update(s.invoices).set({ dueDate: isoDaysAgo(ESCALATION_DAYS[0]) }).where(eq(s.invoices.id, id));
+
+    expect((await sendDueReminders(ctx, TODAY)).sent).toBe(1);
+    expect(await reminderCount(id)).toBe(2);
+  });
+
+  it("winds the level back only as far as the invoice actually is", async () => {
+    // A partial extension, from the last step to the middle one. It must not
+    // re-send the step it is still past.
+    const { id } = await seedInvoice({ dueDaysAgo: ESCALATION_DAYS[2] });
+    await sendDueReminders(ctx, TODAY);
+
+    await db.update(s.invoices).set({ dueDate: isoDaysAgo(ESCALATION_DAYS[1]) }).where(eq(s.invoices.id, id));
+
+    expect((await sendDueReminders(ctx, TODAY)).reset).toBe(1);
+    expect(await levelOf(id)).toBe(2);
+    expect(await reminderCount(id), "winding back is not a reason to chase").toBe(1);
+  });
+
+  it("leaves an invoice it has never chased alone", async () => {
+    // The reset arm widened the scan. An invoice that is not late and has never
+    // been chased must still be a no-op, not a lock and an update of 0 to 0.
+    const { id } = await seedInvoice({ dueDaysAgo: -5 });
+    const report = await sendDueReminders(ctx, TODAY);
+    expect(report.reset).toBe(0);
+    expect(await levelOf(id)).toBe(0);
+  });
+
   it("stops after the last step, however late the invoice gets", async () => {
     const { id } = await seedInvoice({ dueDaysAgo: 400 });
     for (let i = 0; i < 10; i++) await sendDueReminders(ctx, TODAY);
     expect(await reminderCount(id)).toBe(1);
   });
 
-  it("two overlapping runs send one reminder, not two", async () => {
-    // The scan runs outside a transaction, so both runs can see the same
-    // invoice. The per-invoice lock and the level recheck under it are what
-    // stop both of them deciding to send.
+  it("waits for another run that already holds the invoice", async () => {
+    /*
+      This used to be `Promise.all([sendDueReminders(), sendDueReminders()])`,
+      which passed with the row lock deleted: two calls in one process do not
+      interleave inside a transaction, and superseding alone satisfied the
+      assertion. A reviewer mutation-tested it and it did not notice.
+
+      So the lock is exercised directly. A second connection takes the invoice
+      row and holds it; the reminder pass must block on that rather than read a
+      stale level and decide to send. When the holder commits with the level
+      already advanced, the pass finds nothing to do.
+    */
     const { id } = await seedInvoice({ dueDaysAgo: 3 });
-    await Promise.all([sendDueReminders(ctx, TODAY), sendDueReminders(ctx, TODAY)]);
-    expect(await reminderCount(id)).toBe(1);
+
+    const holder = pg.reserve ? await pg.reserve() : null;
+    if (!holder) return; // driver without reserve(); nothing to assert safely
+
+    try {
+      await holder`BEGIN`;
+      await holder`SELECT id FROM invoices WHERE id = ${id} FOR UPDATE`;
+      await holder`UPDATE invoices SET reminder_level = 3 WHERE id = ${id}`;
+
+      let finished = false;
+      const pass = sendDueReminders(ctx, TODAY).then((r) => {
+        finished = true;
+        return r;
+      });
+
+      await new Promise((r) => setTimeout(r, 300));
+      expect(finished, "the pass must block on the lock, not read around it").toBe(false);
+
+      await holder`COMMIT`;
+      const report = await pass;
+
+      expect(report.sent, "the other run had already chased it").toBe(0);
+      expect(await reminderCount(id)).toBe(0);
+    } finally {
+      await holder`ROLLBACK`.catch(() => {});
+      holder.release();
+    }
   });
 
   it("does not spend an escalation step on an invoice it could not chase", async () => {
@@ -279,7 +386,17 @@ describe("sendDueReminders", () => {
     invalidateSettings();
 
     const { id } = await seedInvoice({ dueDaysAgo: 2 });
-    await expect(sendDueReminders(ctx, TODAY)).rejects.toThrow(/\{\{link\}\}, which nothing fills in/);
+
+    /*
+      The run survives it. This used to assert the whole call rejected, which
+      was the behaviour and was wrong: the mail job runs this before draining,
+      in one try, so a single unrenderable invoice threw, the job exited, and no
+      password reset or invite in the queue was ever sent again.
+    */
+    const report = await sendDueReminders(ctx, TODAY);
+    expect(report.sent).toBe(0);
+    expect(report.failed).toHaveLength(1);
+    expect(report.failed[0]!.reason).toMatch(/\{\{link\}\}, which nothing fills in/);
     expect(await reminderCount(id)).toBe(0);
 
   });
@@ -301,6 +418,26 @@ describe("sendDueReminders", () => {
 
     await expect(sendDueReminders(ctx, TODAY)).resolves.toMatchObject({ sent: 1 });
     expect(await reminderCount(id)).toBe(1);
+  });
+
+  it("keeps chasing the other invoices when one cannot render", async () => {
+    // The blast radius of a bad template is that invoice, not the run.
+    const bad = await seedInvoice({ dueDaysAgo: 5 });
+    const good = await seedInvoice({ dueDaysAgo: 5 });
+
+    await db
+      .update(s.settings)
+      .set({ invoiceMessages: { reminderBody: "Pay: {{link}}", reminderSubject: "Invoice {{number}}" } });
+    invalidateSettings();
+
+    const report = await sendDueReminders(ctx, TODAY);
+    // Both fail here, because the template is shared; the point is that the
+    // loop keeps going rather than stopping at the first one.
+    expect(report.considered).toBe(2);
+    expect(report.failed).toHaveLength(2);
+    expect(report.failed.map((f) => f.invoice)).toHaveLength(2);
+    void bad;
+    void good;
   });
 
   it("formats money the same way the invoice screen does", async () => {
