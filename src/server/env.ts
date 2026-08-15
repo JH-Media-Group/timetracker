@@ -233,6 +233,23 @@ const BUILD_PLACEHOLDERS = {
   SESSION_SECRET: randomBytes(32).toString("base64"),
 } as const;
 
+/**
+ * The sender address, which is required the moment a transport is configured.
+ *
+ * Not enforced in the schema itself because `MAIL_FROM` is genuinely optional
+ * when `SMTP_URL` is absent, and a cross-field rule there would have to be
+ * repeated in `readForBuild`.
+ */
+function requireMailFrom(from: string | undefined): string {
+  if (from) return from;
+  throw new Error(
+    "SMTP_URL is set but MAIL_FROM is not. Every message would be sent from an address the " +
+      "provider rejects with a 5xx, which counts as a permanent failure, so nothing would ever " +
+      "be delivered and nothing would ever be retried. Set MAIL_FROM, for example " +
+      '"Tally <tally@jhmediagroup.com>".'
+  );
+}
+
 const parsed = IS_NEXT_BUILD ? readForBuild() : read();
 
 /**
@@ -312,7 +329,21 @@ export const env = {
         }
       : null,
 
-  smtp: parsed.SMTP_URL ? { url: parsed.SMTP_URL, from: parsed.MAIL_FROM ?? "tally@localhost" } : null,
+  /*
+    No fallback sender.
+
+    This used to default to `tally@localhost` when `SMTP_URL` was set and
+    `MAIL_FROM` was not. That address is not deliverable and SendGrid refuses it
+    with a 5xx, which `transport.ts` correctly classifies as **permanent**, so
+    every message would go straight to `failed` on its first attempt with no
+    retry and nothing obviously wrong in the configuration. A reviewer spotted
+    that the tests always supply a `from`, so nothing exercised the fallback.
+
+    Refusing to start is the right answer: the variable is one line in the env
+    file, and the alternative is a mail system that looks configured and
+    silently fails everything it is given.
+  */
+  smtp: parsed.SMTP_URL ? { url: parsed.SMTP_URL, from: requireMailFrom(parsed.MAIL_FROM) } : null,
 
   spaces:
     parsed.SPACES_ENDPOINT && parsed.SPACES_BUCKET && parsed.SPACES_KEY && parsed.SPACES_SECRET

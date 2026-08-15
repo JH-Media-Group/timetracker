@@ -12,7 +12,7 @@
  */
 
 import { eq } from "drizzle-orm";
-import { assertCan, type Ctx } from "@/server/ctx";
+import { assertCan, runAfterCommit, type Ctx } from "@/server/ctx";
 import * as s from "@/server/db/schema";
 import { db } from "@/server/db/client";
 import { notFound } from "@/server/errors";
@@ -57,14 +57,30 @@ export async function getSettings(ctx?: Ctx): Promise<s.SettingsRow> {
   }
 
   /*
-    Only cache what is still current. This read still returns what it fetched,
-    which is right: it read the row at a point in time and its caller asked
-    then. What it must not do is hand that row to everybody who asks next.
+    Two conditions, and each closes a different hole.
+
+    **The handle must be the pool, not a transaction.** A read through an open
+    transaction sees that transaction's own uncommitted writes, and this cache
+    is process-wide. `updateInvoiceConfig` does exactly that: it writes the
+    settings row and then returns `getInvoiceConfig(ctx)` with `ctx.db` still
+    the request transaction, because `withTransaction` joins rather than opening
+    a second one. If the request then rolled back, every other request in the
+    process was served settings that never existed, for five seconds, including
+    the rounding rule that money math runs on. A reviewer reproduced it: the row
+    rolled back correctly and the cache kept the phantom.
+
+    **No invalidation may have happened while the read was in flight.** A read
+    that misses, issues its SELECT, and resolves after a write has invalidated
+    would otherwise put the pre-write row back and serve it for the full TTL.
+
+    Neither condition covers the third case, a write that invalidates before it
+    commits, because that is not fixable here: it is fixed by invalidating from
+    an after-commit callback. See `runAfterCommit` in ctx.ts.
 
     `at` is the timestamp from before the query, not after, so a slow read
     produces an entry that expires sooner rather than later.
   */
-  if (generation === startedAt) cached = { at: now, row };
+  if (handle === db && generation === startedAt) cached = { at: now, row };
   return row;
 }
 
@@ -118,7 +134,18 @@ export async function updateSettings(ctx: Ctx, patch: Partial<s.SettingsRow>) {
     .where(eq(s.settings.id, 1))
     .returning();
 
-  invalidateSettings();
+  /*
+    After the commit, not here.
+
+    Inline, this fired one or two round trips before COMMIT, which left a window
+    that ordinary traffic hits: a concurrent reader misses the cache, reads the
+    pre-write row on a different pooled connection (it cannot see an uncommitted
+    write), and stores it *after* this invalidation. The write then commits into
+    a cache holding the value it replaced. `invalidateSettings` promises "the
+    next read does not serve the old row", and inline invalidation could not
+    keep that promise no matter how the read side was written.
+  */
+  runAfterCommit(ctx, invalidateSettings);
 
   ctx.audit({
     action: "settings.update",

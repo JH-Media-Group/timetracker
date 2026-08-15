@@ -298,17 +298,31 @@ describe("rate-limit keys", () => {
     for (const file of files) {
       const text = readFileSync(file, "utf8");
       /*
-        Any quoted literal anywhere in the key is the finding.
+        Any constant string anywhere in the key is the finding.
 
-        A legitimate key is a template with interpolation or a helper call, so
-        it never contains a plain quoted string. Matching only a key that IS a
-        literal was too narrow: the first version of this test passed against
+        A legitimate key varies with the caller, so it is a template that
+        interpolates or a helper call. Matching only a key that IS a literal was
+        too narrow: the first version passed against
         `ip ? \`forgot:ip:${ip}\` : "forgot:no-client-ip"`, which is precisely
         the shape the bug took.
+
+        Checking for `"` and `'` alone was still too narrow, which a reviewer
+        demonstrated: a backtick string with nothing interpolated in it, like
+        `` `forgot:no-client-ip` ``, contains neither quote character and sailed
+        through while being exactly what this test exists to forbid.
+
+        And **each literal is judged on its own**, not the key as a whole. Asking
+        whether the key contains `${` anywhere passes the shape that matters
+        most, `ip ? \`forgot:ip:${ip}\` : \`forgot:no-client-ip\``, because the
+        live branch's interpolation vouches for the constant one. That was this
+        test's second miss in two attempts, both times on a ternary.
       */
       for (const m of text.matchAll(/(?:enforce|consume)\(\s*"[^"]+"\s*,([\s\S]*?)\);/g)) {
         const key = m[1] ?? "";
-        if (/["']/.test(key)) offenders.push(`  ${relative(process.cwd(), file)}:${key.trim()}`);
+        const constantTemplate = [...key.matchAll(/`[^`]*`/g)].some((t) => !t[0].includes("${"));
+        if (/["']/.test(key) || constantTemplate) {
+          offenders.push(`  ${relative(process.cwd(), file)}:${key.trim()}`);
+        }
       }
     }
 

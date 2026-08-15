@@ -68,7 +68,12 @@ export interface Ctx {
   audit: (entry: AuditInput) => void;
   emit: (event: DomainEvent) => void;
   /** Internal: what has been buffered so far. */
-  readonly _buffers: { audits: AuditInput[]; events: DomainEvent[] };
+  readonly _buffers: {
+    audits: AuditInput[];
+    events: DomainEvent[];
+    /** Side effects outside the database, run only if the transaction commits. */
+    afterCommit: (() => void)[];
+  };
 }
 
 /* ------------------------------------------------------------ construction */
@@ -79,7 +84,11 @@ export function createCtx(opts: {
   now?: () => Date;
   request?: Partial<RequestInfo>;
 }): Ctx {
-  const buffers = { audits: [] as AuditInput[], events: [] as DomainEvent[] };
+  const buffers = {
+    audits: [] as AuditInput[],
+    events: [] as DomainEvent[],
+    afterCommit: [] as (() => void)[],
+  };
   return {
     actor: opts.actor,
     db: opts.db ?? pool,
@@ -159,12 +168,66 @@ export async function withTransaction<T>(ctx: Ctx, fn: (tx: Ctx) => Promise<T>):
     return fn(ctx);
   }
 
-  return (pool as typeof pool).transaction(async (tx) => {
-    const inner: Ctx = { ...ctx, db: tx };
-    const result = await fn(inner);
-    await flush(inner);
-    return result;
-  });
+  let result: T;
+  try {
+    result = await (pool as typeof pool).transaction(async (tx) => {
+      const inner: Ctx = { ...ctx, db: tx };
+      const out = await fn(inner);
+      await flush(inner);
+      return out;
+    });
+  } catch (e) {
+    // Nothing committed, so nothing registered may run. Leaving them queued
+    // would fire them on the next unrelated commit through the same Ctx.
+    discardAfterCommitCallbacks(ctx);
+    throw e;
+  }
+
+  runAfterCommitCallbacks(ctx);
+  return result;
+}
+
+/**
+ * Register a side effect that must not happen until the transaction commits.
+ *
+ * For anything outside the database, where a rollback cannot undo it. The case
+ * that drove it is the settings cache: `updateSettings` invalidated inline,
+ * which is one or two round trips before COMMIT, so a concurrent reader could
+ * miss the cache, read the pre-write row on another connection, and store it
+ * *after* the invalidation. The write then committed into a cache holding the
+ * value it replaced, and every reader in the process saw the old settings for
+ * the full five second TTL. That is the symptom of an admin saving a setting
+ * and watching the old value come back.
+ *
+ * Outside a transaction there is nothing to wait for, so the effect runs now.
+ */
+export function runAfterCommit(ctx: Ctx, fn: () => void): void {
+  if (!isTransaction(ctx.db)) {
+    fn();
+    return;
+  }
+  ctx._buffers.afterCommit.push(fn);
+}
+
+/**
+ * Drain and run the registered effects. Call only after a successful commit.
+ *
+ * Draining first means a throw from one callback cannot cause another to run
+ * twice, and that the buffer is empty whether or not one throws.
+ */
+export function runAfterCommitCallbacks(ctx: Ctx): void {
+  const pending = ctx._buffers.afterCommit.splice(0);
+  for (const fn of pending) fn();
+}
+
+/**
+ * Discard them without running. Call when the transaction did not commit.
+ *
+ * A Ctx can outlive one failed transaction (jobs reuse theirs across a loop),
+ * and a callback left in the buffer would fire on the next unrelated commit.
+ */
+export function discardAfterCommitCallbacks(ctx: Ctx): void {
+  ctx._buffers.afterCommit.length = 0;
 }
 
 function isTransaction(handle: Db): boolean {

@@ -18,7 +18,7 @@ vi.mock("@/server/mail/transport", async () => {
   };
 });
 
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import { db } from "@/server/db/client";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
@@ -52,6 +52,152 @@ describe("queueMail", () => {
     const row = await rowFor(await queue());
     expect(row.state).toBe("queued");
     expect(row.attempts).toBe(0);
+  });
+});
+
+/**
+ * Rows written before a transport existed.
+ *
+ * The claim predicate grew a `not_configured` arm and shipped with nothing
+ * exercising it, which a reviewer pointed out and which is how the expiry hole
+ * below went unnoticed: these are exactly the rows that pile up on a deployment
+ * with no SMTP, and exactly the rows that all become sendable at once the moment
+ * a key is configured.
+ */
+describe("reconciling a row a dead process abandoned", () => {
+  it("takes the lease away, so a late success cannot undo the failure", async () => {
+    /*
+      Marking the row `failed` is only half of it.
+
+      `reconcileStranded` used to leave `claim_id` set. If the original send was
+      not dead but merely slow, and came back successful minutes later, its
+      completion predicate still matched and rewrote `failed` to `sent` under an
+      operator who had already been told delivery failed and may well have
+      resent by hand. Clearing the claim makes that write miss, which is what
+      `lostLease` counts and what the job warns about.
+    */
+    const id = newId();
+    const staleClaim = newId();
+    await db.insert(s.outboundMessages).values({
+      id,
+      kind: "invoice",
+      toAddress: "client@example.invalid",
+      ccAddresses: [],
+      subject: "Subject",
+      bodyText: "Body",
+      state: "sending",
+      attempts: 6,
+      claimId: staleClaim,
+    });
+    // Claimed longer ago than the lease, which is what makes it reconcilable.
+    await db.execute(
+      sql`UPDATE outbound_messages SET next_attempt_at = now() - interval '10 minutes' WHERE id = ${id}`
+    );
+
+    expect((await drainMail()).reconciled).toBe(1);
+    expect((await rowFor(id)).state).toBe("failed");
+
+    // The original send finally returns. This is the exact write it makes.
+    const won = await db
+      .update(s.outboundMessages)
+      .set({ state: "sent", sentAt: sql`now()` })
+      .where(and(eq(s.outboundMessages.id, id), eq(s.outboundMessages.claimId, staleClaim)))
+      .returning({ id: s.outboundMessages.id });
+
+    expect(won, "the lease is gone, so the write must miss").toHaveLength(0);
+    expect((await rowFor(id)).state, "and the operator's answer stands").toBe("failed");
+  });
+});
+
+describe("messages queued before a transport existed", () => {
+  /** Insert directly, because `queueMail` writes this state only when it cannot send. */
+  async function queueUnconfigured(kind: string, ageDays: number, to = "person@example.invalid") {
+    const id = newId();
+    await db.insert(s.outboundMessages).values({
+      id,
+      kind: kind as never,
+      toAddress: to,
+      ccAddresses: [],
+      subject: "Subject",
+      bodyText: "Choose a password: http://localhost:3200/set-password?token=abcdef123456",
+      state: "not_configured",
+    });
+    await db.execute(
+      sql`UPDATE outbound_messages SET created_at = now() - make_interval(days => ${ageDays}) WHERE id = ${id}`
+    );
+    return id;
+  }
+
+  it("sends one once a transport appears", async () => {
+    sent.mockResolvedValue({ messageId: null });
+    const id = await queueUnconfigured("invoice", 0);
+
+    expect((await drainMail()).sent).toBe(1);
+    expect((await rowFor(id)).state).toBe("sent");
+  });
+
+  it("counts them in the queue depth, so the backlog is not invisible", async () => {
+    await queueUnconfigured("invoice", 0);
+    expect((await mailQueueDepth()).notConfigured).toBe(1);
+  });
+
+  it("refuses to send an invite whose link expired while it waited", async () => {
+    /*
+      The sharpest edge in the queue, and it only became reachable when
+      `not_configured` rows became claimable.
+
+      Configuring SendGrid would otherwise deliver every invite and every reset
+      queued since the beginning, in one batch, to real staff addresses, each
+      carrying a token that expired an hour or a week after it was minted and
+      was superseded besides. A wave of unsolicited "Reset your Tally password"
+      messages whose links do nothing is indistinguishable from phishing, and
+      the people best placed to report it are the recipients.
+    */
+    sent.mockResolvedValue({ messageId: null });
+    const id = await queueUnconfigured("invite", 21);
+
+    const report = await drainMail();
+    expect(report.expired, "failed rather than sent").toBe(1);
+    expect(report.sent).toBe(0);
+    expect(sent, "nothing may reach the transport").not.toHaveBeenCalled();
+
+    const row = await rowFor(id);
+    expect(row.state).toBe("failed");
+    expect(row.lastError).toMatch(/expired/);
+    expect(row.bodyText, "and the dead token is redacted on the way out").toContain("token=[redacted]");
+  });
+
+  it("refuses a password reset after an hour, not after a week", async () => {
+    // The two kinds have different lives, and using one cutoff for both would
+    // send hour-old resets or hold week-old invites. Two days is stale for a
+    // reset and fresh for an invite.
+    sent.mockResolvedValue({ messageId: null });
+    const reset = await queueUnconfigured("password_reset", 2);
+    const invite = await queueUnconfigured("invite", 2);
+
+    const report = await drainMail();
+    expect(report.expired).toBe(1);
+    expect((await rowFor(reset)).state).toBe("failed");
+    expect((await rowFor(invite)).state, "still well inside its seven days").toBe("sent");
+  });
+
+  it("leaves a late invoice email alone, because it is still worth sending", async () => {
+    // The expiry is about dead credentials, not about age. An invoice chased
+    // late is still an invoice the client should receive.
+    sent.mockResolvedValue({ messageId: null });
+    const id = await queueUnconfigured("invoice", 400);
+
+    const report = await drainMail();
+    expect(report.expired).toBe(0);
+    expect((await rowFor(id)).state).toBe("sent");
+  });
+
+  it("does not expire an invite that is still inside its window", async () => {
+    sent.mockResolvedValue({ messageId: null });
+    const id = await queueUnconfigured("invite", 1);
+
+    expect((await drainMail()).expired).toBe(0);
+    expect((await rowFor(id)).state).toBe("sent");
   });
 });
 

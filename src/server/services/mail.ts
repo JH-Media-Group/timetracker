@@ -15,9 +15,15 @@
  * The drain claims rows with `FOR UPDATE SKIP LOCKED` and moves them to
  * `sending` inside that lock, so two overlapping runs cannot pick the same row.
  * A crash between the send and the record leaves a row in `sending`, which the
- * next run reclaims after a timeout: **that can send twice**. Deliberate. A
- * duplicate invoice email is an awkward moment; an invoice that was never sent
- * and looks sent is a payment nobody chases.
+ * next run reclaims after a timeout, **so a message can be sent more than
+ * once**. Deliberate. A duplicate invoice email is an awkward moment; an invoice
+ * that was never sent and looks sent is a payment nobody chases.
+ *
+ * This said "can send twice", which understated it: the reclaim happens on every
+ * run and the claim allows six attempts, so a process wedged past its lease can
+ * have the same message go out up to six times. In practice the transport caps a
+ * socket at twenty seconds, so it takes a stalled process rather than a stalled
+ * connection, but the number in the comment was simply wrong.
  */
 
 import { and, asc, eq, lt, or, sql } from "drizzle-orm";
@@ -26,6 +32,7 @@ import { db } from "@/server/db/client";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
 import { canSend, PermanentSendFailure, send } from "@/server/mail/transport";
+import { TOKEN_TTL_MS, type TokenPurpose } from "@/server/auth/token-ttl";
 
 export interface QueuedMail {
   kind: "invite" | "password_reset" | "invoice" | "reminder" | "thank_you" | "notification";
@@ -97,6 +104,8 @@ export interface DrainReport {
   reconciled: number;
   /** Sends whose result was discarded because another worker had taken the row. */
   lostLease: number;
+  /** Invites and resets failed unsent because their link had already expired. */
+  expired: number;
   skipped: "no_transport" | null;
 }
 
@@ -108,7 +117,16 @@ export interface DrainReport {
  * log in machine noise. The thing that produced the message audited it.
  */
 export async function drainMail(options: { limit?: number } = {}): Promise<DrainReport> {
-  const report: DrainReport = { claimed: 0, sent: 0, retrying: 0, failed: 0, reconciled: 0, lostLease: 0, skipped: null };
+  const report: DrainReport = {
+    claimed: 0,
+    sent: 0,
+    retrying: 0,
+    failed: 0,
+    reconciled: 0,
+    lostLease: 0,
+    expired: 0,
+    skipped: null,
+  };
 
   // One question, one answer. `canSend` already accounts for the disk sink.
   if (!canSend()) {
@@ -117,6 +135,7 @@ export async function drainMail(options: { limit?: number } = {}): Promise<Drain
   }
 
   report.reconciled = await reconcileStranded();
+  report.expired = await expireUndeliverableAuthMail();
 
   const limit = options.limit ?? 50;
 
@@ -221,12 +240,78 @@ async function reconcileStranded(): Promise<number> {
     .set({
       state: "failed",
       lastError: sql`coalesce(${s.outboundMessages.lastError}, 'abandoned mid-send with no attempts left')`,
+      /*
+        Take the lease away, or this decision is not final.
+
+        Marking the row `failed` while leaving `claim_id` set meant the original
+        send could still be alive: if it came back successful minutes later its
+        completion predicate still matched, and it rewrote `failed` to `sent`
+        under an operator who had already been told delivery failed and may have
+        resent by hand. Clearing the claim makes that write miss, which is what
+        `lostLease` counts and warns about. A reviewer found this: the comment
+        above the completion check says "losing the lease means this result is
+        somebody else's business now", and reconciliation was not actually
+        taking the lease away.
+      */
+      claimId: null,
     })
     .where(
       and(
         eq(s.outboundMessages.state, "sending"),
         sql`${s.outboundMessages.attempts} >= ${MAX_ATTEMPTS}`,
         sql`${s.outboundMessages.nextAttemptAt} <= now() - make_interval(secs => ${SENDING_TIMEOUT_SECONDS})`
+      )
+    )
+    .returning({ id: s.outboundMessages.id });
+
+  return rows.length;
+}
+
+/**
+ * Refuse to send an invite or a reset whose link is already dead.
+ *
+ * **The `not_configured` arm made this urgent, and it is the sharpest edge in
+ * this file.** Those rows used to be unsendable for ever, so their age did not
+ * matter. Now they are claimable, which means the first `pnpm jobs:mail` after
+ * SendGrid is configured delivers every invite and every password reset queued
+ * since the beginning, in one batch, to real staff addresses. The tokens they
+ * carry expired an hour or a week after they were minted, and `issue()`
+ * supersedes an outstanding token every time a newer one is made, so the links
+ * are dead twice over. To the people receiving them, a sudden wave of
+ * "Reset your Tally password" that nobody asked for and whose links do nothing
+ * is indistinguishable from a phishing campaign, and it is the sort of thing
+ * that gets a sending domain reported by its own staff.
+ *
+ * A reviewer reproduced it with a 21 day old reset: the drain sent it.
+ *
+ * So a message whose credential has outlived its TTL is failed rather than
+ * sent, with the reason recorded and the dead token redacted out of the body.
+ * Nothing is lost: whoever needs an invite can be sent one, and the reset page
+ * is one click away. Non-auth mail is untouched, because a late invoice email
+ * is still worth sending.
+ */
+async function expireUndeliverableAuthMail(): Promise<number> {
+  const rows = await db
+    .update(s.outboundMessages)
+    .set({
+      state: "failed",
+      lastError: "the link in this message expired before a transport existed to send it",
+      bodyText: sql`regexp_replace(${s.outboundMessages.bodyText}, 'token=[A-Za-z0-9_-]+', 'token=[redacted]', 'g')`,
+    })
+    .where(
+      and(
+        or(eq(s.outboundMessages.state, "queued"), eq(s.outboundMessages.state, "not_configured")),
+        or(
+          ...[...AUTH_KINDS].map((kind) =>
+            and(
+              eq(s.outboundMessages.kind, kind),
+              // The database clock on both sides, as everywhere else here.
+              sql`${s.outboundMessages.createdAt} < now() - make_interval(secs => ${
+                TOKEN_TTL_MS[kind as TokenPurpose] / 1000
+              })`
+            )
+          )
+        )
       )
     )
     .returning({ id: s.outboundMessages.id });

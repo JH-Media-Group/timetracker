@@ -513,6 +513,26 @@ export const invoices = pgTable(
      * are a month past due.
      */
     reminderLevel: integer().notNull().default(0),
+    /**
+     * The due date `reminder_level` was reached against.
+     *
+     * The level alone only ever climbed, which silenced an invoice for good by
+     * an entirely ordinary route: a client asks for more time, somebody moves
+     * the due date out, and when the new date passes the invoice is one day
+     * late against a recorded level of three, which reads as already chased.
+     *
+     * Winding the level back when the invoice is no longer as late fixes that
+     * and introduces a duplicate: a due date edited by mistake and put back
+     * re-sends a dunning email the client already had. Pairing the level with
+     * the date it was reached against settles both without a second rule. The
+     * escalation belongs to a due date; change the date and it starts over,
+     * restore the date and the level that goes with it applies again.
+     *
+     * Null for every invoice never chased, and for the ones already carrying a
+     * level when this column was added: they are treated as chased against
+     * their current due date, so the migration sends nobody anything.
+     */
+    reminderDueDate: date(),
     paidAt: ts(),
     closedAt: ts(),
     recurringInvoiceId: uuid().references(() => recurringInvoices.id, { onDelete: "set null" }),

@@ -14,7 +14,7 @@ vi.mock("@/server/mail/transport", async () => {
   return { ...actual, canSend: () => true, send: vi.fn(async () => ({ messageId: null })) };
 });
 
-import { eq, sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 import { db, sql as pg } from "@/server/db/client";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
@@ -36,9 +36,13 @@ async function linkTokenFor(userId: string): Promise<string> {
   return match[1]!;
 }
 
+/** Only the users this file created, so cleanup can delete by id. */
+const madeUsers: string[] = [];
+
 async function makeUser(over: Partial<typeof s.users.$inferInsert> = {}) {
   const [profile] = await db.select().from(s.permissionProfiles).limit(1);
   const id = newId();
+  madeUsers.push(id);
   await db.insert(s.users).values({
     id,
     email: `person-${id}@example.test`,
@@ -62,10 +66,24 @@ const ctxFor = (userId: string) =>
 beforeEach(async () => {
   await db.delete(s.outboundMessages);
   await db.delete(s.authTokens);
-  // Only the rows these tests make. The test database is separate from the one
-  // holding the imported account, but a scoped delete is cheap insurance.
-  await db.delete(s.sessions).where(sql`user_id IN (SELECT id FROM users WHERE email LIKE '%@example.test' OR email LIKE 'ghost-%@imported.invalid')`);
-  await db.delete(s.users).where(sql`email LIKE '%@example.test' OR email LIKE 'ghost-%@imported.invalid'`);
+
+  /*
+    By id, not by email pattern.
+
+    `email LIKE '%@example.test'` matched users **other files** had created, and
+    deleting one of those hit whichever foreign key that file had left pointing
+    at it: `invoice_messages.sent_by` on one run, `settings.updated_by` on
+    another. Sixteen tests failed here with a constraint violation that had
+    nothing to do with tokens, and the file that actually owned the row was
+    already green and gone. This is the same lesson `invoice-reminders` records
+    about matching on a mutable column: a pattern is a guess about which rows
+    are yours, and the ids are not a guess.
+  */
+  if (madeUsers.length) {
+    await db.delete(s.sessions).where(inArray(s.sessions.userId, madeUsers));
+    await db.delete(s.users).where(inArray(s.users.id, madeUsers));
+    madeUsers.length = 0;
+  }
 });
 
 describe("inviteUser", () => {

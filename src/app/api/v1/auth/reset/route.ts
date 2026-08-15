@@ -21,8 +21,31 @@ const schema = z.object({
   password: z.string().min(1, "Choose a password."),
 });
 
+/**
+ * Every response takes at least this long.
+ *
+ * The sibling `forgot` route has one to close a timing oracle. This one has it
+ * for the other reason: with `TRUST_PROXY=0`, which is what `.env.example`
+ * ships, `clientIp()` returns null and the limiter below never runs, so without
+ * a floor there is no bound on this endpoint at all. A comment here used to
+ * claim the floor as a mitigation while the floor lived only in the other file,
+ * which a reviewer caught. Rather than delete the claim, the thing it claimed
+ * now exists.
+ *
+ * A floor bounds one connection, not many, so it is a speed bump and not a
+ * rate limit. The real bound is `TRUST_PROXY=1` behind the reverse proxy, and
+ * the deployment notes say so.
+ */
+const FLOOR_MS = 250;
+
 export async function POST(req: NextRequest) {
   const requestId = newId();
+  const startedAt = Date.now();
+
+  const settle = async () => {
+    const remaining = FLOOR_MS - (Date.now() - startedAt);
+    if (remaining > 0) await new Promise((r) => setTimeout(r, remaining));
+  };
 
   try {
     const ip = clientIp(req);
@@ -44,12 +67,19 @@ export async function POST(req: NextRequest) {
       stranger. `tests/routes.test.ts` now fails on a constant limiter key so
       that it stays gone.
 
-      What bounds this route without an address: the response floor caps one
-      connection at four requests a second, and the token lookup happens before any expensive work, so a junk request costs one indexed query.
+      What bounds this route without an address, stated accurately: a cheap
+      sha256 lookup decides whether the expensive argon2 hash is worth doing, so
+      a junk token costs one indexed query rather than 25ms of CPU, and the
+      response floor above costs an attacker one connection per four requests a
+      second. Neither is a rate limit, and many connections defeat both. The
+      control that actually bounds this endpoint is `TRUST_PROXY=1` in front of
+      a proxy that sets X-Forwarded-For, which makes the limiter below apply.
     */
     if (ip) await enforce("auth", `reset:ip:${ip}`);
 
     await consumeToken(token, password);
+
+    await settle();
     return NextResponse.json(
       { data: { ok: true } },
       { headers: { "Cache-Control": "no-store" } }
@@ -57,6 +87,10 @@ export async function POST(req: NextRequest) {
   } catch (e) {
     const problem = toProblem(e, requestId);
     if (problem.status >= 500) console.error(`[${requestId}] reset failed`, e);
+
+    // The floor applies to failures too, or the cheap path becomes the fast one
+    // and the endpoint tells an attacker which tokens exist.
+    await settle();
     return NextResponse.json(problem, {
       status: problem.status,
       headers: { "Content-Type": "application/problem+json", "Cache-Control": "private, no-store" },

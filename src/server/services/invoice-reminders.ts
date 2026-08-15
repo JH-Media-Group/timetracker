@@ -28,23 +28,31 @@
  * overlapping runs cannot both decide to send. The lock is per invoice rather
  * than around the whole pass: a long run must not hold every invoice.
  *
- * THE LEVEL GOES DOWN AS WELL AS UP
+ * THE LEVEL BELONGS TO A DUE DATE
  *
- * A level that only ever climbed silenced an invoice permanently, and the way
- * in was the ordinary one: a client asks for more time, somebody moves the due
- * date out, and the invoice stops being late. It then fell out of the scan
- * altogether (the scan asked for `due_date <= today`), so its level stayed at
- * whatever it had reached. When the new date passed and it was one day late
- * again, `stepsPassed` was 1 against a recorded level of 3, which reads as
- * already chased. **Granting an extension quietly disabled chasing for the rest
- * of that invoice's life**, and the symptom is silence, which nobody reports.
+ * A level on its own only ever climbed, which silenced an invoice for good by
+ * an entirely ordinary route: a client asks for more time, somebody moves the
+ * due date out, and when the new date passes the invoice is one day late
+ * against a recorded level of three, which reads as already chased. Granting an
+ * extension quietly disabled chasing for the rest of that invoice's life, and
+ * the symptom is silence, which nobody reports.
  *
- * So the level tracks the step the invoice is actually at, in both directions,
- * and the scan takes anything that has been chased even if it is no longer
- * late, so that there is something to correct.
+ * The first fix was a reset arm that wound the level back when the invoice was
+ * no longer as late. It worked and it bought a duplicate: a due date edited by
+ * mistake and put back sent the client a second copy of a dunning email they
+ * already had. It also needed a widened scan to find invoices that were no
+ * longer late, and an unlocked pre-filter to keep that scan cheap, and the
+ * pre-filter then made a claim about locking that was not quite true.
+ *
+ * Recording the due date the level was reached against replaces all of it.
+ * `reminder_due_date` and `reminder_level` are one fact: this invoice has been
+ * chased to step L for due date D. A different due date means a different
+ * schedule, so the escalation starts over on its own, and restoring the old
+ * date restores the level that goes with it. No reset, no widened scan, no
+ * pre-filter, and one less rule to keep true.
  */
 
-import { and, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
+import { and, eq, isNull, lte, sql } from "drizzle-orm";
 import { withTransaction, type Ctx } from "@/server/ctx";
 import * as s from "@/server/db/schema";
 import { recordMessage } from "./invoices";
@@ -60,8 +68,6 @@ export const ESCALATION_DAYS = [1, 14, 30] as const;
 export interface ReminderReport {
   considered: number;
   sent: number;
-  /** Invoices whose escalation was wound back, because they are no longer as late. */
-  reset: number;
   skippedNoContact: string[];
   /** Invoices whose own template or data refused to render, and why. */
   failed: { invoice: string; reason: string }[];
@@ -74,56 +80,38 @@ export interface ReminderReport {
  * without waiting for it, the way the recurring job takes `--on`.
  */
 export async function sendDueReminders(ctx: Ctx, today: string): Promise<ReminderReport> {
-  const report: ReminderReport = { considered: 0, sent: 0, reset: 0, skippedNoContact: [], failed: [] };
+  const report: ReminderReport = { considered: 0, sent: 0, skippedNoContact: [], failed: [] };
 
   /*
-    Open, actually owing money, and either late or previously chased.
+    Open, overdue, and actually owing money.
 
     `paid_cents < total_cents` rather than a state check alone: a partly paid
     invoice is still owed and still worth chasing, and its state is `open` in
     exactly the same way an untouched one is.
 
-    The `reminder_level > 0` arm is what makes an extension recoverable. An
-    invoice whose due date has been moved into the future is not late and would
-    otherwise never be looked at again, so its stale level would sit there
-    silencing it. It costs one extra row per invoice we have ever chased.
+    Only invoices that are actually late. An earlier version also took anything
+    previously chased, so that a stale level could be wound back; pairing the
+    level with its due date removed the need, and with it a scan whose `OR`
+    could not use the index.
   */
   const candidates = await ctx.db
     .select({
       id: s.invoices.id,
       number: s.invoices.number,
-      dueDate: s.invoices.dueDate,
       clientId: s.invoices.clientId,
-      reminderLevel: s.invoices.reminderLevel,
     })
     .from(s.invoices)
     .where(
       and(
         eq(s.invoices.state, "open"),
         isNull(s.invoices.deletedAt),
-        or(lte(s.invoices.dueDate, today), gt(s.invoices.reminderLevel, 0)),
+        lte(s.invoices.dueDate, today),
         sql`${s.invoices.paidCents} < ${s.invoices.totalCents}`
       )
     );
 
   for (const invoice of candidates) {
     report.considered++;
-
-    const daysLate = Math.floor(
-      (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${invoice.dueDate}T00:00:00Z`)) / 86_400_000
-    );
-    const stepsPassed = ESCALATION_DAYS.filter((d) => daysLate >= d).length;
-
-    /*
-      Nothing to send and nothing to wind back, so do not take a lock for it.
-
-      A filter, not the decision: the level read here came from an unlocked
-      scan, and the authoritative comparison happens below under the row lock.
-      Skipping only when both numbers are zero means a stale read can cost a
-      wasted lock, never a missed reminder. An invoice due today is the common
-      case this saves.
-    */
-    if (stepsPassed === 0 && invoice.reminderLevel === 0) continue;
 
     /*
       One invoice must not take the whole run with it.
@@ -134,18 +122,27 @@ export async function sendDueReminders(ctx: Ctx, today: string): Promise<Reminde
       in the queue, on every run, for ever. The blast radius of an unrenderable
       message is now that message.
     */
-    let outcome: "sent" | "up_to_date" | "no_contact" | "reset";
+    let outcome: "sent" | "up_to_date" | "no_contact";
     try {
       outcome = await withTransaction(ctx, async (tx) => {
       /*
-        Re-read the level under a lock.
+        Re-read under the lock, and re-read **everything the decision uses**.
 
         The scan above ran outside any transaction, so by now another run may
-        have chased this invoice. Deciding on the value read here, rather than
-        on the one from the scan, is what makes two overlapping jobs safe.
+        have chased this invoice and somebody may have moved its due date. An
+        earlier version locked the row but re-read only the level, and computed
+        how late the invoice was from the scan's copy of `due_date`. A reviewer
+        found the hole that leaves: the due date changes between the scan and
+        the lock, and the run then writes a level that belongs to a date the
+        invoice no longer has. Deciding on values read here is the whole point
+        of taking the lock, so nothing from the scan is used below.
       */
       const [locked] = await tx.db
-        .select({ level: s.invoices.reminderLevel })
+        .select({
+          level: s.invoices.reminderLevel,
+          levelDueDate: s.invoices.reminderDueDate,
+          dueDate: s.invoices.dueDate,
+        })
         .from(s.invoices)
         .where(eq(s.invoices.id, invoice.id))
         .limit(1)
@@ -153,22 +150,21 @@ export async function sendDueReminders(ctx: Ctx, today: string): Promise<Reminde
 
       if (!locked) return "up_to_date" as const;
 
+      const daysLate = Math.floor(
+        (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${locked.dueDate}T00:00:00Z`)) / 86_400_000
+      );
+      const stepsPassed = ESCALATION_DAYS.filter((d) => daysLate >= d).length;
+
       /*
-        No longer as late as the level says, so wind it back.
+        The level counts only against the due date it was reached for.
 
-        This sends nothing. It restores the invoice to the step it is actually
-        at, so that when it next crosses one there is a step to cross. A due
-        date moved into the future lands here with `stepsPassed` of zero.
+        A different due date is a different schedule, so the escalation starts
+        over without anything having to reset it, and putting a mistaken edit
+        back restores the level along with the date rather than re-sending a
+        step the client already received.
       */
-      if (stepsPassed < locked.level) {
-        await tx.db
-          .update(s.invoices)
-          .set({ reminderLevel: stepsPassed })
-          .where(eq(s.invoices.id, invoice.id));
-        return "reset" as const;
-      }
-
-      if (stepsPassed === locked.level) return "up_to_date" as const;
+      const effectiveLevel = locked.levelDueDate === locked.dueDate ? locked.level : 0;
+      if (stepsPassed <= effectiveLevel) return "up_to_date" as const;
 
       const contacts = await tx.db
         .select({ email: s.clientContacts.email })
@@ -185,10 +181,11 @@ export async function sendDueReminders(ctx: Ctx, today: string): Promise<Reminde
         return "no_contact" as const;
       }
 
-      // Straight to the step actually reached, not one per run.
+      // Straight to the step actually reached, not one per run, and stamped
+      // with the due date it was reached against.
       await tx.db
         .update(s.invoices)
-        .set({ reminderLevel: stepsPassed })
+        .set({ reminderLevel: stepsPassed, reminderDueDate: locked.dueDate })
         .where(eq(s.invoices.id, invoice.id));
 
         await recordMessage(tx, invoice.id, "reminder", { to });
@@ -203,7 +200,6 @@ export async function sendDueReminders(ctx: Ctx, today: string): Promise<Reminde
     }
 
     if (outcome === "sent") report.sent++;
-    else if (outcome === "reset") report.reset++;
     else if (outcome === "no_contact") report.skippedNoContact.push(invoice.number ?? invoice.id);
   }
 

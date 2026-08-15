@@ -148,6 +148,39 @@ describe("a successful send", () => {
   });
 });
 
+describe("the transport itself", () => {
+  it("is built with timeouts, because the mail lease assumes sending settles quickly", async () => {
+    /*
+      Asserted because nothing else did.
+
+      A reviewer noticed that deleting all three timeouts survives every other
+      test in this file, and that it matters more than it looks: `mail.ts`
+      reclaims a row five minutes after it was claimed and may then send it
+      again. The argument that a duplicate is rare rests entirely on a hung
+      socket failing in twenty seconds rather than hanging for ever. With no
+      socket timeout, a single unreachable SMTP host turns "can send twice" into
+      the normal case.
+    */
+    const { createTransport } = await import("nodemailer");
+    h.sendMail.mockResolvedValue({ messageId: null });
+    await send(MESSAGE);
+
+    expect(createTransport).toHaveBeenCalledWith(
+      h.env.smtp!.url,
+      expect.objectContaining({
+        connectionTimeout: expect.any(Number),
+        greetingTimeout: expect.any(Number),
+        socketTimeout: expect.any(Number),
+      })
+    );
+
+    const [, options] = vi.mocked(createTransport).mock.calls[0]!;
+    const opts = options as { connectionTimeout: number; socketTimeout: number };
+    expect(opts.socketTimeout, "comfortably inside the five minute lease").toBeLessThan(5 * 60_000);
+    expect(opts.connectionTimeout).toBeLessThan(5 * 60_000);
+  });
+});
+
 describe("the disk sink", () => {
   it("writes the message and does not touch SMTP", async () => {
     process.env.MAIL_TO_DISK = "1";

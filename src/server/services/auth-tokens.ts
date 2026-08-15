@@ -41,21 +41,13 @@ import { AppError, notFound } from "@/server/errors";
 import { hashPassword, checkPasswordPolicy } from "@/server/auth/password";
 import { revokeAllSessions } from "@/server/auth/session";
 import { queueMail } from "@/server/services/mail";
+import { TOKEN_TTL_MS as TTL_MS, type TokenPurpose } from "@/server/auth/token-ttl";
 import { env } from "@/server/env";
 
-export type TokenPurpose = "invite" | "password_reset";
-
-/**
- * How long each kind is good for.
- *
- * An invite can reasonably sit in an inbox over a weekend. A reset should not:
- * it is a live credential for whoever reads that mailbox, and the person asking
- * for it is waiting at the screen.
- */
-const TTL_MS: Record<TokenPurpose, number> = {
-  invite: 7 * 24 * 60 * 60 * 1000,
-  password_reset: 60 * 60 * 1000,
-};
+// The TTLs live in `@/server/auth/token-ttl` because `mail` needs them too, to
+// recognise a queued message that has outlived the credential inside it, and
+// importing them from here would be a cycle.
+export type { TokenPurpose };
 
 const digest = (token: string) => createHash("sha256").update(token).digest("hex");
 

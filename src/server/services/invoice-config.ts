@@ -18,7 +18,7 @@
  */
 
 import { and, eq, isNull, sql } from "drizzle-orm";
-import { assertCan, withTransaction, type Ctx } from "@/server/ctx";
+import { assertCan, runAfterCommit, withTransaction, type Ctx } from "@/server/ctx";
 import * as s from "@/server/db/schema";
 import { validationFailed } from "@/server/errors";
 import {
@@ -183,7 +183,7 @@ export async function updateInvoiceConfig(ctx: Ctx, patch: ConfigPatch): Promise
     }
 
     await tx.db.update(s.settings).set(update as never).where(eq(s.settings.id, 1));
-    invalidateSettings();
+    runAfterCommit(tx, invalidateSettings);
 
     tx.audit({
       action: `settings.invoice_${patch.section}.update`,
@@ -195,7 +195,20 @@ export async function updateInvoiceConfig(ctx: Ctx, patch: ConfigPatch): Promise
     });
   });
 
-  invalidateSettings();
+  /*
+    No second invalidation here, and no reading back through `ctx`.
+
+    Both were wrong for the same reason: `withTransaction` *joins* an existing
+    transaction, so in the route path this line and the one inside the callback
+    are both still inside the request transaction, one or two round trips before
+    COMMIT. The invalidation bought nothing, and `getInvoiceConfig(ctx)` read
+    through the open transaction and cached its uncommitted write process-wide.
+    The invalidation now happens from an after-commit callback, and the read
+    below is left on `ctx` deliberately: it must return what this request just
+    wrote, including when that write has not committed yet, because it is this
+    request's own response. `getSettings` refuses to cache a transactional read,
+    so returning it here is safe in a way that caching it was not.
+  */
   return getInvoiceConfig(ctx);
 }
 

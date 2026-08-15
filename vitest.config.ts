@@ -7,6 +7,8 @@ export default defineConfig({
     globals: false,
     include: ["src/**/*.test.ts", "tests/**/*.test.ts"],
     setupFiles: ["./tests/setup.ts"],
+    // Refuses to start if another run holds the database. See the file.
+    globalSetup: ["./tests/global-setup.ts"],
     // Integration tests share one database. Running files in parallel would
     // have them truncating each other's fixtures mid-assertion.
     fileParallelism: false,

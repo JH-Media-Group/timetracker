@@ -49,6 +49,9 @@ if (limitIndex !== -1 && (!Number.isInteger(limit) || limit! < 1)) {
 
 const startedAt = Date.now();
 
+/** Reminders that could not be rendered. Part of the exit code, see below. */
+let reminderFailures = 0;
+
 try {
   /*
     Queue the overdue reminders before draining, so anything raised this run
@@ -63,9 +66,21 @@ try {
     const today = new Date().toISOString().slice(0, 10);
     const reminders = await sendDueReminders(ctx, today);
     if (reminders.sent) console.log(`Queued ${reminders.sent} overdue reminder(s).`);
-    // Worth a line: it means somebody moved a due date, and the escalation for
-    // that invoice has started over. Silent, it would look like nothing happened.
-    if (reminders.reset) console.log(`Wound back the escalation on ${reminders.reset} invoice(s) given more time.`);
+
+    /*
+      Counted outside this block, because the exit code is decided outside it.
+
+      Making one bad invoice stop only itself, rather than the whole run, had a
+      consequence nobody chose: the throw used to propagate and the job exited
+      non-zero, and afterwards a template with a token nothing fills failed
+      every reminder while `process.exit` looked only at the drain's report.
+      Cron saw success. Since the reminder template is a single account-level
+      setting, "every reminder" is the ordinary case, not a corner: no invoice
+      is chased, and the only trace is a warning in a log nobody reads. This
+      file's own argument is that an invoice nobody is chasing, which nobody
+      knows nobody is chasing, is the worst outcome available.
+    */
+    reminderFailures = reminders.failed.length;
     for (const f of reminders.failed) {
       console.warn(`  ! Invoice ${f.invoice} could not be rendered and was not chased: ${f.reason}`);
     }
@@ -128,7 +143,7 @@ try {
   }
 
   await pg.end();
-  process.exit(report.failed > 0 ? 1 : 0);
+  process.exit(report.failed > 0 || reminderFailures > 0 ? 1 : 0);
 } catch (e) {
   console.error("Mail run failed:", e instanceof Error ? e.message : e);
   await pg.end().catch(() => {});

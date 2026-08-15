@@ -28,7 +28,14 @@ import { createHash } from "node:crypto";
 import { isIP } from "node:net";
 import { and, eq, isNull } from "drizzle-orm";
 import { AppError, forbidden, fromDatabaseError, toProblem, unauthenticated, validationFailed } from "./errors";
-import { assertCan, createCtx, flush, type Ctx } from "./ctx";
+import {
+  assertCan,
+  createCtx,
+  discardAfterCommitCallbacks,
+  flush,
+  runAfterCommitCallbacks,
+  type Ctx,
+} from "./ctx";
 import { resolveSession } from "./auth/session";
 import { enforce, type RouteClass } from "./auth/rate-limit";
 import { db } from "./db/client";
@@ -136,14 +143,25 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
       // rows and outbox events. A service that forgets to open one is still
       // audited, and nothing it buffered can survive a rollback.
       const shouldTransact = options.transactional ?? mutating;
-      const body = shouldTransact
-        ? await db.transaction(async (tx) => {
+      let body: Envelope<T>;
+      if (shouldTransact) {
+        try {
+          body = await db.transaction(async (tx) => {
             const inner: Ctx = { ...ctx, db: tx };
             const result = await runHandler(inner);
             await flush(inner);
             return result;
-          })
-        : await runHandler(ctx);
+          });
+        } catch (e) {
+          // The request rolled back, so effects registered outside the database
+          // must not happen. See runAfterCommit in ctx.ts.
+          discardAfterCommitCallbacks(ctx);
+          throw e;
+        }
+        runAfterCommitCallbacks(ctx);
+      } else {
+        body = await runHandler(ctx);
+      }
 
       const response = NextResponse.json(body, {
         headers: {

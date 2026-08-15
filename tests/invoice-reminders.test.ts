@@ -140,6 +140,15 @@ const reminderCount = async (invoiceId: string) => {
   return history;
 };
 
+/** The invoice number, which is what the failure report identifies rows by. */
+const numberOf = async (invoiceId: string) => {
+  const [row] = await db
+    .select({ number: s.invoices.number })
+    .from(s.invoices)
+    .where(eq(s.invoices.id, invoiceId));
+  return row!.number ?? invoiceId;
+};
+
 /** The escalation step the invoice is recorded as having been chased at. */
 const levelOf = async (invoiceId: string) => {
   const [row] = await db
@@ -243,42 +252,73 @@ describe("sendDueReminders", () => {
     const { id } = await seedInvoice({ dueDaysAgo: ESCALATION_DAYS[2] });
     await sendDueReminders(ctx, TODAY);
     expect(await reminderCount(id)).toBe(1);
+    expect(await levelOf(id)).toBe(3);
 
     // Thirty more days granted. Not late any more.
     await db.update(s.invoices).set({ dueDate: isoDaysAgo(-30) }).where(eq(s.invoices.id, id));
 
-    const wound = await sendDueReminders(ctx, TODAY);
-    expect(wound.sent, "an extension is not an occasion to send anything").toBe(0);
-    expect(wound.reset).toBe(1);
-    expect(await levelOf(id), "back to the step it is actually at").toBe(0);
+    expect((await sendDueReminders(ctx, TODAY)).sent, "an extension sends nothing").toBe(0);
 
-    // The extension runs out.
+    // The extension runs out. A new due date, so a fresh escalation.
     await db.update(s.invoices).set({ dueDate: isoDaysAgo(ESCALATION_DAYS[0]) }).where(eq(s.invoices.id, id));
+
+    expect((await sendDueReminders(ctx, TODAY)).sent).toBe(1);
+    expect(await reminderCount(id)).toBe(2);
+    expect(await levelOf(id), "step one, against the new date").toBe(1);
+  });
+
+  it("does not re-send a step the client already had when a due-date edit is undone", async () => {
+    /*
+      The defect the first fix introduced, and the reason the level is paired
+      with a date rather than simply wound back.
+
+      Winding the level down whenever the invoice was less late meant any edit
+      to a due date reset the escalation, including one made by mistake. Put the
+      date back and the client received a second copy of a dunning email they
+      already had. A reviewer walked the sequence: typo, cron runs inside five
+      minutes, typo corrected, cron runs again, second email.
+
+      Because the level belongs to a due date, restoring the date restores the
+      level with it.
+    */
+    const { id } = await seedInvoice({ dueDaysAgo: ESCALATION_DAYS[2] });
+    await sendDueReminders(ctx, TODAY);
+    expect(await reminderCount(id)).toBe(1);
+
+    const original = isoDaysAgo(ESCALATION_DAYS[2]);
+
+    // Somebody fat-fingers the due date, and the job runs before it is noticed.
+    await db.update(s.invoices).set({ dueDate: isoDaysAgo(-60) }).where(eq(s.invoices.id, id));
+    expect((await sendDueReminders(ctx, TODAY)).sent).toBe(0);
+
+    // The mistake is corrected.
+    await db.update(s.invoices).set({ dueDate: original }).where(eq(s.invoices.id, id));
+
+    expect((await sendDueReminders(ctx, TODAY)).sent, "the client already had this one").toBe(0);
+    expect(await reminderCount(id)).toBe(1);
+  });
+
+  it("starts a fresh escalation against a genuinely new due date", async () => {
+    // The other half of the same rule. A due date that moves to a *different*
+    // date is a different schedule, and step one against it is a message the
+    // client has not had.
+    const { id } = await seedInvoice({ dueDaysAgo: ESCALATION_DAYS[2] });
+    await sendDueReminders(ctx, TODAY);
+
+    await db
+      .update(s.invoices)
+      .set({ dueDate: isoDaysAgo(ESCALATION_DAYS[2] - 1) })
+      .where(eq(s.invoices.id, id));
 
     expect((await sendDueReminders(ctx, TODAY)).sent).toBe(1);
     expect(await reminderCount(id)).toBe(2);
   });
 
-  it("winds the level back only as far as the invoice actually is", async () => {
-    // A partial extension, from the last step to the middle one. It must not
-    // re-send the step it is still past.
-    const { id } = await seedInvoice({ dueDaysAgo: ESCALATION_DAYS[2] });
-    await sendDueReminders(ctx, TODAY);
-
-    await db.update(s.invoices).set({ dueDate: isoDaysAgo(ESCALATION_DAYS[1]) }).where(eq(s.invoices.id, id));
-
-    expect((await sendDueReminders(ctx, TODAY)).reset).toBe(1);
-    expect(await levelOf(id)).toBe(2);
-    expect(await reminderCount(id), "winding back is not a reason to chase").toBe(1);
-  });
-
-  it("leaves an invoice it has never chased alone", async () => {
-    // The reset arm widened the scan. An invoice that is not late and has never
-    // been chased must still be a no-op, not a lock and an update of 0 to 0.
+  it("leaves an invoice that is not yet due alone", async () => {
     const { id } = await seedInvoice({ dueDaysAgo: -5 });
-    const report = await sendDueReminders(ctx, TODAY);
-    expect(report.reset).toBe(0);
+    await sendDueReminders(ctx, TODAY);
     expect(await levelOf(id)).toBe(0);
+    expect(await reminderCount(id)).toBe(0);
   });
 
   it("stops after the last step, however late the invoice gets", async () => {
@@ -307,7 +347,11 @@ describe("sendDueReminders", () => {
     try {
       await holder`BEGIN`;
       await holder`SELECT id FROM invoices WHERE id = ${id} FOR UPDATE`;
-      await holder`UPDATE invoices SET reminder_level = 3 WHERE id = ${id}`;
+      // Both columns, because that is what a real run writes. Setting the level
+      // alone leaves `reminder_due_date` null, which reads as "chased against
+      // some other date" and correctly earns a fresh reminder, so the test
+      // would be asserting against a state no run can produce.
+      await holder`UPDATE invoices SET reminder_level = 3, reminder_due_date = due_date WHERE id = ${id}`;
 
       let finished = false;
       const pass = sendDueReminders(ctx, TODAY).then((r) => {
@@ -431,13 +475,21 @@ describe("sendDueReminders", () => {
     invalidateSettings();
 
     const report = await sendDueReminders(ctx, TODAY);
-    // Both fail here, because the template is shared; the point is that the
-    // loop keeps going rather than stopping at the first one.
+
+    /*
+      Both fail, because the template is one account-level setting: there is no
+      way to make a single invoice unrenderable. So the assertion has to be
+      that **each specific invoice was reached**, not that the count came out
+      at two. A reviewer pointed out that counting alone survives a mutation
+      which catches the first failure and then mechanically records identical
+      failures for the rest without attempting them.
+
+      Naming both invoices is what proves the loop carried on past the throw.
+    */
     expect(report.considered).toBe(2);
-    expect(report.failed).toHaveLength(2);
-    expect(report.failed.map((f) => f.invoice)).toHaveLength(2);
-    void bad;
-    void good;
+    const numbers = await Promise.all([numberOf(bad.id), numberOf(good.id)]);
+    expect(report.failed.map((f) => f.invoice).sort()).toEqual([...numbers].sort());
+    expect(report.sent).toBe(0);
   });
 
   it("formats money the same way the invoice screen does", async () => {
