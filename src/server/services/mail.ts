@@ -95,6 +95,8 @@ export interface DrainReport {
   failed: number;
   /** Rows a dead process left behind that had no attempts left, moved to `failed`. */
   reconciled: number;
+  /** Sends whose result was discarded because another worker had taken the row. */
+  lostLease: number;
   skipped: "no_transport" | null;
 }
 
@@ -106,7 +108,7 @@ export interface DrainReport {
  * log in machine noise. The thing that produced the message audited it.
  */
 export async function drainMail(options: { limit?: number } = {}): Promise<DrainReport> {
-  const report: DrainReport = { claimed: 0, sent: 0, retrying: 0, failed: 0, reconciled: 0, skipped: null };
+  const report: DrainReport = { claimed: 0, sent: 0, retrying: 0, failed: 0, reconciled: 0, lostLease: 0, skipped: null };
 
   // One question, one answer. `canSend` already accounts for the disk sink.
   if (!canSend()) {
@@ -131,7 +133,7 @@ export async function drainMail(options: { limit?: number } = {}): Promise<Drain
         text: claimed.bodyText,
       });
 
-      await db
+      const won = await db
         .update(s.outboundMessages)
         .set({
           state: "sent",
@@ -154,15 +156,27 @@ export async function drainMail(options: { limit?: number } = {}): Promise<Drain
             ? sql`regexp_replace(${s.outboundMessages.bodyText}, 'token=[A-Za-z0-9_-]+', 'token=[redacted]', 'g')`
             : undefined,
         })
-        .where(eq(s.outboundMessages.id, claimed.id));
-      report.sent++;
+        .where(and(eq(s.outboundMessages.id, claimed.id), eq(s.outboundMessages.claimId, claimed.claimId!)))
+        .returning({ id: s.outboundMessages.id });
+
+      /*
+        Only count it if this worker still held the lease.
+
+        A drain that overran its five minutes has already been reclaimed, and
+        another worker has sent the message. Writing `sent` here anyway would be
+        harmless; writing `queued` from the failure path below would not, and
+        the row would go out a third time. Losing the lease means this result is
+        somebody else's business now.
+      */
+      if (won.length) report.sent++;
+      else report.lostLease++;
     } catch (e) {
       const detail = e instanceof Error ? e.message : String(e);
       const permanent = e instanceof PermanentSendFailure;
       const attempts = claimed.attempts + 1;
       const exhausted = permanent || attempts >= MAX_ATTEMPTS;
 
-      await db
+      const won = await db
         .update(s.outboundMessages)
         .set({
           state: exhausted ? "failed" : "queued",
@@ -175,9 +189,11 @@ export async function drainMail(options: { limit?: number } = {}): Promise<Drain
               ? sql`regexp_replace(${s.outboundMessages.bodyText}, 'token=[A-Za-z0-9_-]+', 'token=[redacted]', 'g')`
               : undefined,
         })
-        .where(eq(s.outboundMessages.id, claimed.id));
+        .where(and(eq(s.outboundMessages.id, claimed.id), eq(s.outboundMessages.claimId, claimed.claimId!)))
+        .returning({ id: s.outboundMessages.id });
 
-      if (exhausted) report.failed++;
+      if (!won.length) report.lostLease++;
+      else if (exhausted) report.failed++;
       else report.retrying++;
     }
   }
@@ -278,14 +294,16 @@ async function claimOne() {
 
     if (!row) return [];
 
+    const claimId = newId();
+
     await tx
       .update(s.outboundMessages)
       // `next_attempt_at` becomes the claim time, so the stuck-row timeout runs
       // from now rather than from whenever this row first became due.
-      .set({ state: "sending", attempts: row.attempts + 1, nextAttemptAt: sql`now()` })
+      .set({ state: "sending", attempts: row.attempts + 1, nextAttemptAt: sql`now()`, claimId })
       .where(eq(s.outboundMessages.id, row.id));
 
-    return [row];
+    return [{ ...row, claimId }];
   });
 
   return rows[0] ?? null;
@@ -310,21 +328,4 @@ export async function mailQueueDepth(): Promise<{ queued: number; sending: numbe
     sending: Number(row?.sending ?? 0),
     failed: Number(row?.failed ?? 0),
   };
-}
-
-/**
- * Messages about one thing, oldest first, for a timeline.
- *
- * Its comment used to say "newest first" while it ordered ascending, which a
- * reviewer noticed precisely because nothing calls it: an unused function whose
- * documentation disagrees with its code is a trap set for whoever calls it
- * first. Kept because the invoice timeline wants it, with the comment now
- * matching what it does.
- */
-export async function messagesFor(relatedType: string, relatedId: string) {
-  return db
-    .select()
-    .from(s.outboundMessages)
-    .where(and(eq(s.outboundMessages.relatedType, relatedType), eq(s.outboundMessages.relatedId, relatedId)))
-    .orderBy(asc(s.outboundMessages.createdAt));
 }

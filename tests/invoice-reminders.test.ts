@@ -14,7 +14,7 @@ vi.mock("@/server/mail/transport", async () => {
   return { ...actual, canSend: () => true, send: vi.fn(async () => ({ messageId: null })) };
 });
 
-import { eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { createCtx, systemActor } from "@/server/ctx";
 import { db } from "@/server/db/client";
 import * as s from "@/server/db/schema";
@@ -61,8 +61,20 @@ const DAY = 86_400_000;
 const isoDaysAgo = (n: number) => new Date(Date.now() - n * DAY).toISOString().slice(0, 10);
 const TODAY = new Date().toISOString().slice(0, 10);
 
+/**
+ * Every client these tests create, so cleanup can delete by id.
+ *
+ * It used to delete `WHERE name LIKE 'Client %'`, which is fine until a test
+ * renames one. The braces test does exactly that, so its client survived the
+ * cleanup and collided with `clients_name_unique` on the next run: the file
+ * passed alone and failed whenever anything ran before it. Matching on a
+ * mutable column to find rows you created is the bug; the ids are not mutable.
+ */
+const madeClients: string[] = [];
+
 async function seedInvoice(opts: { dueDaysAgo: number; withContact?: boolean; paid?: number }) {
   const clientId = newId();
+  madeClients.push(clientId);
   await db.insert(s.clients).values({ id: clientId, name: `Client ${clientId}` });
 
   if (opts.withContact !== false) {
@@ -91,13 +103,29 @@ async function seedInvoice(opts: { dueDaysAgo: number; withContact?: boolean; pa
   return { id, clientId };
 }
 
-const reminderCount = async (invoiceId: string) =>
-  (
+/**
+ * How many reminders a client has actually been sent.
+ *
+ * Counts the outbound queue as well as the invoice history, and insists the two
+ * agree. Counting only `invoice_messages` let the restraint tests pass while
+ * queueing was broken, which is the half that reaches the client: they would
+ * have reported "one reminder" for an invoice nobody had emailed.
+ */
+const reminderCount = async (invoiceId: string) => {
+  const history = (
+    await db.select().from(s.invoiceMessages).where(eq(s.invoiceMessages.invoiceId, invoiceId))
+  ).filter((m) => m.kind === "reminder").length;
+
+  const queued = (
     await db
       .select()
-      .from(s.invoiceMessages)
-      .where(eq(s.invoiceMessages.invoiceId, invoiceId))
+      .from(s.outboundMessages)
+      .where(and(eq(s.outboundMessages.relatedType, "invoice"), eq(s.outboundMessages.relatedId, invoiceId)))
   ).filter((m) => m.kind === "reminder").length;
+
+  expect(queued, "a recorded reminder that was never queued has not been sent").toBe(history);
+  return history;
+};
 
 beforeEach(async () => {
   ctx = createCtx({ actor: systemActor(await actorUser()), db });
@@ -114,7 +142,10 @@ beforeEach(async () => {
   await db.delete(s.invoiceMessages);
   await db.delete(s.invoices);
   await db.delete(s.clientContacts);
-  await db.delete(s.clients).where(sql`name LIKE 'Client %'`);
+  if (madeClients.length) {
+    await db.delete(s.clients).where(inArray(s.clients.id, madeClients));
+    madeClients.length = 0;
+  }
 });
 
 describe("sendDueReminders", () => {
@@ -261,7 +292,12 @@ describe("sendDueReminders", () => {
       promise a token, so only the template is checked.
     */
     const { id, clientId } = await seedInvoice({ dueDaysAgo: 2 });
-    await db.update(s.clients).set({ name: "{{ACME}} Media {{ Ltd }}" }).where(eq(s.clients.id, clientId));
+    // Unique, because `clients.name` is unique and a fixed literal in a test is
+    // a collision waiting for the second run.
+    await db
+      .update(s.clients)
+      .set({ name: `{{ACME}} Media {{ Ltd }} ${clientId}` })
+      .where(eq(s.clients.id, clientId));
 
     await expect(sendDueReminders(ctx, TODAY)).resolves.toMatchObject({ sent: 1 });
     expect(await reminderCount(id)).toBe(1);

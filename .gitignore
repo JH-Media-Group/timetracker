@@ -50,3 +50,7 @@ tsconfig.tsbuildinfo
 
 # Development mail: MAIL_TO_DISK=1 writes here instead of sending.
 .mail/
+
+# Scratch copies made by review agents. Never part of the tree.
+.probe-*/
+scripts/.probe-*

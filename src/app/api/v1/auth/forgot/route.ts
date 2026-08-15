@@ -3,9 +3,13 @@
  *
  * Public. Begins a password reset.
  *
- * **Always answers the same way, and takes the same time doing it.** Whether
- * the address is known, archived, or an `@imported.invalid` placeholder, the
- * response, the status and the duration are indistinguishable. A reply that
+ * **A known and an unknown address are answered identically, and take the same
+ * time.** Whether the address is known, archived, or an `@imported.invalid`
+ * placeholder, the body, the status and the duration are indistinguishable.
+ *
+ * A malformed request or an exhausted rate limit does answer differently, which
+ * is fine: neither says anything about whether an account exists. The claim is
+ * about the enumeration channel, not about every response this route can make. A reply that
  * differed would make this an account enumeration endpoint on a public URL, and
  * knowing who works somewhere is most of the work of choosing a phishing target.
  *
@@ -55,7 +59,17 @@ export async function POST(req: NextRequest) {
     const ip = clientIp(req);
     const { email } = parseOrThrow(schema, await req.json().catch(() => ({})));
 
-    if (ip) await enforce("auth", `forgot:ip:${ip}`);
+    /*
+      A ceiling even when the caller has no address.
+
+      `clientIp()` returns null unless TRUST_PROXY says a proxy is setting
+      X-Forwarded-For, and `.env.example` ships TRUST_PROXY=0, so `if (ip)`
+      meant this endpoint had no limit at all in the configuration most likely
+      to be running. Falling back to a shared bucket is coarse, and coarse is
+      better than absent: the per-address minute floor and the response floor
+      already bound the interesting work, so this only stops the crude case.
+    */
+    await enforce("auth", ip ? `forgot:ip:${ip}` : "forgot:no-client-ip");
 
     /*
       No per-address bucket. The service throttles by interval instead.

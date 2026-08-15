@@ -29,6 +29,13 @@
       "when": 1786769781180,
       "tag": "0003_unknown_tempest",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1786773962597,
+      "tag": "0004_sparkling_lady_bullseye",
+      "breakpoints": true
     }
   ]
 }

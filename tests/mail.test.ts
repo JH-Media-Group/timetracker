@@ -241,6 +241,48 @@ describe("drainMail", () => {
     expect((await rowFor(id)).state).toBe("sending");
   });
 
+  it("ignores the result of a worker that overran its lease", async () => {
+    /*
+      The overlap test above only covers two drains inside the timeout, where
+      the lease has not expired. The dangerous case is a worker that stalls past
+      five minutes: another drain reclaims and sends, and then the first one
+      wakes up. If its result were still accepted it could put an already-sent
+      row back to `queued` and the message would go out a third time.
+    */
+    const id = await queue();
+
+    let release!: () => void;
+    const stalled = new Promise<void>((r) => (release = r));
+    let started!: () => void;
+    const hasStarted = new Promise<void>((r) => (started = r));
+
+    sent.mockImplementationOnce(async () => {
+      started();
+      await stalled;
+      // The slow worker "succeeds", long after losing its claim.
+      return { messageId: "from-the-stalled-worker" };
+    });
+
+    const slow = drainMail();
+    await hasStarted;
+
+    // Age the lease so the row looks abandoned, then let a second drain take it.
+    await db.execute(sql`UPDATE outbound_messages SET next_attempt_at = now() - interval '1 hour' WHERE id = ${id}`);
+    sent.mockResolvedValue({ messageId: "from-the-second-worker" });
+    const second = await drainMail();
+    expect(second.sent).toBe(1);
+
+    release();
+    const first = await slow;
+
+    expect(first.lostLease, "the stalled worker must not write to a row it no longer owns").toBe(1);
+    expect(first.sent).toBe(0);
+
+    const row = await rowFor(id);
+    expect(row.state).toBe("sent");
+    expect(row.providerMessageId).toBe("from-the-second-worker");
+  });
+
   it("respects the limit so one run cannot hold the process forever", async () => {
     sent.mockResolvedValue({ messageId: null });
     for (let i = 0; i < 5; i++) await queue(`person${i}@example.invalid`);

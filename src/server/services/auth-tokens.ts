@@ -67,17 +67,19 @@ const linkFor = (token: string) => `${env.APP_URL.replace(/\/$/, "")}/set-passwo
 /**
  * Create a token and queue the email that carries it.
  *
- * Returns the token only so tests and the dev flow can use it. Nothing in a
- * response body should ever include it: that would hand it to anybody who can
- * see the response, which is the person who asked rather than the person who
- * owns the mailbox.
+ * Returns nothing. It used to hand the raw token back "for tests", which sat
+ * oddly beside this file's argument that the token must not exist anywhere but
+ * the one email: a return value is the easiest thing in the world for a future
+ * caller to put in a response body. The tests read it out of the queued message,
+ * which is also a truer test, because it proves the link actually reached the
+ * mail the person receives.
  */
 async function issue(
   ctx: Ctx,
   user: { id: string; email: string; firstName: string | null },
   purpose: TokenPurpose,
   createdBy: string | null
-): Promise<string> {
+): Promise<void> {
   const token = mintToken();
 
   /*
@@ -135,7 +137,6 @@ async function issue(
     userId: user.id,
   });
 
-  return token;
 }
 
 /**
@@ -194,11 +195,18 @@ export async function inviteUser(ctx: Ctx, userId: string): Promise<{ queued: bo
  * instead, it was worse: the victim got a cheerful "a reset link is on its
  * way" and no link, which a reviewer demonstrated.
  *
- * A floor between issuances cannot be weaponised, because it always expires.
- * A minute after any flood the victim can ask again and get one. It caps the
- * inbox flooding at one message a minute, and when it does suppress a send the
- * reassuring response is still true: a link went out moments ago and is valid
- * for an hour.
+ * **What this does and does not buy, stated accurately.** It stops the hour-long
+ * lockout a per-address rate-limit bucket caused, because the window always
+ * expires and every issuance emails the owner of the address: a minute after
+ * any flood, the victim holds a live link. It does not stop an attacker
+ * occupying the window by posting just before them, in which case the victim's
+ * own request is suppressed and answered reassuringly. That is survivable
+ * because the link the attacker's request just sent is in the victim's inbox
+ * and valid for an hour. An earlier version of this comment claimed the floor
+ * "cannot be weaponised", which was too strong; a reviewer was right to say so.
+ *
+ * What it costs an attacker to sustain is one request a minute forever, and
+ * what it gains them is inbox noise at that rate.
  */
 const MIN_SECONDS_BETWEEN_RESETS = 60;
 
@@ -237,22 +245,34 @@ export async function requestPasswordReset(email: string): Promise<void> {
     needs no extra state and cannot drift out of step with what was actually
     issued.
   */
-  const [recent] = await db
-    .select({ id: s.authTokens.id })
-    .from(s.authTokens)
-    .where(
-      and(
-        eq(s.authTokens.userId, user.id),
-        eq(s.authTokens.purpose, "password_reset"),
-        gt(s.authTokens.createdAt, new Date(Date.now() - MIN_SECONDS_BETWEEN_RESETS * 1000))
-      )
-    )
-    .limit(1);
-
-  if (recent) return;
-
   const ctx = createCtx({ actor: systemActor(user.id), db });
-  await withTransaction(ctx, (tx) => issue(tx, user, "password_reset", null));
+
+  await withTransaction(ctx, async (tx) => {
+    /*
+      Take the user row before deciding, and decide inside the transaction.
+
+      Checking outside it was a plain check-then-act race: two requests
+      arriving together both saw no recent token, both superseded, and both
+      issued, so two live links went out. The lock serialises them and the
+      second one then sees the first one's token.
+    */
+    await tx.db.select({ id: s.users.id }).from(s.users).where(eq(s.users.id, user.id)).limit(1).for("update");
+
+    const [recent] = await tx.db
+      .select({ id: s.authTokens.id })
+      .from(s.authTokens)
+      .where(
+        and(
+          eq(s.authTokens.userId, user.id),
+          eq(s.authTokens.purpose, "password_reset"),
+          gt(s.authTokens.createdAt, new Date(Date.now() - MIN_SECONDS_BETWEEN_RESETS * 1000))
+        )
+      )
+      .limit(1);
+
+    if (recent) return;
+    await issue(tx, user, "password_reset", null);
+  });
 }
 
 export interface TokenSubject {

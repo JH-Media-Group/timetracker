@@ -196,6 +196,37 @@ describe("requestPasswordReset", () => {
 
     const token = await linkTokenFor(id);
     expect((await peekToken(token))?.purpose).toBe("password_reset");
+
+    // The token existing is not the point: the person has to receive it. This
+    // named itself "queues a reset" while asserting nothing about the mail.
+    const [queued] = await db.select().from(s.outboundMessages).where(eq(s.outboundMessages.userId, id));
+    expect(queued!.kind).toBe("password_reset");
+    expect(queued!.toAddress).toBe(user!.email);
+    expect(queued!.state).toBe("queued");
+  });
+
+  it("issues one link when two requests arrive together", async () => {
+    // The throttle used to check outside its transaction, so two simultaneous
+    // requests both saw no recent token, both superseded, and both issued.
+    const id = await makeUser();
+    const [user] = await db.select().from(s.users).where(eq(s.users.id, id));
+
+    await Promise.all([requestPasswordReset(user!.email), requestPasswordReset(user!.email)]);
+
+    const live = (await db.select().from(s.authTokens).where(eq(s.authTokens.userId, id))).filter(
+      (t) => t.usedAt == null
+    );
+    expect(live).toHaveLength(1);
+  });
+
+  it("does not send a second link within the minute floor", async () => {
+    const id = await makeUser();
+    const [user] = await db.select().from(s.users).where(eq(s.users.id, id));
+
+    await requestPasswordReset(user!.email);
+    await requestPasswordReset(user!.email);
+
+    expect(await db.select().from(s.outboundMessages).where(eq(s.outboundMessages.userId, id))).toHaveLength(1);
   });
 
   it("does nothing, and says nothing, for an address that does not exist", async () => {

@@ -1,0 +1,1 @@
+ALTER TABLE "outbound_messages" ADD COLUMN "claim_id" uuid;

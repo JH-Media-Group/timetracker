@@ -993,6 +993,18 @@ export const outboundMessages = pgTable(
 
     state: text().notNull().default("queued"),
     attempts: integer().notNull().default(0),
+
+    /**
+     * Which claim currently owns this row.
+     *
+     * Set when a drain claims it, and required by every update that completes
+     * it. Without it, a worker that overran its lease could still write a
+     * terminal state: worker A stalls, B reclaims and sends, A then succeeds
+     * and marks the row `sent`, B fails and puts it back to `queued`, and it
+     * goes out a third time. The state machine says `sent` and `failed` have no
+     * exits; only this makes that true when two workers overlap.
+     */
+    claimId: uuid(),
     lastError: text(),
     /** Never claimed before this. Carries the backoff between attempts. */
     nextAttemptAt: ts().notNull().defaultNow(),

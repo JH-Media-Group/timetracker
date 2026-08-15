@@ -28,9 +28,17 @@ export async function POST(req: NextRequest) {
     const ip = clientIp(req);
     const { token, password } = parseOrThrow(schema, await req.json().catch(() => ({})));
 
-    // Per address only. A per-token limit would let somebody lock a colleague
-    // out of their own invite by spending its attempts.
-    if (ip) await enforce("auth", `reset:ip:${ip}`);
+    /*
+      A ceiling even when the caller has no address.
+
+      `clientIp()` returns null unless TRUST_PROXY says a proxy is setting
+      X-Forwarded-For, and `.env.example` ships TRUST_PROXY=0, so `if (ip)`
+      meant this endpoint had no limit at all in the configuration most likely
+      to be running. Falling back to a shared bucket is coarse, and coarse is
+      better than absent: the per-address minute floor and the response floor
+      already bound the interesting work, so this only stops the crude case.
+    */
+    await enforce("auth", ip ? `reset:ip:${ip}` : "reset:no-client-ip");
 
     await consumeToken(token, password);
     return NextResponse.json(

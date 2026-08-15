@@ -121,8 +121,3 @@ export async function send(message: Outgoing): Promise<SendResult> {
     throw e instanceof Error ? e : new Error(detail);
   }
 }
-
-/** Only for tests, which must not reuse a transport across cases. */
-export function resetTransport(): void {
-  cached = null;
-}
