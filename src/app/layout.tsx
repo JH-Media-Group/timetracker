@@ -14,7 +14,20 @@ const mono = JetBrains_Mono({ subsets: ["latin"], variable: "--font-jetbrains", 
 export const metadata: Metadata = {
   title: { default: "Tally", template: "%s · Tally" },
   description: "Time tracking, profitability, and invoicing for JH Media Group",
-  icons: { icon: "/tally-mark.svg", shortcut: "/tally-mark.svg", apple: "/tally-mark.svg" },
+  /*
+    No `icons` here on purpose. `src/app/icon.svg` is Next's file convention and
+    it emits the link tag by itself, with a content hash on the URL so a changed
+    icon actually reaches a browser that cached the old one.
+
+    This used to also declare `icons: { icon: "/tally-mark.svg", ... }`, which
+    won: the metadata override beat the file convention, so `icon.svg` sat in
+    the tree serving nothing and editing it changed no tab anywhere. Two
+    mechanisms where one silently wins is worse than either alone.
+
+    `/tally-mark.svg` is still in `public/` and still the in-app mark that
+    `logo.tsx` renders in the collapsed sidebar. It is a separate asset from the
+    favicon and is deliberately left alone.
+  */
 };
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
