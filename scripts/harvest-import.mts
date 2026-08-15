@@ -38,6 +38,7 @@ import * as s from "../src/server/db/schema";
 import { newId } from "../src/server/db/ids";
 import { hashPassword } from "../src/server/auth/password";
 import { readCsv, num, cents, yes, type Row } from "./lib/csv";
+import { instantAt } from "../src/lib/format";
 
 /* --------------------------------------------------------------- arguments */
 
@@ -170,7 +171,31 @@ const day = (value: string | undefined): string | null => {
   return /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
 };
 
-/** Harvest's `Started At` is a wall-clock time on the entry's own day. */
+/** The next calendar day, by pure UTC arithmetic on a date-only value. */
+const dayAfter = (d: string): string => {
+  const [y, mo, dd] = d.split("-").map(Number) as [number, number, number];
+  return new Date(Date.UTC(y, mo - 1, dd + 1)).toISOString().slice(0, 10);
+};
+
+/**
+ * The zone Harvest's wall clocks are expressed in.
+ *
+ * The export writes `9:00am` with no offset, meaning nine in the morning where
+ * the work happened. All 56 imported people and the account itself are
+ * `America/New_York`, and the export carries no per-person zone to do better
+ * with.
+ */
+const ACCOUNT_ZONE = "America/New_York";
+
+/**
+ * Harvest's `Started At` is a wall-clock time on the entry's own day.
+ *
+ * Resolved against the account zone, not UTC. `Date.UTC` was used here, which
+ * stored a 09:00 wall clock as 09:00Z: correct only if the work happened in
+ * Greenwich. Every one of the 55,177 imported clocks then displayed four or
+ * five hours early, and 987 fell on the day before their own `spent_on`.
+ * Migration `0005` corrected the rows already loaded (TALLY-57).
+ */
 function stamp(spentOn: string, clock: string | undefined): Date | null {
   const t = (clock ?? "").trim();
   if (!t) return null;
@@ -181,8 +206,7 @@ function stamp(spentOn: string, clock: string | undefined): Date | null {
   const suffix = m[3]?.toLowerCase();
   if (suffix === "pm" && hour !== 12) hour += 12;
   if (suffix === "am" && hour === 12) hour = 0;
-  const [y, mo, d] = spentOn.split("-").map(Number);
-  return new Date(Date.UTC(y!, mo! - 1, d!, hour, minute));
+  return new Date(instantAt(spentOn, hour * 60 + minute, ACCOUNT_ZONE));
 }
 
 /* -------------------------------------------------------------------- main */
@@ -543,7 +567,7 @@ async function main() {
         continue;
       }
 
-      const startedAt = stamp(spentOn, r["Started At"]);
+      let startedAt = stamp(spentOn, r["Started At"]);
       let endedAt = stamp(spentOn, r["Ended At"]);
 
       /**
@@ -568,17 +592,38 @@ async function main() {
        * still worth refusing to do quietly.
        */
       if (startedAt && endedAt && endedAt < startedAt) {
-        const shifted = new Date(endedAt.getTime() + 86_400_000);
+        /*
+          The end is the same wall clock on the following day, resolved in the
+          account zone. Adding 86,400,000 milliseconds is not the same thing and
+          is wrong twice a year: on 2020-03-08 a session running 9:34pm to
+          12:30am spans 2.93 hours of real time because New York loses an hour
+          that night, and `Hours` records 2.94. Naive arithmetic implied 3.93 and
+          the assertion below rejected a row that was perfectly good.
+        */
+        const endMinutes = (endedAt.getTime() - stamp(spentOn, "12:00am")!.getTime()) / 60_000;
+        const shifted = new Date(instantAt(dayAfter(spentOn), Math.round(endMinutes), ACCOUNT_ZONE));
         const impliedSeconds = (shifted.getTime() - startedAt.getTime()) / 1000;
         const recordedSeconds = Math.round(num(r.Hours) * 3600);
 
         // A minute of slack: Harvest stores times to the minute and Hours to two
         // decimal places, so they disagree by seconds even on clean rows.
         if (Math.abs(impliedSeconds - recordedSeconds) > 60) {
+          /*
+            The clock cannot be read as overnight, so no clock is recorded.
+
+            Keeping the pair as found is not an option: `time_entries_clock_ordered`
+            refuses an end before its start, and rightly. Shifting anyway would
+            invent a span the export does not support. `duration_seconds` comes
+            from `Hours` regardless, so the entry keeps its length, its money and
+            its day; only the wall clock is dropped, and `times_are_inferred`
+            already means exactly that.
+          */
           overnightRejected.push(
             `${r.Date} ${r["First Name"]} ${r["Last Name"]}: ${r["Started At"]} to ${r["Ended At"]} ` +
               `implies ${(impliedSeconds / 3600).toFixed(2)}h overnight but Hours says ${num(r.Hours).toFixed(2)}h`
           );
+          startedAt = null;
+          endedAt = null;
         } else {
           endedAt = shifted;
           bump("overnight sessions, end moved to the next day");

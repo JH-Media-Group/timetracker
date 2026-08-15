@@ -21,7 +21,7 @@ import { useToast } from "@/components/ui/toast";
 import { ProjectPicker, TaskSelect, defaultTaskFor, pushRecent } from "./project-picker";
 import { useApp } from "./providers";
 import {
-  formatClockTime, formatDuration, isoDate, minutesOfDay, parseClockTime, parseDuration,
+  formatClockTime, formatDuration, instantAt, isoDate, minutesOfDay, parseClockTime, parseDuration,
 } from "@/lib/format";
 
 /* ------------------------------------------------------------------ store */
@@ -65,7 +65,14 @@ export function EntryForm({
 }) {
   const qc = useQueryClient();
   const toast = useToast();
-  const { projectById, taskById, settings, me } = useApp();
+  const { projectById, taskById, settings, me, userById } = useApp();
+  /*
+    The zone the entry belongs to, which is the owner's, not the editor's.
+    Whoever is typing may not be the person the time is for: a manager
+    entering time on somebody's behalf must not silently record it against
+    their own clock.
+  */
+  const zone = userById.get(entry?.userId ?? defaults?.userId ?? me?.id ?? "")?.timezone ?? settings.timezone;
   const startEndMode = settings.timerMode === "start_end";
 
   const [projectId, setProjectId] = React.useState(entry?.projectId ?? defaults?.projectId);
@@ -74,8 +81,8 @@ export function EntryForm({
   const [notes, setNotes] = React.useState(entry?.notes ?? "");
   const [nonBillable, setNonBillable] = React.useState(entry ? !entry.isBillable : false);
 
-  const initialStart = entry?.startedAt ? minutesOfDay(entry.startedAt) : defaults?.startMinutes;
-  const initialEnd = entry?.endedAt ? minutesOfDay(entry.endedAt) : defaults?.endMinutes;
+  const initialStart = entry?.startedAt ? minutesOfDay(entry.startedAt, zone) : defaults?.startMinutes;
+  const initialEnd = entry?.endedAt ? minutesOfDay(entry.endedAt, zone) : defaults?.endMinutes;
   const [startText, setStartText] = React.useState(initialStart != null ? formatClockTime(initialStart) : "");
   const [endText, setEndText] = React.useState(initialEnd != null ? formatClockTime(initialEnd) : "");
   const [durationText, setDurationText] = React.useState(
@@ -118,10 +125,37 @@ export function EntryForm({
       const base = {
         projectId, taskId, spentOn, notes: notes.trim() || undefined,
         isBillable: !nonBillable,
-        startedAt: startMin != null ? new Date(`${spentOn}T00:00:00`).toISOString().slice(0, 11) + String(Math.floor(startMin / 60)).padStart(2, "0") + ":" + String(startMin % 60).padStart(2, "0") + ":00" : undefined,
-        endedAt: endMin != null ? new Date(`${spentOn}T00:00:00`).toISOString().slice(0, 11) + String(Math.floor(endMin / 60)).padStart(2, "0") + ":" + String(endMin % 60).padStart(2, "0") + ":00" : undefined,
+        /*
+          A real instant, built in the owner's zone.
+
+          What was here concatenated the date part of the reader's midnight
+          expressed in UTC with the typed clock, and produced a string carrying
+          no zone designator. z.string().datetime() rejects that, so saving any
+          entry with a start time returned 422, verified against a production
+          build. It also took the previous day anywhere east of UTC.
+        */
+        startedAt: startMin != null ? instantAt(spentOn, startMin, zone) : undefined,
+        endedAt: endMin != null ? instantAt(spentOn, endMin, zone) : undefined,
       };
-      if (entry) return api.updateTimeEntry(entry.id, { ...base, durationSeconds: seconds });
+      if (entry) {
+        /*
+          Send the duration only when it changed.
+
+          One imported entry runs to 26.46 hours, which Harvest recorded and the
+          import preserved faithfully. `timeEntryPatchSchema` caps
+          durationSeconds at 24 hours, so sending it unchanged on every save
+          made that entry uneditable: correcting so much as a note came back
+          422 for a field nobody had touched.
+
+          Omitting an unchanged field is what PATCH means anyway. The cap still
+          applies to anybody actually typing a duration, which is what it is for.
+        */
+        const durationChanged = seconds !== entry.durationSeconds;
+        return api.updateTimeEntry(entry.id, {
+          ...base,
+          ...(durationChanged ? { durationSeconds: seconds } : {}),
+        });
+      }
       return api.createTimeEntry({ ...base, userId: defaults?.userId, durationSeconds: seconds, start: opts.start });
     },
     onSuccess: () => {

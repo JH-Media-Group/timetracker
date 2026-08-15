@@ -19,7 +19,7 @@ const END_HOUR = 21;
 export function CalendarView({ weekStart, userId, entries, loading }: {
   weekStart: Date; userId: string; entries: TimeEntry[]; loading: boolean;
 }) {
-  const { projectById, taskById, clientById, settings } = useApp();
+  const { projectById, taskById, clientById, settings, userById } = useApp();
   const [span, setSpan] = React.useState<"5" | "7">("5");
   const [editing, setEditing] = React.useState<{ entry?: TimeEntry; defaults?: { spentOn: string; startMinutes: number; endMinutes: number } } | null>(null);
   const [drag, setDrag] = React.useState<{ day: string; from: number; to: number } | null>(null);
@@ -118,8 +118,10 @@ export function CalendarView({ weekStart, userId, entries, loading }: {
                   )}
 
                   {list.map((e) => {
-                    const start = minutesOfDay(e.startedAt!);
-                    const end = e.endedAt ? minutesOfDay(e.endedAt) : start + Math.round(e.durationSeconds / 60);
+                    // The zone the work was done in, not the reader's.
+                    const zone = userById.get(e.userId)?.timezone ?? settings.timezone;
+                    const start = minutesOfDay(e.startedAt!, zone);
+                    const end = e.endedAt ? minutesOfDay(e.endedAt, zone) : start + Math.round(e.durationSeconds / 60);
                     const top = ((start - START_HOUR * 60) / 60) * HOUR_H;
                     const h = Math.max(18, ((end - start) / 60) * HOUR_H);
                     const project = projectById.get(e.projectId);

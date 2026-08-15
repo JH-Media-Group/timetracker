@@ -120,9 +120,64 @@ export function formatClockTime(minutes: number): string {
   return `${h}:${String(m).padStart(2, "0")}${mer}`;
 }
 
-export function minutesOfDay(isoString: string): number {
-  const d = new Date(isoString);
-  return d.getHours() * 60 + d.getMinutes();
+/**
+ * The wall-clock minute a stored instant falls on, in a named timezone.
+ *
+ * `started_at` and `ended_at` are instants, which is what `timestamptz` means
+ * and what the running timer records (`new Date().toISOString()`). The clock a
+ * person reads off them is not a property of the instant, it is a property of
+ * the instant plus a zone, and the zone that matters is the one the work was
+ * done in, not the one the reader happens to be sitting in.
+ *
+ * This used to be `new Date(iso).getHours()`, which is the reader's zone. Two
+ * consequences, both real: every one of the 55,177 imported entries with a
+ * clock displayed four or five hours early for anybody in New York, and 987 of
+ * them displayed a time belonging to the day before their own `spent_on`.
+ *
+ * Pass the entry owner's timezone. `America/New_York` is not a default here on
+ * purpose: a silent default is how the reader's zone crept in.
+ */
+export function minutesOfDay(isoString: string, timeZone: string): number {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(isoString));
+
+  const at = (type: string) => Number(parts.find((p) => p.type === type)?.value ?? 0);
+  return at("hour") * 60 + at("minute");
+}
+
+/**
+ * The instant at which a wall-clock minute occurs on a given day in a zone.
+ *
+ * The inverse of `minutesOfDay`, and the thing the entry editor needs. It has
+ * to be built rather than concatenated: the previous version did
+ * `new Date(\`${spentOn}T00:00:00\`).toISOString().slice(0, 11)`, which parses
+ * as the *reader's* midnight, converts to UTC, and then takes the date part. In
+ * any zone east of UTC that is the previous day, and the result carried no zone
+ * designator at all, so the server rejected it outright.
+ *
+ * Two passes because an offset is itself a function of the date: guess UTC,
+ * measure how far off the guess lands in the target zone, correct, and measure
+ * again so a DST boundary between the guess and the answer is caught.
+ */
+export function instantAt(spentOn: string, minutes: number, timeZone: string): string {
+  const [y, mo, d] = spentOn.split("-").map(Number) as [number, number, number];
+  let guess = Date.UTC(y, mo - 1, d, Math.floor(minutes / 60), minutes % 60);
+
+  for (let i = 0; i < 2; i++) {
+    const landed = minutesOfDay(new Date(guess).toISOString(), timeZone);
+    let delta = minutes - landed;
+    // A correction should never be more than half a day; anything larger means
+    // the clock wrapped past midnight, so take the short way round.
+    if (delta > 720) delta -= 1440;
+    if (delta < -720) delta += 1440;
+    if (delta === 0) break;
+    guess += delta * 60_000;
+  }
+  return new Date(guess).toISOString();
 }
 
 /* ------------------------------------------------------------------- dates */

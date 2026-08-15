@@ -35,6 +35,8 @@ export default function PersonDetailPage() {
   const { userById, projectById, clientById, taskById, settings, ready } = useApp();
   const can = useCan();
   const person = userById.get(id);
+  // Their zone, not the reader's: this is their timesheet. See minutesOfDay.
+  const personZone = person?.timezone ?? settings.timezone;
   const { granularity, anchor, period, onChange } = usePeriod("month", ["week", "month", "quarter", "year"]);
 
   /**
@@ -411,12 +413,12 @@ export default function PersonDetailPage() {
                       viewer in another timezone.
                     */}
                     <span className="w-32 tabular-nums text-ink-secondary">
-                      {e.startedAt ? formatClockTime(minutesOfDay(e.startedAt)) : <span className="text-ink-tertiary">&mdash;</span>}
+                      {e.startedAt ? formatClockTime(minutesOfDay(e.startedAt, personZone)) : <span className="text-ink-tertiary">&mdash;</span>}
                     </span>
                     <span className="w-32 tabular-nums text-ink-secondary">
                       {e.timerStartedAt
                         ? <span className="text-live">running</span>
-                        : e.endedAt ? formatClockTime(minutesOfDay(e.endedAt)) : <span className="text-ink-tertiary">&mdash;</span>}
+                        : e.endedAt ? formatClockTime(minutesOfDay(e.endedAt, personZone)) : <span className="text-ink-tertiary">&mdash;</span>}
                     </span>
                     <span className="min-w-0 flex-1">
                       <span className="block truncate leading-tight text-ink">

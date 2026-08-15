@@ -295,3 +295,58 @@ describe("credentials", () => {
     expect(tracked.length, "git ls-files returned nothing").toBeGreaterThan(50);
   });
 });
+
+/**
+ * The em-dash rule, applied to the code and not only to the prose.
+ *
+ * CLAUDE.md has said for a long time that there are seven em dashes under
+ * `src/`, all of them the "no value" glyph in a money cell, where a hyphen
+ * would read as a minus sign. A review counted fourteen. Nothing was wrong: the
+ * rule was never enforced over `src/` at all, only over `docs/**` and
+ * CLAUDE.md, so the number drifted with nobody able to notice.
+ *
+ * A count is the wrong assertion anyway, because it churns on every legitimate
+ * new cell. The rule that actually matters is *where* the glyph may appear: on
+ * its own, as an entire value. An em dash inside a sentence is the thing the
+ * house style forbids, and it is what this fails on.
+ */
+describe("em dashes in the code", () => {
+  const DASH = "\u2014";
+
+  /** The glyph standing alone: a whole string, a whole JSX text node, or the entity. */
+  const ALLOWED = [
+    new RegExp(`"${DASH}"`, "g"),
+    new RegExp(`'${DASH}'`, "g"),
+    new RegExp("`" + DASH + "`", "g"),
+    new RegExp(`>${DASH}<`, "g"),
+    /&mdash;/g,
+  ];
+
+  const files = tracked.filter((f) => f.startsWith("src/") && /\.(ts|tsx|css)$/.test(f));
+
+  it("has files to check", () => {
+    expect(files.length).toBeGreaterThan(50);
+  });
+
+  it("uses the em dash only as a value on its own, never inside prose", () => {
+    const offenders: string[] = [];
+
+    for (const file of files) {
+      const text = readFileSync(file, "utf8");
+      if (!text.includes(DASH) && !text.includes("&mdash;")) continue;
+
+      text.split("\n").forEach((line, i) => {
+        let stripped = line;
+        for (const re of ALLOWED) stripped = stripped.replace(re, "");
+        if (stripped.includes(DASH)) {
+          offenders.push(`  ${file}:${i + 1}  ${line.trim().slice(0, 90)}`);
+        }
+      });
+    }
+
+    expect(
+      offenders,
+      "an em dash outside a standalone value. Use a comma, parentheses or a hyphen:\n" + offenders.join("\n")
+    ).toEqual([]);
+  });
+});

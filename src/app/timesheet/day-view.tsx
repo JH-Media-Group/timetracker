@@ -162,7 +162,9 @@ export function DayView({ date, userId, entries, loading }: {
 }
 
 function EntryRow({ entry, expanded, onToggle }: { entry: TimeEntry; expanded: boolean; onToggle: () => void }) {
-  const { projectById, taskById, clientById, settings } = useApp();
+  const { projectById, taskById, clientById, settings, userById } = useApp();
+  // The zone the work was done in, not the reader's. See minutesOfDay.
+  const zone = userById.get(entry.userId)?.timezone ?? settings.timezone;
   const { running, elapsed, stop, restart } = useTimer();
   const qc = useQueryClient();
   const toast = useToast();
@@ -199,11 +201,11 @@ function EntryRow({ entry, expanded, onToggle }: { entry: TimeEntry; expanded: b
         <div className="w-[84px] shrink-0 text-md text-ink-secondary">
           {entry.startedAt ? (
             <>
-              <div className="font-medium text-ink">{formatClockTime(minutesOfDay(entry.startedAt))}</div>
+              <div className="font-medium text-ink">{formatClockTime(minutesOfDay(entry.startedAt, zone))}</div>
               <div className="text-base">
                 {isRunning
                   ? <span className="font-medium text-live">running</span>
-                  : entry.endedAt ? formatClockTime(minutesOfDay(entry.endedAt)) : "—"}
+                  : entry.endedAt ? formatClockTime(minutesOfDay(entry.endedAt, zone)) : "—"}
               </div>
             </>
           ) : <div className="text-ink-tertiary">—</div>}

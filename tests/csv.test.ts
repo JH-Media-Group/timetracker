@@ -55,8 +55,38 @@ describe("parseCsv", () => {
     expect(parseCsv("a\n1\n\n2\n")).toHaveLength(2);
   });
 
-  it("fills a short record rather than leaving holes", () => {
-    expect(parseCsv("a,b,c\n1,2")).toEqual([{ a: "1", b: "2", c: "" }]);
+  /**
+   * This test used to assert the opposite, and the assertion was the bug.
+   *
+   * Padding a short record looks tidy and hides the thing that caused it. A
+   * single stray quote in an unquoted field absorbs a delimiter, shifts every
+   * later column left, and drops the overflow off the end; `num("")` then turns
+   * the missing value into 0, and a zero-hour, zero-rate entry lands with
+   * nothing raised. A width mismatch means the parse already went wrong.
+   */
+  it("throws on a record narrower than the header", () => {
+    expect(() => parseCsv("a,b,c\n1,2")).toThrow(/2 fields, header has 3/);
+  });
+
+  it("throws on a record wider than the header, rather than truncating it", () => {
+    expect(() => parseCsv("a,b\n1,2,3")).toThrow(/3 fields, header has 2/);
+  });
+
+  it("names the record so a 56,000-line file can be searched", () => {
+    // Record 2 is the first data row: humans count the header as line 1.
+    expect(() => parseCsv("a,b\n1,2\n3")).toThrow(/record 3/);
+  });
+
+  it("throws when the file ends inside a quoted field", () => {
+    expect(() => parseCsv('a,b\n1,"oops')).toThrow(/ends inside a quoted field/);
+  });
+
+  it("rejects a stray quote in an unquoted field", () => {
+    // `1,6" pipe,3` used to yield {a:"1", b:'6 pipe,3', c:""}: the quote
+    // vanished, the delimiter was absorbed, and the row lost a column. The
+    // stray quote opens a run that never closes, so the unterminated-quote
+    // check catches it first, which is the more accurate of the two errors.
+    expect(() => parseCsv('a,b,c\n1,6" pipe,3')).toThrow(/ends inside a quoted field/);
   });
 });
 

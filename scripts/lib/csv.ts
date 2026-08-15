@@ -78,6 +78,19 @@ export function parseCsv(text: string): Row[] {
     }
   }
 
+  /*
+    An unterminated quote is a truncated file, not a last field.
+
+    A file ending mid-quote used to parse as a complete record, so a download
+    that was cut off read as a smaller, entirely plausible export. Silence is
+    the wrong answer to missing data.
+  */
+  if (quoted) {
+    throw new Error(
+      "CSV ends inside a quoted field. The file is truncated or a quote is unbalanced."
+    );
+  }
+
   // Whatever is buffered when the file ends is the last record, unless the file
   // ended with a newline and there is nothing left.
   if (field !== "" || record.length) {
@@ -89,10 +102,29 @@ export function parseCsv(text: string): Row[] {
   if (!header) return [];
 
   const keys = header.map((h) => h.trim());
-  return rest.map((values) => {
+
+  /*
+    Every record must have exactly as many fields as the header.
+
+    Short records used to be padded and long ones silently truncated, so a
+    single stray quote inside an unquoted field (`1,6" pipe,3`) absorbed a
+    delimiter, shifted every later column left, and dropped the overflow off the
+    end. `num("")` then turned the missing value into 0, which is how a
+    zero-hour, zero-rate entry appears with nothing raised.
+
+    A width mismatch means the parse has already gone wrong somewhere earlier in
+    the file, and no amount of padding recovers the true values.
+  */
+  return rest.map((values, i) => {
+    if (values.length !== keys.length) {
+      throw new Error(
+        `CSV record ${i + 2} has ${values.length} fields, header has ${keys.length}. ` +
+          `A quote or delimiter is unbalanced. First field: ${JSON.stringify(values[0] ?? "")}`
+      );
+    }
     const row: Row = {};
-    keys.forEach((key, i) => {
-      row[key] = (values[i] ?? "").trim();
+    keys.forEach((key, k) => {
+      row[key] = (values[k] ?? "").trim();
     });
     return row;
   });
