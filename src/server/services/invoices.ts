@@ -29,6 +29,8 @@ import {
 import { dayIn, type IsoDate } from "@/domain/calendar";
 import { roundGroup } from "@/domain/rounding";
 import { getSettings, roundingRule } from "./settings";
+import { queueMail } from "./mail";
+import { renderLabel, resolveMessages } from "@/domain/invoice-config";
 import { resolveDefaults } from "@/domain/invoice-config";
 import { defaultItemTypeId } from "./item-types";
 import { ledgerDelta, moveBalance } from "./retainers";
@@ -1159,21 +1161,126 @@ export async function recordMessage(
   bodyText?: string
 ) {
   assertCan(ctx, "invoice:send");
-  const { env } = await import("@/server/env");
+
+  const rendered = await renderInvoiceMessage(ctx, id, kind, subject, bodyText);
+
+  /*
+    Queue rather than send.
+
+    This runs inside the request's transaction. Sending here would put an email
+    on the wire that a rollback cannot recall, so the client would hold an
+    invoice we have no record of issuing. `queueMail` writes a row in the same
+    transaction: either both survive or neither does. `pnpm jobs:mail` does the
+    sending, outside any transaction of ours.
+  */
+  const queued = await queueMail(ctx, {
+    kind,
+    // Comma-joined, which nodemailer accepts, so two people in the To field
+    // arrive on one email rather than getting a copy each.
+    to: recipients.to.join(", "),
+    cc: recipients.cc,
+    subject: rendered.subject,
+    text: rendered.body,
+    relatedType: "invoice",
+    relatedId: id,
+  });
+
+  /*
+    Each bcc gets its own message.
+
+    There is no bcc column, and adding recipients to `cc` would disclose them,
+    which is the one thing bcc exists to prevent. A separate copy per address is
+    the honest version: the recipient sees only themselves.
+  */
+  for (const address of recipients.bcc ?? []) {
+    await queueMail(ctx, {
+      kind,
+      to: address,
+      subject: rendered.subject,
+      text: rendered.body,
+      relatedType: "invoice",
+      relatedId: id,
+    });
+  }
 
   await ctx.db.insert(s.invoiceMessages).values({
     id: newId(),
     invoiceId: id,
     kind,
-    subject: subject ?? null,
-    body: bodyText ?? null,
+    subject: rendered.subject,
+    // What was sent, stored. Not a template reference: an invoice email is
+    // close enough to a legal document that a later template edit must not
+    // rewrite what a client was told.
+    body: rendered.body,
     recipients,
     sentBy: ctx.actor.userId,
-    deliveryState: env.smtp ? "queued" : "not_configured",
+    deliveryState: queued.queued ? "queued" : "not_configured",
   });
 
   ctx.audit({ action: `invoice.${kind}`, entityType: "invoice", entityId: id, after: { recipients } });
-  return { delivered: Boolean(env.smtp) };
+  return { delivered: queued.queued };
+}
+
+/**
+ * The subject and body an invoice message goes out with.
+ *
+ * A caller may supply both, which is what the send dialog does once somebody
+ * has edited the text. When it does not, the account's template is resolved and
+ * its tokens filled from the invoice. Defaults live in `invoice-config.ts` and
+ * are merged over whatever the account has stored, so an account that never
+ * edited a template has nothing to keep in step.
+ */
+async function renderInvoiceMessage(
+  ctx: Ctx,
+  id: string,
+  kind: "invoice" | "reminder" | "thank_you",
+  subject?: string,
+  bodyText?: string
+): Promise<{ subject: string; body: string }> {
+  if (subject && bodyText) return { subject, body: bodyText };
+
+  const settings = await getSettings(ctx);
+  const messages = resolveMessages(settings.invoiceMessages);
+
+  const [row] = await ctx.db
+    .select({
+      number: s.invoices.number,
+      dueDate: s.invoices.dueDate,
+      totalCents: s.invoices.totalCents,
+      currency: s.invoices.currency,
+      client: s.clients.name,
+    })
+    .from(s.invoices)
+    .innerJoin(s.clients, eq(s.clients.id, s.invoices.clientId))
+    .where(eq(s.invoices.id, id))
+    .limit(1);
+
+  if (!row) throw notFound("That invoice");
+
+  const tokens = {
+    number: row.number ?? "",
+    client: row.client,
+    company: settings.companyName,
+    amount: formatMoneyCents(Number(row.totalCents), row.currency),
+    dueDate: row.dueDate ?? "",
+  };
+
+  const pick =
+    kind === "invoice"
+      ? { s: messages.sendSubject, b: messages.sendBody }
+      : kind === "reminder"
+        ? { s: messages.reminderSubject, b: messages.reminderBody }
+        : { s: messages.thanksSubject, b: messages.thanksBody };
+
+  return {
+    subject: subject ?? renderLabel(pick.s, tokens),
+    body: bodyText ?? renderLabel(pick.b, tokens),
+  };
+}
+
+/** Money for an email, where there is no component to do it. */
+function formatMoneyCents(cents: number, currency: string): string {
+  return new Intl.NumberFormat("en-US", { style: "currency", currency }).format(cents / 100);
 }
 
 export async function writeOff(ctx: Ctx, id: string): Promise<InvoiceDetail> {

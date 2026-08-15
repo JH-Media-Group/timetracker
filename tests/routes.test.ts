@@ -62,6 +62,12 @@ const APP_ROOT = join(process.cwd(), "src/app");
 const EXEMPT: Record<string, string> = {
   "auth/providers": "public: the sign-in page renders before anybody has a session",
   "auth/signin": "public by definition",
+  "auth/forgot":
+    "public by necessity: somebody locked out has no session. Answers identically whether or not " +
+    "the address exists, and is rate limited per address and per mailbox",
+  "auth/reset":
+    "public by necessity: the token is the credential. Rate limited per address, and deliberately " +
+    "not per token, so nobody can burn a colleague's invite by spending its attempts",
   "auth/signout": "ending your own session needs no permission",
   "auth/signout-all": "declares settings:manage",
   bootstrap: "everyone: the shell cannot render without it, and it redacts per capability",

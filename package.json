@@ -26,6 +26,7 @@
     "db:cleanup-probe": "tsx scripts/cleanup-probe.mts",
     "db:invariants": "tsx scripts/invariants.mts",
     "jobs:recurring": "tsx scripts/recurring.mts",
+    "jobs:mail": "tsx scripts/mail.mts",
     "harvest:import": "tsx scripts/harvest-import.mts",
     "harvest:reconcile": "tsx scripts/harvest-reconcile.mts",
     "sweep": "tsx scripts/sweep.mts"
@@ -52,6 +53,7 @@
     "ioredis": "^6.0.0",
     "lucide-react": "^0.475.0",
     "next": "^15.1.7",
+    "nodemailer": "^9.0.5",
     "postgres": "^3.4.9",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
@@ -61,6 +63,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.6",
     "@types/node": "^22.13.1",
+    "@types/nodemailer": "^8.0.1",
     "@types/react": "^19.0.8",
     "@types/react-dom": "^19.0.3",
     "dotenv": "^17.4.2",

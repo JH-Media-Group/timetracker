@@ -47,3 +47,6 @@ pnpm-debug.log*
 # misc
 .turbo/
 tsconfig.tsbuildinfo
+
+# Development mail: MAIL_TO_DISK=1 writes here instead of sending.
+.mail/

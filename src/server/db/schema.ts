@@ -943,6 +943,94 @@ export const importRuns = pgTable("import_runs", {
   createdAt: createdAt(),
 });
 
+/**
+ * Every email the app intends to send, and what became of it (TALLY-49).
+ *
+ * One table for all outbound mail, whatever produced it, because the questions
+ * worth asking are "did it go" and "what failed", and they should have one
+ * place to look rather than one per feature.
+ *
+ * The state machine is deliberately small:
+ *
+ *   queued   -> sending -> sent
+ *                       -> queued  (a transient failure, with backoff)
+ *                       -> failed  (attempts exhausted, or a permanent refusal)
+ *   not_configured                 (no SMTP transport; nothing was attempted)
+ *
+ * `not_configured` exists so the record is honest on an instance with no key,
+ * rather than a `queued` row that will never move. It is the same distinction
+ * `invoice_messages.delivery_state` already draws, and the reason a send does
+ * not silently report success.
+ *
+ * `body_text` is stored rather than re-rendered on read. An invoice email is
+ * close enough to a legal document that what was sent has to stay what was
+ * sent, even after somebody edits the template it came from.
+ */
+export const outboundMessages = pgTable(
+  "outbound_messages",
+  {
+    id: pk(),
+    /** invite | password_reset | invoice | reminder | thank_you | notification */
+    kind: text().notNull(),
+    toAddress: text().notNull(),
+    ccAddresses: jsonb().notNull().default([]),
+    subject: text().notNull(),
+    bodyText: text().notNull(),
+
+    state: text().notNull().default("queued"),
+    attempts: integer().notNull().default(0),
+    lastError: text(),
+    /** Never claimed before this. Carries the backoff between attempts. */
+    nextAttemptAt: ts().notNull().defaultNow(),
+    sentAt: ts(),
+    providerMessageId: text(),
+
+    /** What this is about, for a timeline and for support questions. */
+    relatedType: text(),
+    relatedId: uuid(),
+    /** Who it is for, when it is somebody in this account. */
+    userId: uuid().references(() => users.id, { onDelete: "set null" }),
+
+    createdAt: createdAt(),
+  },
+  (t) => [
+    // The drain's claim query: due, unsent, oldest first.
+    index("outbound_messages_claim_idx").on(t.state, t.nextAttemptAt),
+    index("outbound_messages_related_idx").on(t.relatedType, t.relatedId),
+  ]
+);
+
+/**
+ * A single-use token that proves somebody can read an inbox (TALLY-48).
+ *
+ * Serves both the invite and the password reset, distinguished by `purpose`,
+ * because they are the same mechanism with different copy and different
+ * expiries: an invite can reasonably sit for a week, a reset should not.
+ *
+ * **The token is stored hashed.** A token in a database is a credential: anyone
+ * who can read this table could otherwise set any password in the account, and
+ * a backup of it would be a permanent skeleton key. Only the digest is kept, so
+ * a stolen copy is worthless.
+ */
+export const authTokens = pgTable(
+  "auth_tokens",
+  {
+    id: pk(),
+    userId: uuid()
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    /** invite | password_reset */
+    purpose: text().notNull(),
+    /** sha256 of the token that was emailed. The token itself is never stored. */
+    tokenHash: text().notNull().unique(),
+    expiresAt: ts().notNull(),
+    usedAt: ts(),
+    createdBy: uuid().references(() => users.id, { onDelete: "set null" }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("auth_tokens_user_idx").on(t.userId, t.purpose)]
+);
+
 export const notifications = pgTable(
   "notifications",
   {

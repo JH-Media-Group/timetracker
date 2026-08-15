@@ -1,0 +1,287 @@
+/**
+ * Invites and password resets (TALLY-48).
+ *
+ * With Google SSO dropped in favour of password-only, this is the **only** way
+ * anybody gets an account on a deployed instance. Before it existed, passwords
+ * could be set by exactly three things: the seed, the Harvest importer behind a
+ * flag that refuses to run in production, and two test scripts.
+ *
+ * ONE MECHANISM, TWO PURPOSES
+ *
+ * An invite and a reset are the same thing with different copy and different
+ * expiries: prove you can read an inbox, then choose a password. Splitting them
+ * into two tables would duplicate the security-relevant half, which is where
+ * mistakes are expensive.
+ *
+ * WHY THE TOKEN IS HASHED
+ *
+ * A token in a database is a credential. Anybody who could read this table
+ * could otherwise set any password in the account, and a backup would be a
+ * permanent skeleton key. Only the digest is stored, so a stolen copy is
+ * worthless. This is the same reasoning `sessions` already applies.
+ *
+ * NOT `user_invites`
+ *
+ * That table exists in the schema, is referenced by nothing but the seed's
+ * truncate list, and models a different flow: inviting somebody who has no user
+ * row yet, creating it on acceptance. Every real person here already exists,
+ * because the Harvest import created them, and it cannot serve a reset either.
+ * It is left alone rather than half-adopted, and is worth deleting or building
+ * on deliberately rather than by accident.
+ */
+
+import { createHash, randomBytes } from "node:crypto";
+import { and, eq, gt, isNull } from "drizzle-orm";
+import type { Ctx } from "@/server/ctx";
+import { db } from "@/server/db/client";
+import * as s from "@/server/db/schema";
+import { newId } from "@/server/db/ids";
+import { AppError, notFound } from "@/server/errors";
+import { assertCan } from "@/server/ctx";
+import { hashPassword, checkPasswordPolicy } from "@/server/auth/password";
+import { revokeAllSessions } from "@/server/auth/session";
+import { queueMail } from "@/server/services/mail";
+import { env } from "@/server/env";
+
+export type TokenPurpose = "invite" | "password_reset";
+
+/**
+ * How long each kind is good for.
+ *
+ * An invite can reasonably sit in an inbox over a weekend. A reset should not:
+ * it is a live credential for whoever reads that mailbox, and the person asking
+ * for it is waiting at the screen.
+ */
+const TTL_MS: Record<TokenPurpose, number> = {
+  invite: 7 * 24 * 60 * 60 * 1000,
+  password_reset: 60 * 60 * 1000,
+};
+
+const digest = (token: string) => createHash("sha256").update(token).digest("hex");
+
+/** 32 random bytes, base64url, so it survives a URL and an email client. */
+const mintToken = () => randomBytes(32).toString("base64url");
+
+const linkFor = (token: string) => `${env.APP_URL.replace(/\/$/, "")}/set-password?token=${token}`;
+
+/**
+ * Create a token and queue the email that carries it.
+ *
+ * Returns the token only so tests and the dev flow can use it. Nothing in a
+ * response body should ever include it: that would hand it to anybody who can
+ * see the response, which is the person who asked rather than the person who
+ * owns the mailbox.
+ */
+async function issue(
+  ctx: Ctx,
+  user: { id: string; email: string; firstName: string | null },
+  purpose: TokenPurpose,
+  createdBy: string | null
+): Promise<string> {
+  const token = mintToken();
+
+  /*
+    Supersede any outstanding token of the same purpose.
+
+    Two live reset links mean a stolen one keeps working after the owner has
+    quietly requested another, which is the case where this matters.
+  */
+  await ctx.db
+    .update(s.authTokens)
+    .set({ usedAt: new Date() })
+    .where(
+      and(eq(s.authTokens.userId, user.id), eq(s.authTokens.purpose, purpose), isNull(s.authTokens.usedAt))
+    );
+
+  await ctx.db.insert(s.authTokens).values({
+    id: newId(),
+    userId: user.id,
+    purpose,
+    tokenHash: digest(token),
+    expiresAt: new Date(Date.now() + TTL_MS[purpose]),
+    createdBy,
+  });
+
+  const name = user.firstName?.trim() || "there";
+  const link = linkFor(token);
+
+  const copy =
+    purpose === "invite"
+      ? {
+          subject: "Your Tally account",
+          text:
+            `Hi ${name},\n\n` +
+            `An account has been created for you in Tally, JH Media Group's time tracking and invoicing system.\n\n` +
+            `Choose a password to get started:\n${link}\n\n` +
+            `This link works once and expires in seven days.\n`,
+        }
+      : {
+          subject: "Reset your Tally password",
+          text:
+            `Hi ${name},\n\n` +
+            `Somebody asked to reset the password for this address.\n\n` +
+            `Choose a new one:\n${link}\n\n` +
+            `This link works once and expires in an hour. ` +
+            `If it was not you, you can ignore this: nothing has changed.\n`,
+        };
+
+  await queueMail(ctx, {
+    kind: purpose === "invite" ? "invite" : "password_reset",
+    to: user.email,
+    subject: copy.subject,
+    text: copy.text,
+    relatedType: "user",
+    relatedId: user.id,
+    userId: user.id,
+  });
+
+  return token;
+}
+
+/**
+ * Invite somebody who already has a user record.
+ *
+ * Refuses an archived account and refuses an `@imported.invalid` address. The
+ * import created 45 history-only people with addresses on that reserved TLD
+ * (RFC 2606) precisely so they could never receive mail; inviting one would
+ * bounce, and bounces are what cost a domain its reputation.
+ */
+export async function inviteUser(ctx: Ctx, userId: string): Promise<{ queued: boolean }> {
+  assertCan(ctx, "people:manage");
+
+  const [user] = await ctx.db
+    .select({
+      id: s.users.id,
+      email: s.users.email,
+      firstName: s.users.firstName,
+      archivedAt: s.users.archivedAt,
+    })
+    .from(s.users)
+    .where(eq(s.users.id, userId))
+    .limit(1);
+
+  if (!user) throw notFound("That person");
+  if (user.archivedAt) {
+    throw new AppError("conflict", "That person is archived. Restore them before inviting them.");
+  }
+  if (user.email.endsWith("@imported.invalid")) {
+    throw new AppError(
+      "conflict",
+      "That account has no real email address. It exists only to carry imported history. Give it a real address first."
+    );
+  }
+
+  await issue(ctx, user, "invite", ctx.actor.userId);
+  ctx.audit({ action: "user.invited", entityType: "user", entityId: user.id });
+  return { queued: true };
+}
+
+/**
+ * Begin a password reset. **Public, and must not disclose whether an account
+ * exists.**
+ *
+ * Always reports the same thing. A response that differs by whether the address
+ * is known turns this into an account enumeration endpoint on a public URL, and
+ * the list of who works somewhere is worth having if you are choosing a
+ * phishing target.
+ */
+export async function requestPasswordReset(email: string): Promise<void> {
+  const [user] = await db
+    .select({
+      id: s.users.id,
+      email: s.users.email,
+      firstName: s.users.firstName,
+      archivedAt: s.users.archivedAt,
+      passwordHash: s.users.passwordHash,
+    })
+    .from(s.users)
+    .where(eq(s.users.email, email))
+    .limit(1);
+
+  // Silently do nothing for an unknown, archived or unreachable address. The
+  // caller cannot tell the difference, which is the point.
+  if (!user || user.archivedAt || user.email.endsWith("@imported.invalid")) return;
+
+  const ctx = { db, audit: () => {}, actor: { userId: user.id } } as unknown as Ctx;
+  await issue(ctx, user, "password_reset", null);
+}
+
+export interface TokenSubject {
+  userId: string;
+  email: string;
+  firstName: string | null;
+  purpose: TokenPurpose;
+}
+
+/** Resolve a token without spending it, so the page can greet the right person. */
+export async function peekToken(token: string): Promise<TokenSubject | null> {
+  const [row] = await db
+    .select({
+      userId: s.authTokens.userId,
+      purpose: s.authTokens.purpose,
+      email: s.users.email,
+      firstName: s.users.firstName,
+    })
+    .from(s.authTokens)
+    .innerJoin(s.users, eq(s.users.id, s.authTokens.userId))
+    .where(
+      and(
+        eq(s.authTokens.tokenHash, digest(token)),
+        isNull(s.authTokens.usedAt),
+        gt(s.authTokens.expiresAt, new Date()),
+        isNull(s.users.archivedAt)
+      )
+    )
+    .limit(1);
+
+  if (!row) return null;
+  return { userId: row.userId, email: row.email, firstName: row.firstName, purpose: row.purpose as TokenPurpose };
+}
+
+/**
+ * Spend a token and set the password.
+ *
+ * **Every other session for that person is revoked.** A reset after somebody
+ * else got in that leaves the intruder signed in has achieved nothing, and that
+ * is the case a reset is usually for.
+ */
+export async function consumeToken(token: string, password: string): Promise<{ userId: string }> {
+  const problem = checkPasswordPolicy(password);
+  if (problem) throw new AppError("validation_failed", problem.message);
+
+  const hash = await hashPassword(password);
+  const tokenHash = digest(token);
+
+  const userId = await db.transaction(async (tx) => {
+    /*
+      Claim the token under a row lock before touching the password.
+
+      Two submissions of the same link, which a double click produces, must set
+      one password rather than race. The lock plus the `used_at` recheck makes
+      the second one find nothing.
+    */
+    const [row] = await tx
+      .select({ id: s.authTokens.id, userId: s.authTokens.userId })
+      .from(s.authTokens)
+      .where(
+        and(eq(s.authTokens.tokenHash, tokenHash), isNull(s.authTokens.usedAt), gt(s.authTokens.expiresAt, new Date()))
+      )
+      .limit(1)
+      .for("update");
+
+    if (!row) {
+      throw new AppError("validation_failed", "That link has expired or has already been used. Ask for another.");
+    }
+
+    await tx.update(s.authTokens).set({ usedAt: new Date() }).where(eq(s.authTokens.id, row.id));
+    await tx
+      .update(s.users)
+      .set({ passwordHash: hash, updatedAt: new Date() })
+      .where(eq(s.users.id, row.userId));
+
+    return row.userId;
+  });
+
+  await revokeAllSessions(userId);
+  return { userId };
+}

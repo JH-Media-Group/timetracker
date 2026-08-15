@@ -1269,17 +1269,23 @@ This is why an event can never describe a change that did not commit.
 **Amended 2026-08-14 (TALLY-26).** The table below is the target once jobs exist that
 need real retry semantics. It is not what runs today, and the difference is deliberate.
 
-Two jobs are built, and both run from cron rather than a queue:
+Three jobs are built, and all run from cron rather than a queue:
 
 | Script | `pnpm` | Cron | Does |
 |---|---|---|---|
 | `scripts/sweep.mts` | `pnpm sweep` | `0 3 * * *` | Purges dead sessions and expired idempotency claims |
 | `scripts/recurring.mts` | `pnpm jobs:recurring` | `0 6 * * *` | Raises the recurring invoices due today |
+| `scripts/mail.mts` | `pnpm jobs:mail` | `*/5 * * * *` | Sends the queued outbound mail |
 
 The reasoning, so this is a decision and not a shortcut:
 
-- **Neither job talks to anything that can fail transiently.** They talk to Postgres, in a
-  transaction. Retry with backoff, the thing a queue is actually for, has nothing to retry.
+- **Amended 2026-08-15 (TALLY-49).** The first two talk only to Postgres, in a transaction, so
+  retry with backoff had nothing to retry. **`jobs:mail` breaks that argument**: an SMTP server
+  greylists, rate limits and goes down, which is precisely what backoff is for. The retry state
+  lives in the row (`attempts`, `next_attempt_at`, `last_error`) instead of in a queue, which
+  keeps the single-process deployment and makes the backlog inspectable with SQL, but it is a
+  queue in all but name. The case for BullMQ is now weaker than it looks below, because the one
+  thing it would have added is built.
 - **Idempotency lives in the data, which is the stronger place for it.** `issueIfDue` takes a
   row lock and rechecks the due date under it, so a second run raises nothing, two overlapping
   runs cannot both bill a schedule, and a person pressing Issue now mid-run is serialised

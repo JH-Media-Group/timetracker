@@ -63,7 +63,7 @@ function withPolicy(req: NextRequest, response?: NextResponse): NextResponse {
 }
 
 /** Paths that never need a session. */
-const PUBLIC_PREFIXES = ["/signin", "/api/v1/auth/", "/_next", "/favicon", "/tally-"];
+const PUBLIC_PREFIXES = ["/signin", "/set-password", "/api/v1/auth/", "/_next", "/favicon", "/tally-"];
 
 /**
  * The health probes, matched exactly rather than by prefix.
