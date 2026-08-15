@@ -1,5 +1,5 @@
 {
-  "$comment": "Cache, not authority. Recover it by searching Confluence under rootPageId and Jira for the syncLabel. Drift is detected by remoteVersion, not by a body hash: local files are Markdown and Confluence stores its own format, so a round-tripped hash would flag every page as drifted. If the live version is higher than remoteVersion, a human edited the page. Do not overwrite it; show the divergence and ask.",
+  "$comment": "Cache, not authority. Recover it by searching Confluence under rootPageId and Jira for the syncLabel. DRIFT DETECTION IS BROKEN AND THIS NOTE IS THE ONLY RECORD OF WHY. The vendored skill says compare a hash of the remote body; the local amendment says compare the Confluence version number. This connector supports neither: getConfluencePage returns no version field and no raw body hash worth comparing, because local files are Markdown and Confluence stores its own format. updateConfluencePage DOES return the new version, which is where remoteVersion below comes from, so a version can be written but not read back. Until that changes, the usable signal is the page's lastModified against lastSyncedAt here: if a page changed later than we wrote it, a human edited it. Show the divergence and ask; do not overwrite.",
   "docs": {
     "docs/PRD-OVERVIEW.md": {
       "pageId": "2969567233",
@@ -12,10 +12,10 @@
     "docs/IMPLEMENTATION_PLAN.md": {
       "pageId": "2969600001",
       "title": "Implementation Plan",
-      "mode": "mirror",
-      "localHash": "9ce6e31a6a46f0190638e635325d863aa85835fb095cff88becccebc5e0a10f1",
-      "remoteVersion": 2,
-      "lastSyncedAt": "2026-08-14T15:30:00Z"
+      "mode": "summary",
+      "localHash": "8716b23f40f46ab78821093b81dd3d7b41cd2037be505e3b08e1f2fa75507def",
+      "remoteVersion": 3,
+      "lastSyncedAt": "2026-08-15T01:40:00Z"
     },
     "docs/BUILD_EPICS.md": {
       "pageId": "2969501718",
@@ -31,15 +31,16 @@
       "mode": "mirror",
       "localHash": "10751547b6a665591a5f0db0a5ea42483131d0d3d72d3a935a13cc275f00bebc",
       "remoteVersion": 2,
-      "lastSyncedAt": "2026-08-14T15:30:00Z"
+      "lastSyncedAt": "2026-08-14T15:30:00Z",
+      "$stale": "Stale since 2026-08-14. Changed in 5d7a145 and not republished."
     },
     "docs/PERMISSIONS-AND-CREDENTIALS.md": {
       "pageId": "2969534466",
       "title": "What Tally needs from you (credentials and decisions)",
-      "mode": "mirror",
-      "localHash": "0adb356bc8bc5c1296dfabcbc90b0dce9f7eb991b978633e10d3301fb7046bc7",
-      "remoteVersion": 1,
-      "lastSyncedAt": "2026-08-14T15:30:00Z"
+      "mode": "summary",
+      "localHash": "146d6176fc87310c47ccd8499f6c1107fdef9fa1eb6408af4cc3bc1c349ea28f",
+      "remoteVersion": 2,
+      "lastSyncedAt": "2026-08-15T01:40:00Z"
     },
     "docs/FRONTEND_PRD.md": {
       "pageId": "2969403406",
@@ -47,15 +48,24 @@
       "mode": "summary",
       "localHash": "43e73b419a6f16d50707ba71f4bcca0587c4eb8fd89ee2c45ce97931041250f5",
       "remoteVersion": 2,
-      "lastSyncedAt": "2026-08-14T15:30:00Z"
+      "lastSyncedAt": "2026-08-14T15:30:00Z",
+      "$stale": "Stale since 2026-08-14. Changed in 7af31ed and not republished: nothing in this session's work altered what the summary says."
     },
     "docs/BACKEND_PRD.md": {
       "pageId": "2969665537",
       "title": "Backend PRD (summary)",
       "mode": "summary",
-      "localHash": "cf7e6f07fcc2b79b00269dc4f1f074b2eda261ad4fa508812bd109db319c3c9d",
-      "remoteVersion": 2,
-      "lastSyncedAt": "2026-08-14T15:30:00Z"
+      "localHash": "8e148641a240465f2516469f107fc28710835c2cd920e0f2192fe75037934632",
+      "remoteVersion": 3,
+      "lastSyncedAt": "2026-08-15T01:40:00Z"
+    },
+    "docs/migration/reconciliation-2026-08-14.md": {
+      "pageId": "2969370812",
+      "title": "Harvest import reconciliation, 2026-08-14",
+      "mode": "summary",
+      "localHash": "ec1f441025aea3816ca60d4fc6478426d121d754b27037a8f1e317f1d766b2de",
+      "remoteVersion": 1,
+      "lastSyncedAt": "2026-08-15T01:40:00Z"
     }
   },
   "issues": {
@@ -212,8 +222,19 @@
       "key": "TALLY-23",
       "type": "Task",
       "title": "Harvest export: run the import and reconcile every total to the cent",
-      "lastState": "To Do",
+      "lastState": "Done",
       "parent": "TALLY-4"
+    },
+    "harvest-import-csv": {
+      "key": "TALLY-46",
+      "type": "Task",
+      "title": "Import the real Harvest data from CSV exports, not the API",
+      "lastState": "Done"
     }
+  },
+  "session": {
+    "handoffPageId": "2969501697",
+    "handoffRemoteVersion": 3,
+    "lastEntryAt": "2026-08-15T01:40:00Z"
   }
 }
