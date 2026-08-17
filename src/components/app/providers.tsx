@@ -94,7 +94,7 @@ export function useCan() {
 }
 
 /** Screens that render before anybody is signed in, so they must not bootstrap. */
-const ANONYMOUS = ["/signin"];
+const ANONYMOUS = ["/signin", "/set-password"];
 
 function AppDataProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

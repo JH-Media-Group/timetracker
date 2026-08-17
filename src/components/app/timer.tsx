@@ -50,10 +50,10 @@ export function TimerProvider({ children }: { children: React.ReactNode }) {
   const { projectById, taskById } = useApp();
   const [now, setNow] = React.useState(() => Date.now());
 
-  // Nothing to reconcile on the sign-in screen, and polling there is a 401 in
-  // the console on the one page where a person is already having trouble.
+  // Nothing to reconcile on anonymous auth screens. Polling there gets a 401
+  // and the global handler redirects a valid set-password link to sign-in.
   const pathname = usePathname();
-  const anonymous = pathname.startsWith("/signin");
+  const anonymous = ["/signin", "/set-password"].some((route) => pathname.startsWith(route));
 
   const { data: running = null, isError: timerUnreachable } = useQuery({
     queryKey: ["running"],

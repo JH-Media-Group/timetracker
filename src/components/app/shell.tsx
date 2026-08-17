@@ -282,7 +282,7 @@ function MobileTabs() {
  * wrapping it in the app chrome would render a sidebar full of links that all
  * bounce back here.
  */
-const BARE_ROUTES = ["/signin"];
+const BARE_ROUTES = ["/signin", "/set-password"];
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
