@@ -60,6 +60,13 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           suppressHydrationWarning
           dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }}
         />
+        <script
+          nonce={nonce}
+          suppressHydrationWarning
+          src="https://app.toado.dev/widget/v1/loader.js"
+          data-toado-key="wgt_live_5cJDYjs5jzwD42SRs7BQqhBBwS6XwVXe"
+          async
+        />
       </head>
       <body>
         {/* One boundary for the whole app. Filter state lives in the URL, so

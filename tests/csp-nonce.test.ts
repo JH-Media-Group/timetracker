@@ -58,6 +58,13 @@ describe("the content security policy", () => {
       "more than one nonce generated per request means the header and the script can disagree"
     ).toBe(1);
   });
+
+  it("authorizes the Toado widget endpoints", () => {
+    expect(layout).toContain('src="https://app.toado.dev/widget/v1/loader.js"');
+    expect(layout).toContain('data-toado-key="wgt_live_5cJDYjs5jzwD42SRs7BQqhBBwS6XwVXe"');
+    expect(middleware).toContain("connect-src 'self' https://app.toado.dev");
+    expect(middleware).toContain("frame-src https://challenges.cloudflare.com");
+  });
 });
 
 describe("the theme script", () => {
