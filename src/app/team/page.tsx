@@ -139,8 +139,8 @@ export default function TeamPage() {
       <PageHeader
         title="Team"
         actions={can("people:manage") && (
-          <Button variant="primary" onClick={() => router.push("/settings?tab=people")}>
-            <Plus className="size-4" />Invite people
+          <Button variant="primary" onClick={() => router.push("/team/new")}>
+            <Plus className="size-4" />Add person
           </Button>
         )}
       />

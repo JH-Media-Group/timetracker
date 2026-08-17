@@ -160,6 +160,45 @@ export interface UserInput {
   departments?: string[];
 }
 
+export interface CreateUserInput extends UserInput {
+  firstName: string;
+  lastName: string;
+  email: string;
+  timezone: string;
+  weeklyCapacitySeconds: number;
+  employmentType: "employee" | "contractor";
+  profileId: string;
+}
+
+export async function createUser(ctx: Ctx, input: CreateUserInput): Promise<UserDto> {
+  assertCan(ctx, "people:manage");
+  const id = newId();
+  await assertMayGrantProfile(ctx, id, { isOwner: false, profileId: null }, input.profileId);
+
+  const [created] = await ctx.db.insert(s.users).values({
+    id,
+    firstName: input.firstName.trim(),
+    lastName: input.lastName.trim(),
+    email: input.email.trim().toLowerCase(),
+    timezone: input.timezone,
+    weeklyCapacitySeconds: input.weeklyCapacitySeconds,
+    employmentType: input.employmentType,
+    profileId: input.profileId,
+    startedOn: input.startedOn,
+  }).returning(USER_COLUMNS);
+
+  if (input.roles) await setNamedLinks(ctx, id, input.roles, "roles");
+  if (input.departments) await setNamedLinks(ctx, id, input.departments, "departments");
+  ctx.audit({
+    action: "user.create",
+    entityType: "user",
+    entityId: id,
+    entityLabel: `${created!.firstName} ${created!.lastName}`,
+    after: created,
+  });
+  return getUser(ctx, id);
+}
+
 export async function updateUser(ctx: Ctx, id: string, input: UserInput): Promise<UserDto> {
   // Editing yourself is limited to preferences and handled by PATCH /me.
   // Anything here changes what somebody can do or what they cost.

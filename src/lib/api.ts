@@ -1134,6 +1134,18 @@ export async function archiveUser(id: ID, archived = true): Promise<User> {
   return fromUser(await post<UserWire>(path));
 }
 
+export async function createUser(input: {
+  firstName: string; lastName: string; email: string; timezone: string;
+  weeklyCapacitySeconds: number; employmentType: User["employmentType"];
+  profile: PermissionProfile;
+}): Promise<User> {
+  return fromUser(await post<UserWire>("/users", {
+    ...input,
+    profileId: profileIdByKey.get(input.profile),
+    profile: undefined,
+  }));
+}
+
 export async function inviteUser(id: ID): Promise<{ queued: boolean }> {
   return post<{ queued: boolean }>(`/users/${id}/invite`);
 }

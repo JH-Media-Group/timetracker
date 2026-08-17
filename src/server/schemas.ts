@@ -168,6 +168,16 @@ export const userPatchSchema = z.object({
   departments: z.array(z.string().max(60)).max(20).optional(),
 });
 
+export const userCreateSchema = userPatchSchema.required({
+  firstName: true,
+  lastName: true,
+  email: true,
+  timezone: true,
+  weeklyCapacitySeconds: true,
+  employmentType: true,
+  profileId: true,
+});
+
 export const rateSchema = z.object({
   kind: z.enum(["billable", "cost"]),
   amountCents: z.number().int().min(0),
