@@ -1134,6 +1134,10 @@ export async function archiveUser(id: ID, archived = true): Promise<User> {
   return fromUser(await post<UserWire>(path));
 }
 
+export async function inviteUser(id: ID): Promise<{ queued: boolean }> {
+  return post<{ queued: boolean }>(`/users/${id}/invite`);
+}
+
 /* ================================================================ invoices */
 
 export const listInvoices = async (): Promise<MaybeTruncated<InvoiceView>> => {

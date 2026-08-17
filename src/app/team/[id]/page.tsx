@@ -11,7 +11,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { CalendarClock, Mail } from "lucide-react";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
@@ -28,13 +28,26 @@ import { Kpi, KpiRow, SectionTitle } from "@/components/app/kpi";
 import { BarChart, Donut, Legend } from "@/components/app/charts";
 import { useApp, useCan } from "@/components/app/providers";
 import { PROFILE_LABEL } from "@/lib/labels";
+import { useToast } from "@/components/ui/toast";
 
 export default function PersonDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const toast = useToast();
   const { userById, projectById, clientById, taskById, settings, ready } = useApp();
   const can = useCan();
   const person = userById.get(id);
+  const invite = useMutation({
+    mutationFn: () => api.inviteUser(id),
+    onSuccess: () => toast.push({
+      tone: "success",
+      title: `Invitation queued for ${person?.email ?? "that person"}.`,
+    }),
+    onError: (error) => toast.push({
+      tone: "danger",
+      title: error instanceof Error ? error.message : "Could not send that invitation.",
+    }),
+  });
   // Their zone, not the reader's: this is their timesheet. See minutesOfDay.
   const personZone = person?.timezone ?? settings.timezone;
   const { granularity, anchor, period, onChange } = usePeriod("month", ["week", "month", "quarter", "year"]);
@@ -205,6 +218,11 @@ export default function PersonDetailPage() {
             <Button variant="secondary" onClick={() => router.push(`/timesheet?user=${person.id}`)}>
               <CalendarClock className="size-3.5" />View timesheet
             </Button>
+            {can("people:manage") && !person.archivedAt && !person.email.endsWith("@imported.invalid") && (
+              <Button variant="secondary" loading={invite.isPending} onClick={() => invite.mutate()}>
+                <Mail className="size-3.5" />Send invite
+              </Button>
+            )}
             {can("people:manage") && (
               // This used to go to /settings?s=people, from which clicking the
               // person came straight back here, so there was no way to edit
