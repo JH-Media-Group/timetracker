@@ -98,6 +98,7 @@ const schema = z.object({
 
   SMTP_URL: z.string().optional(),
   MAIL_FROM: z.string().optional(),
+  MAIL_TO_DISK: z.enum(["0", "1", "false", "true"]).optional(),
 
   SPACES_ENDPOINT: z.string().optional(),
   SPACES_REGION: z.string().optional(),
@@ -141,6 +142,7 @@ function read(fallbacks: Partial<Record<"DATABASE_URL" | "SESSION_SECRET", strin
     GOOGLE_HOSTED_DOMAIN: blank(process.env.GOOGLE_HOSTED_DOMAIN),
     SMTP_URL: blank(process.env.SMTP_URL),
     MAIL_FROM: blank(process.env.MAIL_FROM),
+    MAIL_TO_DISK: blank(process.env.MAIL_TO_DISK),
     SPACES_ENDPOINT: blank(process.env.SPACES_ENDPOINT),
     SPACES_REGION: blank(process.env.SPACES_REGION),
     SPACES_BUCKET: blank(process.env.SPACES_BUCKET),
@@ -252,6 +254,35 @@ function requireMailFrom(from: string | undefined): string {
 
 const parsed = IS_NEXT_BUILD ? readForBuild() : read();
 
+/*
+ * Runtime-only deployment invariants.
+ *
+ * The build intentionally has no production configuration, so these cannot be
+ * schema refinements: `next build` runs with NODE_ENV=production and imports
+ * this module. A running process does have to answer them. In particular, an
+ * HTTP APP_URL puts reset credentials into plaintext links, and MAIL_TO_DISK
+ * makes a successful queue drain mean "written inside this disposable
+ * container" rather than "delivered".
+ */
+if (!IS_NEXT_BUILD && parsed.NODE_ENV === "production") {
+  if (new URL(parsed.APP_URL).protocol !== "https:") {
+    throw new Error("APP_URL must use https:// in production so authentication links and origin checks are secure.");
+  }
+  if (bool(parsed.MAIL_TO_DISK)) {
+    throw new Error("MAIL_TO_DISK is a development-only mail sink and must not be enabled in production.");
+  }
+
+  const googleParts = [parsed.GOOGLE_CLIENT_ID, parsed.GOOGLE_CLIENT_SECRET];
+  if (googleParts.some(Boolean) && !googleParts.every(Boolean)) {
+    throw new Error("GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET must be configured together.");
+  }
+
+  const spacesParts = [parsed.SPACES_ENDPOINT, parsed.SPACES_BUCKET, parsed.SPACES_KEY, parsed.SPACES_SECRET];
+  if (spacesParts.some(Boolean) && !spacesParts.every(Boolean)) {
+    throw new Error("SPACES_ENDPOINT, SPACES_BUCKET, SPACES_KEY and SPACES_SECRET must be configured together.");
+  }
+}
+
 /**
  * Parse with stand-ins filling only what the environment does not supply.
  *
@@ -356,6 +387,9 @@ export const env = {
   get smtp() {
     return parsed.SMTP_URL ? { url: parsed.SMTP_URL, from: requireMailFrom(parsed.MAIL_FROM) } : null;
   },
+
+  /** Development-only mail capture. Production refuses to boot when enabled. */
+  mailToDisk: bool(parsed.MAIL_TO_DISK),
 
   spaces:
     parsed.SPACES_ENDPOINT && parsed.SPACES_BUCKET && parsed.SPACES_KEY && parsed.SPACES_SECRET

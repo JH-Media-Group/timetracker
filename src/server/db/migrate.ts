@@ -116,6 +116,21 @@ async function main() {
   const sql = postgres(url, { max: 1, onnotice: () => {} });
 
   try {
+    /*
+     * A deploy is supposed to run migrations once, but "supposed to" is not a
+     * concurrency control. Two deploy commands can overlap, and both the
+     * generated and manual ledgers use look-then-run flows. Hold one
+     * session-level lock for the whole runner and fail fast if another runner
+     * already has it. Closing this single-connection client releases the lock
+     * even when the process is killed.
+     */
+    const [migrationLock] = await sql<{ locked: boolean }[]>`
+      SELECT pg_try_advisory_lock(hashtext('tally'), hashtext('migrate')) AS locked
+    `;
+    if (!migrationLock?.locked) {
+      throw new Error("Another Tally migration is already running; wait for it to finish before deploying.");
+    }
+
     await ensureLedger(sql);
 
     console.log("→ extensions");

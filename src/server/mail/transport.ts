@@ -64,6 +64,9 @@ function transporter(): Transporter {
  * template reaches a client. With `MAIL_TO_DISK=1` the message is written to
  * `.mail/` and the drain treats it as sent.
  */
+// Read at the point of use so local scripts and the transport test harness can
+// turn the sink on for one run. env.ts still parses the variable and refuses a
+// production process that starts with it enabled.
 const toDisk = (): boolean => process.env.MAIL_TO_DISK === "1" || process.env.MAIL_TO_DISK === "true";
 
 /**

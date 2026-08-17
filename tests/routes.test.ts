@@ -253,10 +253,10 @@ describe("middleware public paths", () => {
     expect(list("PUBLIC_EXACT").length).toBeGreaterThan(0);
   });
 
-  it("never prefix-matches an API path that is not a directory", () => {
+  it("only prefix-matches directories", () => {
     // "/api/v1/auth/" is fine: the trailing slash bounds it to children.
-    // "/api/health" is not: it also matches "/api/healthwhatever".
-    const unbounded = list("PUBLIC_PREFIXES").filter((p) => p.startsWith("/api") && !p.endsWith("/"));
+    // "/signin" is not: it also matches a future "/signin-admin" page.
+    const unbounded = list("PUBLIC_PREFIXES").filter((p) => !p.endsWith("/"));
     expect(
       unbounded,
       "these exempt every path that merely starts with them. Add a trailing slash, or move them to PUBLIC_EXACT:\n  " +
@@ -269,6 +269,14 @@ describe("middleware public paths", () => {
     expect(exact).toContain("/api/health");
     expect(exact).toContain("/api/health/live");
     expect(exact).toContain("/api/health/ready");
+  });
+
+  it("exempts public pages exactly, so similarly named pages stay protected", () => {
+    const exact = list("PUBLIC_EXACT");
+    expect(exact).toContain("/signin");
+    expect(exact).toContain("/set-password");
+    expect(list("PUBLIC_PREFIXES")).not.toContain("/signin");
+    expect(list("PUBLIC_PREFIXES")).not.toContain("/set-password");
   });
 });
 

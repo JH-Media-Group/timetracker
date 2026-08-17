@@ -28,7 +28,7 @@ import { clientIp, parseOrThrow, problemResponse } from "@/server/http";
 import { newId } from "@/server/db/ids";
 
 const schema = z.object({
-  email: z.string().trim().toLowerCase().email("Enter a valid email address."),
+  email: z.string().trim().toLowerCase().max(320, "That email address is too long.").email("Enter a valid email address."),
 });
 
 const SAME_ANSWER = {

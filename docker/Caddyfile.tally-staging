@@ -1,0 +1,4 @@
+tally.jhmediagroup.com {
+    encode zstd gzip
+    reverse_proxy tally-staging-web:3000
+}

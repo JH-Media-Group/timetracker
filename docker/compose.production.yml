@@ -1,0 +1,33 @@
+name: tally-staging
+
+services:
+  web:
+    image: ${TALLY_IMAGE:?Set TALLY_IMAGE to the immutable image tag}
+    container_name: tally-staging-web
+    env_file:
+      - ${TALLY_ENV_FILE:-.env}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      shared:
+        aliases:
+          - tally-staging-web
+
+networks:
+  shared:
+    external: true
+    name: opt_default

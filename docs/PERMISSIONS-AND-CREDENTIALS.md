@@ -160,9 +160,17 @@ carry Harvest's data across, but the file itself has nowhere to live.
 
 ## 4. The droplet
 
-**What is missing:** the droplet itself, and a decision about its size.
+**What exists:** the shared production droplet is `165.245.130.130` (Ubuntu
+24.04 according to Confluence). It already runs the other JH Media Group
+projects through Docker, one `/opt/docker-compose.yml`, Caddy, PostgreSQL 16,
+and Redis.
 
-**What I proposed:** 4 vCPU, 8 GB, which runs Postgres, Redis, and the app
+**What is missing:** SSH access and a read-only inspection of its current
+Compose topology, resource headroom, Docker networks, database roles, proxy
+configuration, and deployment conventions. Tally must join those services
+rather than start competing public proxy, PostgreSQL, or Redis containers.
+
+**Earlier sizing proposal:** 4 vCPU, 8 GB would run Postgres, Redis, and the app
 comfortably with room for the import to run alongside normal use. That is $48 a
 month. A 2 vCPU / 4 GB box at $24 would also work and would be tight only during
 the migration.
@@ -172,9 +180,9 @@ the migration.
 - A hostname and a DNS record pointing at it.
 - A TLS certificate. Caddy will get one from Let's Encrypt automatically; that
   is the reason to prefer Caddy over nginx here.
-- A decision on backups: DigitalOcean's droplet snapshots are $4.80 a month for
-  weekly, which is not enough on its own for a system of record. I would add a
-  nightly `pg_dump` to the Space, which costs nothing extra.
+- Backups are managed at the server level. Before cutover, verify that their
+  documented restore path covers a consistent PostgreSQL recovery and does not
+  rely only on the existence of a snapshot.
 
 **What does not work until then:** nothing local, but nobody else can use it.
 

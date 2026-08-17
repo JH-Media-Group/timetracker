@@ -1,10 +1,16 @@
 # syntax=docker/dockerfile:1.7
 #
-# Tally, production image. One image, three commands (BACKEND_PRD §17.0).
+# Tally, production image. One image for the web process, scheduled jobs, and
+# guarded one-off deployment commands (BACKEND_PRD §17.0).
 #
 #   node server.js          the web process
 #   node ops/migrate.mjs    migrations, run before the new containers start
 #   node ops/recurring.mjs  the daily recurring-invoice job, from cron
+#   node ops/mail.mjs       the queued-mail and reminder job, from cron
+#   node ops/sweep.mjs      nightly session and idempotency housekeeping
+#   node ops/harvest-import.mjs --dir /import [--billed-before YYYY-MM-DD]
+#   node ops/harvest-reconcile.mjs --dir /import [--billed-before YYYY-MM-DD]
+#   node ops/bootstrap-owner.mjs  mint the first owner's one-time setup link
 #
 # Web and jobs share the image deliberately, so a job can never run against a
 # different build of the code than the one serving traffic.
@@ -19,8 +25,8 @@
 #
 # 2. There is no `worker` stage, because there is no worker. §17.1 specifies a
 #    BullMQ worker running `worker.js`; that queue was never built. Scheduled
-#    work is cron calling `ops/recurring.mjs`, which takes a row lock and is
-#    safe to run twice.
+#    work is cron calling the scripts in `ops/`. They claim or lock database
+#    rows and are safe when scheduled runs overlap.
 
 # ---------------------------------------------------------------- base
 FROM node:22-bookworm-slim AS base
@@ -70,7 +76,37 @@ RUN node_modules/.bin/esbuild \
       --bundle --platform=node --format=esm --target=node22 \
       --external:@node-rs/argon2 \
       --alias:dotenv=./docker/dotenv-stub.mjs \
-      --outfile=ops/recurring.mjs
+      --outfile=ops/recurring.mjs \
+ && node_modules/.bin/esbuild \
+      scripts/mail.mts \
+      --bundle --platform=node --format=esm --target=node22 \
+      --external:@node-rs/argon2 \
+      --alias:dotenv=./docker/dotenv-stub.mjs \
+      --outfile=ops/mail.mjs \
+ && node_modules/.bin/esbuild \
+      scripts/sweep.mts \
+      --bundle --platform=node --format=esm --target=node22 \
+      --external:@node-rs/argon2 \
+      --alias:dotenv=./docker/dotenv-stub.mjs \
+      --outfile=ops/sweep.mjs \
+ && node_modules/.bin/esbuild \
+      scripts/harvest-import.mts \
+      --bundle --platform=node --format=esm --target=node22 \
+      --external:@node-rs/argon2 \
+      --alias:dotenv=./docker/dotenv-stub.mjs \
+      --outfile=ops/harvest-import.mjs \
+ && node_modules/.bin/esbuild \
+      scripts/harvest-reconcile.mts \
+      --bundle --platform=node --format=esm --target=node22 \
+      --external:@node-rs/argon2 \
+      --alias:dotenv=./docker/dotenv-stub.mjs \
+      --outfile=ops/harvest-reconcile.mjs \
+ && node_modules/.bin/esbuild \
+      scripts/bootstrap-owner.mts \
+      --bundle --platform=node --format=esm --target=node22 \
+      --external:@node-rs/argon2 \
+      --alias:dotenv=./docker/dotenv-stub.mjs \
+      --outfile=ops/bootstrap-owner.mjs
 
 # ---------------------------------------------------------------- runner
 FROM node:22-bookworm-slim AS runner

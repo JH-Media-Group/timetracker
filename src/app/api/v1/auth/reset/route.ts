@@ -16,8 +16,8 @@ import { clientIp, parseOrThrow, problemResponse } from "@/server/http";
 import { newId } from "@/server/db/ids";
 
 const schema = z.object({
-  token: z.string().min(1, "That link is missing its token."),
-  password: z.string().min(1, "Choose a password."),
+  token: z.string().min(1, "That link is missing its token.").max(256, "That token is not valid."),
+  password: z.string().min(1, "Choose a password.").max(200, "That password is too long."),
 });
 
 /**

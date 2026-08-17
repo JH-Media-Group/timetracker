@@ -63,7 +63,7 @@ function withPolicy(req: NextRequest, response?: NextResponse): NextResponse {
 }
 
 /** Paths that never need a session. */
-const PUBLIC_PREFIXES = ["/signin", "/set-password", "/api/v1/auth/", "/_next", "/favicon", "/tally-"];
+const PUBLIC_PREFIXES = ["/api/v1/auth/"];
 
 /**
  * The health probes, matched exactly rather than by prefix.
@@ -76,14 +76,21 @@ const PUBLIC_PREFIXES = ["/signin", "/set-password", "/api/v1/auth/", "/_next", 
  *
  * `/icon` came out of the prefix list for the same reason and is matched here.
  */
-const PUBLIC_EXACT = new Set(["/api/health", "/api/health/live", "/api/health/ready", "/icon.svg"]);
+const PUBLIC_EXACT = new Set([
+  "/signin",
+  "/set-password",
+  "/api/health",
+  "/api/health/live",
+  "/api/health/ready",
+  "/icon.svg",
+]);
 
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
 
   if (PUBLIC_EXACT.has(pathname) || PUBLIC_PREFIXES.some((p) => pathname.startsWith(p))) {
     // Somebody already signed in has no use for the sign-in page.
-    if (pathname.startsWith("/signin") && req.cookies.has(SESSION_COOKIE)) {
+    if (pathname === "/signin" && req.cookies.has(SESSION_COOKIE)) {
       return withPolicy(req, NextResponse.redirect(new URL("/timesheet", req.url)));
     }
     return withPolicy(req);

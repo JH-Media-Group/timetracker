@@ -1610,15 +1610,17 @@ The output is a markdown report committed to `docs/migration/reconciliation-{dat
 
 **The image is `node:22-bookworm-slim`, not `node:22-alpine`.** `@node-rs/argon2` is a native Rust binding shipped as prebuilt per-platform binaries. The glibc build is the well-trodden one, and password hashing is a poor thing to discover is broken in production.
 
-**One image, three commands**, so a job can never run against a different build than the one serving traffic:
+**One image, five commands**, so a job can never run against a different build than the one serving traffic:
 
 | Command | What it is |
 |---|---|
 | `node server.js` | the web process |
 | `node ops/migrate.mjs` | migrations, run before the new containers start |
 | `node ops/recurring.mjs` | the daily recurring-invoice job, from cron |
+| `node ops/mail.mjs` | queued mail and overdue reminders, every five minutes from cron |
+| `node ops/sweep.mjs` | nightly expired-session and idempotency-key housekeeping |
 
-The two ops scripts are TypeScript run through `tsx`, which is a devDependency, so they are compiled with esbuild during the build stage rather than shipping the dev toolchain into the runtime. `dotenv` is aliased to a stub in that bundle: it is CommonJS, its internal `require("fs")` becomes an unsupported dynamic require inside an ESM bundle, and compiling to CommonJS instead fails because both scripts use top-level await.
+The four ops scripts are TypeScript run through `tsx`, which is a devDependency, so they are compiled with esbuild during the build stage rather than shipping the dev toolchain into the runtime. `dotenv` is aliased to a stub in that bundle: it is CommonJS, its internal `require("fs")` becomes an unsupported dynamic require inside an ESM bundle, and compiling to CommonJS instead fails because the scripts use top-level await.
 
 **`output: "standalone"` was missing from `next.config.mjs`.** The multi-stage build §17.1 describes depends on it and could not have worked without it.
 
@@ -1634,7 +1636,7 @@ The defence is therefore not detection. **The placeholder is poisoned**: it sati
 
 **Verified, not assumed.** The image builds clean (427 MB), and against the real database all three commands were run: the web process serves `/signin` with the per-request CSP nonce, `ready` returns 200 while `live` stays 200 even when the database is unreachable, migrations report `✓ migrated`, and the recurring job completes.
 
-**Still not built:** `compose.prod.yml`, the reverse-proxy configuration, backups with the restore verification §17 promises, the CI pipeline (there is no `.github/`), and Sentry. Backups are the gap that matters: an invoicing system of record without them is the risk, not the missing integrations.
+**Still not built in this repository:** the production Compose integration, the reverse-proxy configuration, the CI pipeline (there is no `.github/`), and Sentry. Backups are managed at the shared-server level; their PostgreSQL restore path still needs to be inspected and verified before cutover rather than duplicated here on assumption.
 
 **§17.3 names the wrong email provider.** It lists `RESEND_API_KEY`; the credentials doc and TALLY-19 say SendGrid. One of them is wrong and it should be settled before the key is issued.
 

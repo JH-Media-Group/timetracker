@@ -22,8 +22,8 @@ import { clientIp, parseOrThrow } from "@/server/http";
 import { newId } from "@/server/db/ids";
 
 const schema = z.object({
-  email: z.string().trim().toLowerCase().email("Enter a valid email address."),
-  password: z.string().min(1, "Enter your password."),
+  email: z.string().trim().toLowerCase().max(320, "That email address is too long.").email("Enter a valid email address."),
+  password: z.string().min(1, "Enter your password.").max(200, "That password is too long."),
 });
 
 export async function POST(req: NextRequest) {

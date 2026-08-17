@@ -135,6 +135,52 @@ describe("proxy configuration", () => {
   });
 });
 
+describe("production deployment invariants", () => {
+  const productionEnv = (extra: Record<string, string> = {}): NodeJS.ProcessEnv => ({
+    ...process.env,
+    NODE_ENV: "production",
+    NEXT_PHASE: "",
+    DATABASE_URL: "postgres://x:y@127.0.0.1:5432/z",
+    SESSION_SECRET: Buffer.from("a".repeat(32)).toString("base64"),
+    APP_URL: "https://tally.example.com",
+    TRUST_PROXY: "1",
+    MAIL_TO_DISK: "",
+    GOOGLE_CLIENT_ID: "",
+    GOOGLE_CLIENT_SECRET: "",
+    SPACES_ENDPOINT: "",
+    SPACES_BUCKET: "",
+    SPACES_KEY: "",
+    SPACES_SECRET: "",
+    ...extra,
+  });
+
+  const loadEnv = (extra: Record<string, string> = {}) => {
+    const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
+    return execFileSync(
+      process.execPath,
+      ["-e", 'import("./src/server/env.ts").catch(e=>{console.error(e.message);process.exit(3)})'],
+      { env: productionEnv(extra), encoding: "utf8", stdio: "pipe" }
+    );
+  };
+
+  it("accepts a minimally configured HTTPS production runtime", () => {
+    expect(() => loadEnv()).not.toThrow();
+  });
+
+  it("refuses an HTTP public URL", () => {
+    expect(() => loadEnv({ APP_URL: "http://tally.example.com" })).toThrow(/APP_URL must use https/);
+  });
+
+  it("refuses the development mail sink", () => {
+    expect(() => loadEnv({ MAIL_TO_DISK: "1" })).toThrow(/development-only mail sink/);
+  });
+
+  it("refuses half-configured external integrations", () => {
+    expect(() => loadEnv({ GOOGLE_CLIENT_ID: "client-id" })).toThrow(/configured together/);
+    expect(() => loadEnv({ SPACES_BUCKET: "tally" })).toThrow(/configured together/);
+  });
+});
+
 /**
  * The build-phase escape hatch, and its limits.
  *
