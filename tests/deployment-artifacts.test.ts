@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 const read = (path: string) => readFileSync(path, "utf8");
 
 describe("production deployment artifacts", () => {
-  it.each(["harvest-import", "harvest-reconcile", "bootstrap-owner"])(
+  it.each(["harvest-import", "harvest-reconcile", "bootstrap-owner", "invite-link"])(
     "ships the guarded %s command", (name) => {
       const dockerfile = read("Dockerfile");
       expect(dockerfile).toContain(`scripts/${name}.mts`);

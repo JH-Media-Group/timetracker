@@ -11,6 +11,7 @@
 #   node ops/harvest-import.mjs --dir /import [--billed-before YYYY-MM-DD]
 #   node ops/harvest-reconcile.mjs --dir /import [--billed-before YYYY-MM-DD]
 #   node ops/bootstrap-owner.mjs  mint the first owner's one-time setup link
+#   node ops/invite-link.mjs --email a@b.com [--first A --last B]
 #
 # Web and jobs share the image deliberately, so a job can never run against a
 # different build of the code than the one serving traffic.
@@ -106,7 +107,13 @@ RUN node_modules/.bin/esbuild \
       --bundle --platform=node --format=esm --target=node22 \
       --external:@node-rs/argon2 \
       --alias:dotenv=./docker/dotenv-stub.mjs \
-      --outfile=ops/bootstrap-owner.mjs
+      --outfile=ops/bootstrap-owner.mjs \
+ && node_modules/.bin/esbuild \
+      scripts/invite-link.mts \
+      --bundle --platform=node --format=esm --target=node22 \
+      --external:@node-rs/argon2 \
+      --alias:dotenv=./docker/dotenv-stub.mjs \
+      --outfile=ops/invite-link.mjs
 
 # ---------------------------------------------------------------- runner
 FROM node:22-bookworm-slim AS runner

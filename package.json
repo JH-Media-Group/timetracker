@@ -29,7 +29,8 @@
     "jobs:mail": "tsx scripts/mail.mts",
     "harvest:import": "tsx scripts/harvest-import.mts",
     "harvest:reconcile": "tsx scripts/harvest-reconcile.mts",
-    "sweep": "tsx scripts/sweep.mts"
+    "sweep": "tsx scripts/sweep.mts",
+    "invite:link": "tsx scripts/invite-link.mts"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.1.0",
