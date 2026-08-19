@@ -22,6 +22,7 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import { describe, expect, it } from "vitest";
+import { ANONYMOUS_PAGES } from "@/lib/anonymous-pages";
 
 const API_ROOT = join(process.cwd(), "src/app/api/v1");
 
@@ -245,12 +246,33 @@ describe("middleware public paths", () => {
   const source = readFileSync(join(process.cwd(), "src/middleware.ts"), "utf8");
   const strings = (block: string) => [...block.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
   const prefixes = strings(/const PUBLIC_PREFIXES = \[[^\]]*\]/.exec(source)?.[0] ?? "");
-  const exact = strings(/const PUBLIC_EXACT = new Set\(\[[^\]]*\]\)/.exec(source)?.[0] ?? "");
+  /*
+    The literals in the block, plus the ones spread in from the shared list.
+
+    `PUBLIC_EXACT` no longer spells out the pages a person reaches before
+    signing in: it spreads `ANONYMOUS_PAGES`, which `layout.tsx`, the shell, the
+    data provider and the timer all read too, so there is one list instead of
+    four. A source-parsing test cannot follow a spread, so it unions the two
+    deliberately rather than quietly reporting a shorter set.
+  */
+  const exact = [
+    ...strings(/const PUBLIC_EXACT = new Set(?:<[^>]*>)?\(\[[^\]]*\]\)/.exec(source)?.[0] ?? ""),
+    ...ANONYMOUS_PAGES,
+  ];
   const list = (name: string) => (name === "PUBLIC_PREFIXES" ? prefixes : exact);
 
   it("has both lists", () => {
     expect(list("PUBLIC_PREFIXES").length).toBeGreaterThan(0);
     expect(list("PUBLIC_EXACT").length).toBeGreaterThan(0);
+  });
+
+  it("builds the exact list from the shared anonymous pages", () => {
+    // Without this, the union above would be an assumption rather than a fact:
+    // drop the spread and the test would still claim those pages are exempt.
+    expect(
+      source,
+      "PUBLIC_EXACT should spread ANONYMOUS_PAGES so the four lists stay one"
+    ).toMatch(/\.\.\.ANONYMOUS_PAGES/);
   });
 
   it("only prefix-matches directories", () => {

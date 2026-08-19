@@ -100,6 +100,9 @@ const schema = z.object({
   MAIL_FROM: z.string().optional(),
   MAIL_TO_DISK: z.enum(["0", "1", "false", "true"]).optional(),
 
+  /** Turns the third-party bug-reporting widget off without a deploy. */
+  TOADO_WIDGET: z.enum(["0", "1", "false", "true"]).optional(),
+
   SPACES_ENDPOINT: z.string().optional(),
   SPACES_REGION: z.string().optional(),
   SPACES_BUCKET: z.string().optional(),
@@ -143,6 +146,7 @@ function read(fallbacks: Partial<Record<"DATABASE_URL" | "SESSION_SECRET", strin
     SMTP_URL: blank(process.env.SMTP_URL),
     MAIL_FROM: blank(process.env.MAIL_FROM),
     MAIL_TO_DISK: blank(process.env.MAIL_TO_DISK),
+    TOADO_WIDGET: blank(process.env.TOADO_WIDGET),
     SPACES_ENDPOINT: blank(process.env.SPACES_ENDPOINT),
     SPACES_REGION: blank(process.env.SPACES_REGION),
     SPACES_BUCKET: blank(process.env.SPACES_BUCKET),
@@ -390,6 +394,20 @@ export const env = {
 
   /** Development-only mail capture. Production refuses to boot when enabled. */
   mailToDisk: bool(parsed.MAIL_TO_DISK),
+
+  /**
+   * Whether the Toado bug-reporting widget loads. On unless switched off.
+   *
+   * Default on, because it is how the people testing Tally report what they
+   * find, and a reporting tool nobody enabled reports nothing. Off is one
+   * environment variable rather than a deploy, because it is a third-party
+   * script on a system holding client names and billing history, and the way
+   * to remove a script you have doubts about should not be a code change.
+   *
+   * `layout.tsx` also refuses to render it on the sign-in and set-password
+   * pages regardless of this setting.
+   */
+  toadoWidget: parsed.TOADO_WIDGET === undefined ? true : bool(parsed.TOADO_WIDGET),
 
   spaces:
     parsed.SPACES_ENDPOINT && parsed.SPACES_BUCKET && parsed.SPACES_KEY && parsed.SPACES_SECRET

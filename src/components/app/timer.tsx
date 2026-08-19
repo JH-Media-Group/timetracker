@@ -13,6 +13,7 @@ import * as React from "react";
 import { usePathname } from "next/navigation";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "@/lib/api";
+import { isAnonymousPage } from "@/lib/anonymous-pages";
 import { liveSeconds } from "@/lib/derive";
 import type { TimeEntry } from "@/lib/types";
 import { useToast } from "@/components/ui/toast";
@@ -53,7 +54,7 @@ export function TimerProvider({ children }: { children: React.ReactNode }) {
   // Nothing to reconcile on anonymous auth screens. Polling there gets a 401
   // and the global handler redirects a valid set-password link to sign-in.
   const pathname = usePathname();
-  const anonymous = ["/signin", "/set-password"].some((route) => pathname.startsWith(route));
+  const anonymous = isAnonymousPage(pathname);
 
   const { data: running = null, isError: timerUnreachable } = useQuery({
     queryKey: ["running"],

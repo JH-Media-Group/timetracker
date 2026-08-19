@@ -12,6 +12,7 @@
  */
 
 import { NextResponse, type NextRequest } from "next/server";
+import { ANONYMOUS_PAGE_HEADER, ANONYMOUS_PAGES, isAnonymousPage } from "@/lib/anonymous-pages";
 
 const SESSION_COOKIE = "tally_session";
 
@@ -57,6 +58,16 @@ function withPolicy(req: NextRequest, response?: NextResponse): NextResponse {
   const headers = new Headers(req.headers);
   headers.set("x-nonce", nonce);
 
+  /*
+    Tell the server components whether this is a page somebody reaches before
+    signing in. A root layout cannot read the pathname, and the bug-reporting
+    widget is a third-party script that must not run where a password is being
+    typed. Stripped from the incoming request first, so a client cannot claim
+    to be on an anonymous page by sending the header itself.
+  */
+  headers.delete(ANONYMOUS_PAGE_HEADER);
+  if (isAnonymousPage(req.nextUrl.pathname)) headers.set(ANONYMOUS_PAGE_HEADER, "1");
+
   const out = response ?? NextResponse.next({ request: { headers } });
   out.headers.set("Content-Security-Policy", policy(nonce));
   out.headers.set("x-nonce", nonce);
@@ -77,9 +88,10 @@ const PUBLIC_PREFIXES = ["/api/v1/auth/"];
  *
  * `/icon` came out of the prefix list for the same reason and is matched here.
  */
-const PUBLIC_EXACT = new Set([
-  "/signin",
-  "/set-password",
+const PUBLIC_EXACT = new Set<string>([
+  // The pages a person reaches before signing in, from the one list that also
+  // tells the layout and the client shell about them.
+  ...ANONYMOUS_PAGES,
   "/api/health",
   "/api/health/live",
   "/api/health/ready",

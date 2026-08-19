@@ -8,6 +8,7 @@ import {
   Search, Settings as SettingsIcon, Square, Users, BarChart3, Check, Play, PanelLeftClose, PanelLeft,
 } from "lucide-react";
 import { cn } from "@/lib/cn";
+import { ANONYMOUS_PAGES } from "@/lib/anonymous-pages";
 import { navItemClass, navSectionLabelClass, timerPillVariants, timerReadoutClass } from "@/components/ui/recipes";
 import {
   Avatar, Button, Kbd, Menu, MenuItem, MenuLabel, MenuSeparator, Popover,
@@ -282,7 +283,7 @@ function MobileTabs() {
  * wrapping it in the app chrome would render a sidebar full of links that all
  * bounce back here.
  */
-const BARE_ROUTES = ["/signin", "/set-password"];
+const BARE_ROUTES = ANONYMOUS_PAGES;
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

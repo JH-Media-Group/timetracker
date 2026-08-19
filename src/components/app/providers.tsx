@@ -13,6 +13,7 @@ import * as React from "react";
 import { usePathname } from "next/navigation";
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "@/lib/api";
+import { ANONYMOUS_PAGES } from "@/lib/anonymous-pages";
 import type { Client, ExpenseCategory, Project, Settings, Task, User, ID } from "@/lib/types";
 import { defaultLabels, INVOICE_APPEARANCE, INVOICE_DEFAULTS } from "@/domain/invoice-config";
 import { ToastProvider } from "@/components/ui/toast";
@@ -94,7 +95,7 @@ export function useCan() {
 }
 
 /** Screens that render before anybody is signed in, so they must not bootstrap. */
-const ANONYMOUS = ["/signin", "/set-password"];
+const ANONYMOUS = ANONYMOUS_PAGES;
 
 function AppDataProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

@@ -6,6 +6,8 @@ import { Providers } from "@/components/app/providers";
 import { TimerProvider } from "@/components/app/timer";
 import { AppShell } from "@/components/app/shell";
 import { THEME_INIT_SCRIPT } from "@/styles/tokens";
+import { ANONYMOUS_PAGE_HEADER, shouldLoadBugWidget } from "@/lib/anonymous-pages";
+import { env } from "@/server/env";
 import "./globals.css";
 
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "swap" });
@@ -34,7 +36,26 @@ export default async function RootLayout({ children }: { children: React.ReactNo
   // Set by middleware, and the same value the Content-Security-Policy header
   // carries. Without it the theme script is refused in production, which is the
   // flash of the wrong theme it exists to prevent.
-  const nonce = (await headers()).get("x-nonce") ?? undefined;
+  const requestHeaders = await headers();
+  const nonce = requestHeaders.get("x-nonce") ?? undefined;
+
+  /*
+    The bug-reporting widget, and the two places it must not be.
+
+    It is a third-party script from `app.toado.dev`, and the production CSP is
+    `script-src 'self' 'nonce-...' 'strict-dynamic'`. Carrying the nonce means
+    `strict-dynamic` extends that trust to whatever the loader pulls in next, so
+    the widget can run arbitrary code in this origin and, through the
+    `connect-src` entry for the same host, send back what it reads. That is a
+    reasonable trade for bug reports from people testing the app. It is not a
+    reasonable trade on the sign-in and set-password pages, where the thing
+    being typed is a credential, so it is kept off them.
+
+    The middleware sets the header because a root layout cannot see the
+    pathname, and it strips any copy the client sent first.
+  */
+  const onAnonymousPage = requestHeaders.get(ANONYMOUS_PAGE_HEADER) === "1";
+  const showBugWidget = shouldLoadBugWidget({ enabled: env.toadoWidget, anonymousPage: onAnonymousPage });
 
   return (
     <html lang="en" suppressHydrationWarning className={`${inter.variable} ${mono.variable}`}>
@@ -60,13 +81,15 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           suppressHydrationWarning
           dangerouslySetInnerHTML={{ __html: THEME_INIT_SCRIPT }}
         />
-        <script
-          nonce={nonce}
-          suppressHydrationWarning
-          src="https://app.toado.dev/widget/v1/loader.js"
-          data-toado-key="wgt_live_5cJDYjs5jzwD42SRs7BQqhBBwS6XwVXe"
-          async
-        />
+        {showBugWidget && (
+          <script
+            nonce={nonce}
+            suppressHydrationWarning
+            src="https://app.toado.dev/widget/v1/loader.js"
+            data-toado-key="wgt_live_5cJDYjs5jzwD42SRs7BQqhBBwS6XwVXe"
+            async
+          />
+        )}
       </head>
       <body>
         {/* One boundary for the whole app. Filter state lives in the URL, so
