@@ -62,6 +62,16 @@ RUN pnpm build
 # it is resolved from the traced node_modules at runtime.
 # ESM, because both scripts use top-level await and CommonJS cannot express it.
 #
+# The banner is what makes that survivable. esbuild's ESM output replaces
+# `require` with a shim that throws "Dynamic require of X is not supported",
+# and nodemailer is CommonJS: it calls require("events") at import time. So
+# `ops/mail.mjs` crashed on load, in the image only, and the queue it exists to
+# drain was never touched. Nothing caught it because the image is built in CI
+# and nothing ever ran the compiled artifact. Defining a real `require` from
+# `createRequire` satisfies esbuild's shim, which uses the ambient `require`
+# when one exists. `tests/ops-bundles.test.ts` now compiles and loads each of
+# these, so the next one fails a test rather than a deploy.
+#
 # dotenv is aliased to a stub rather than bundled. It is CommonJS, its internal
 # `require("fs")` becomes an unsupported dynamic require inside an ESM bundle,
 # and it is a devDependency that the traced production node_modules does not
@@ -71,48 +81,56 @@ RUN node_modules/.bin/esbuild \
       --bundle --platform=node --format=esm --target=node22 \
       --external:@node-rs/argon2 \
       --alias:dotenv=./docker/dotenv-stub.mjs \
+      --banner:js="import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);" \
       --outfile=ops/migrate.mjs \
  && node_modules/.bin/esbuild \
       scripts/recurring.mts \
       --bundle --platform=node --format=esm --target=node22 \
       --external:@node-rs/argon2 \
       --alias:dotenv=./docker/dotenv-stub.mjs \
+      --banner:js="import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);" \
       --outfile=ops/recurring.mjs \
  && node_modules/.bin/esbuild \
       scripts/mail.mts \
       --bundle --platform=node --format=esm --target=node22 \
       --external:@node-rs/argon2 \
       --alias:dotenv=./docker/dotenv-stub.mjs \
+      --banner:js="import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);" \
       --outfile=ops/mail.mjs \
  && node_modules/.bin/esbuild \
       scripts/sweep.mts \
       --bundle --platform=node --format=esm --target=node22 \
       --external:@node-rs/argon2 \
       --alias:dotenv=./docker/dotenv-stub.mjs \
+      --banner:js="import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);" \
       --outfile=ops/sweep.mjs \
  && node_modules/.bin/esbuild \
       scripts/harvest-import.mts \
       --bundle --platform=node --format=esm --target=node22 \
       --external:@node-rs/argon2 \
       --alias:dotenv=./docker/dotenv-stub.mjs \
+      --banner:js="import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);" \
       --outfile=ops/harvest-import.mjs \
  && node_modules/.bin/esbuild \
       scripts/harvest-reconcile.mts \
       --bundle --platform=node --format=esm --target=node22 \
       --external:@node-rs/argon2 \
       --alias:dotenv=./docker/dotenv-stub.mjs \
+      --banner:js="import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);" \
       --outfile=ops/harvest-reconcile.mjs \
  && node_modules/.bin/esbuild \
       scripts/bootstrap-owner.mts \
       --bundle --platform=node --format=esm --target=node22 \
       --external:@node-rs/argon2 \
       --alias:dotenv=./docker/dotenv-stub.mjs \
+      --banner:js="import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);" \
       --outfile=ops/bootstrap-owner.mjs \
  && node_modules/.bin/esbuild \
       scripts/invite-link.mts \
       --bundle --platform=node --format=esm --target=node22 \
       --external:@node-rs/argon2 \
       --alias:dotenv=./docker/dotenv-stub.mjs \
+      --banner:js="import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);" \
       --outfile=ops/invite-link.mjs
 
 # ---------------------------------------------------------------- runner
