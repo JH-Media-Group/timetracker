@@ -1197,15 +1197,25 @@ Base profile mapping:
 | project:manage | | ✓ | | | ✓ | ✓ |
 | client:manage | | ✓ | | ✓ | ✓ | ✓ |
 | people:manage | | | ✓ | | ✓ | ✓ |
-| rates:view_billable | | | | ✓ | ✓ | ✓ |
+| rates:view_billable | | team | | ✓ | ✓ | ✓ |
 | rates:view_cost | | | | | | ✓ |
-| rates:manage | | | | | | ✓ |
+| rates:manage | | team | | | | ✓ |
 | invoice:* | | | | ✓ | ✓ | ✓ |
 | report:view_financial | | | | ✓ | ✓ | ✓ |
 | settings:manage | | | | | | ✓ |
 | audit:view | | | | | | ✓ |
 
 "team" means scoped through `user_managed_users` and `project_members.is_manager`.
+
+**Rates, and why a Project Manager holds two of these.** A project manager
+prices the work their projects sell, so they set what a client is charged.
+What a person costs is a different fact about a colleague: writing a cost
+rate requires `rates:view_cost` on top of `rates:manage`, which no profile but
+Administrator holds. Both cells read `team` rather than a tick because reach
+applies to the number as well as the row: this profile sees and sets rates for
+the people it manages and answers 404 for anybody else. **Nobody sets their
+own rate except the account owner**, for the same reason nobody changes their
+own permission profile.
 
 ### 7.3 Enforcement
 

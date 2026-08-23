@@ -8,7 +8,7 @@
  */
 
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { assertCan, withTransaction, type Ctx } from "@/server/ctx";
+import { assertCan, lockNamed, withTransaction, type Ctx } from "@/server/ctx";
 import { visibleUserIds } from "@/server/auth/scope";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
@@ -178,6 +178,28 @@ export interface RateInput {
 async function assertMayWriteRate(ctx: Ctx, userId: string, kind: "billable" | "cost"): Promise<void> {
   assertCan(ctx, "rates:manage");
   if (kind === "cost") assertCan(ctx, "rates:view_cost");
+
+  /*
+    You do not set your own rate.
+
+    `assertWithinReach` waves the self case through, because reach is a
+    question about other people. That was harmless while Administrators were
+    the only holders of `rates:manage`; it stopped being harmless the moment
+    a `team`-reach profile got it. A Project Manager could raise their own
+    billable rate, and on a `billBy: \"people\"` project every hour they then
+    logged would invoice at it. `assertMayGrantProfile` twelve files over
+    already refuses to let somebody change their own permissions and says
+    \"Ask another administrator\"; money deserves the same answer.
+
+    The account owner is exempt because somebody has to be able to set the
+    first rate, and the owner is the one account that cannot be demoted.
+  */
+  if (userId === ctx.actor.userId && !ctx.actor.isOwner && ctx.actor.kind !== "system") {
+    throw validationFailed({
+      amountCents: ["You cannot set your own rate. Ask an administrator."],
+    });
+  }
+
   await assertWithinReach(ctx, userId);
 }
 
@@ -264,19 +286,31 @@ export async function createRate(ctx: Ctx, userId: string, input: RateInput) {
 /**
  * Change what somebody is paid or charged, from a date.
  *
- * `createRate` inserts, and the database forbids overlapping ranges for one
- * person and kind, so "put this person on a new rate" through `createRate`
- * alone fails the moment they already have one: an open-ended row covers every
- * future day, and the new one collides with it. Every screen that offers to
- * change a rate needs this, so it lives here rather than being rebuilt in the
- * UI out of a delete and an insert that are not in the same transaction.
+ * `createRate` inserts an explicit range and the database forbids two ranges of
+ * one kind covering the same day, so "put this person on a new rate" through
+ * `createRate` alone always collides with the open-ended row already there.
+ * This is what a screen calls.
  *
- * **History is not rewritten, and that is the point.** A time entry carries the
- * rate that applied when it was written, in `billableRateCents` and
- * `costRateCents`. Closing the old range and opening a new one changes what
- * future entries resolve to and leaves every existing entry exactly as it was,
- * so last quarter's profitability does not move because somebody had a raise.
- * The re-rate action is the only thing that touches a snapshot.
+ * **Nothing is deleted.** The first version of this closed the range covering
+ * the new date and `DELETE`d every range starting on or after it, which read as
+ * "entirely superseded" and was not: a backdated change wiped a person's whole
+ * rate history, including changes scheduled ahead of it, with `before: null` in
+ * the audit row and nothing to reconstruct it from. A reviewer set a rate
+ * effective last June and lost the year either side of it. `CLAUDE.md` says
+ * archive over delete and that every destructive action gets Undo or a typed
+ * confirmation, and this had neither.
+ *
+ * So a later range is left exactly where it is, and the new one simply runs
+ * until that range begins. Setting a rate in March when July is already
+ * scheduled gives March to June at the new price and leaves July alone, which
+ * is what somebody scheduling a raise would expect. A range that starts on the
+ * very day being set is amended in place rather than replaced, so its id and
+ * its history survive.
+ *
+ * **Existing time entries never move.** An entry carries the rate snapshot it
+ * was written with, so changing a rate changes what future entries resolve to
+ * and leaves last quarter's profitability alone. The re-rate action is the only
+ * thing that touches a snapshot.
  */
 export async function setRate(
   ctx: Ctx,
@@ -290,26 +324,61 @@ export async function setRate(
   }
 
   return withTransaction(ctx, async (tx) => {
+    /*
+      An advisory lock, not `FOR UPDATE`.
+
+      `FOR UPDATE` locks the rows a statement can see, which is nothing at all
+      when a person has no rate of this kind yet, so two first-time writers both
+      inserted and the loser got a raw overlap error from an endpoint whose
+      whole purpose is to spare the caller thinking about overlaps. Locking the
+      name serialises the pair whether or not any row exists.
+    */
+    await lockNamed(tx, `rate:${userId}:${input.kind}`);
+
     const existing = await tx.db
       .select()
       .from(s.userRates)
       .where(and(eq(s.userRates.userId, userId), eq(s.userRates.kind, input.kind)))
-      .for("update");
+      .orderBy(s.userRates.startsOn);
 
-    for (const row of existing) {
-      // Starts on or after the new date: entirely superseded, so it goes.
-      if (row.startsOn && row.startsOn >= input.effectiveFrom) {
-        await tx.db.delete(s.userRates).where(eq(s.userRates.id, row.id));
-        continue;
-      }
-      // Still running on the new date: close it the day before.
-      if (!row.endsOn || row.endsOn >= input.effectiveFrom) {
-        await tx.db
-          .update(s.userRates)
-          .set({ endsOn: addDays(input.effectiveFrom, -1) })
-          .where(eq(s.userRates.id, row.id));
-      }
+    // A range that already starts on this day is the same decision being made
+    // again: amend it rather than stacking a second row on the same date.
+    const sameDay = existing.find((r) => r.startsOn === input.effectiveFrom);
+    if (sameDay) {
+      await tx.db
+        .update(s.userRates)
+        .set({ amountCents: input.amountCents })
+        .where(eq(s.userRates.id, sameDay.id));
+
+      tx.audit({
+        action: "rate.set",
+        entityType: "user_rate",
+        entityId: sameDay.id,
+        entityLabel: `${input.kind} rate from ${input.effectiveFrom}`,
+        before: sameDay,
+        after: { ...sameDay, amountCents: input.amountCents },
+      });
+      return { id: sameDay.id, ...input };
     }
+
+    // Whatever is running on the day: close it the evening before.
+    const covering = existing.find(
+      (r) =>
+        (!r.startsOn || r.startsOn < input.effectiveFrom) &&
+        (!r.endsOn || r.endsOn >= input.effectiveFrom)
+    );
+    if (covering) {
+      await tx.db
+        .update(s.userRates)
+        .set({ endsOn: addDays(input.effectiveFrom, -1) })
+        .where(eq(s.userRates.id, covering.id));
+    }
+
+    // Anything scheduled after this stays scheduled, and bounds the new range.
+    const nextStart = existing
+      .map((r) => r.startsOn)
+      .filter((d): d is string => Boolean(d) && d! > input.effectiveFrom)
+      .sort()[0];
 
     const id = newId();
     await tx.db.insert(s.userRates).values({
@@ -318,7 +387,7 @@ export async function setRate(
       kind: input.kind,
       amountCents: input.amountCents,
       startsOn: input.effectiveFrom,
-      endsOn: null,
+      endsOn: nextStart ? addDays(nextStart as IsoDate, -1) : null,
       createdBy: tx.actor.userId,
     });
 
@@ -327,7 +396,8 @@ export async function setRate(
       entityType: "user_rate",
       entityId: id,
       entityLabel: `${input.kind} rate from ${input.effectiveFrom}`,
-      after: { userId, ...input },
+      before: covering ?? null,
+      after: { userId, ...input, endsOn: nextStart ? addDays(nextStart as IsoDate, -1) : null },
     });
 
     return { id, ...input };
@@ -348,9 +418,17 @@ export async function deleteRate(ctx: Ctx, userId: string, rateId: string) {
     .limit(1);
   if (!existing) throw notFound("That rate");
 
-  // Deleting a cost rate changes what the business believes it spends, so it
-  // needs the same standing as setting one.
-  if (existing.kind === "cost") assertCan(ctx, "rates:view_cost");
+  /*
+    404, not 403, for a cost row this actor may not see.
+
+    `listRates` filters cost rows out entirely, so answering \"forbidden\" here
+    told the caller a row exists that the list denies. It is a weak oracle,
+    since you need the id, but the house rule is 404 for anything outside
+    your scope and there is no reason for this to be the exception.
+  */
+  if (existing.kind === "cost" && !ctx.actor.capabilities.has("rates:view_cost") && ctx.actor.kind !== "system") {
+    throw notFound("That rate");
+  }
 
   await ctx.db.delete(s.userRates).where(eq(s.userRates.id, rateId));
 

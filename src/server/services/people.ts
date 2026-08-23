@@ -12,7 +12,7 @@ import { assertCan, type Ctx } from "@/server/ctx";
 import { BASE_PROFILES, type BaseProfileKey, type Capability } from "@/server/auth/capabilities";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
-import { userScope } from "@/server/auth/scope";
+import { userScope, visibleUserIds } from "@/server/auth/scope";
 import { forbidden, notFound, validationFailed } from "@/server/errors";
 import { serializeUser, type UserDto } from "@/server/serialize";
 import { rateFor } from "./rates";
@@ -84,6 +84,17 @@ export async function listUsers(
       .where(
         and(
           inArray(s.userRates.userId, ids),
+          /*
+            Only for people this actor can reach.
+
+            `rates:view_billable` used to imply account-wide reach, because
+            every profile holding it had `othersScope: "all"`. Project Manager
+            is the first holder with `team` reach, and without this line their
+            bootstrap carried every colleague's charge-out rate on every page
+            load, while `listRates` answered 404 for the same person. The
+            capability says "may see rates", not "may see everyone's".
+          */
+          sql`${s.userRates.userId} IN ${visibleUserIds(ctx)}`,
           sql`(${s.userRates.startsOn} IS NULL OR ${s.userRates.startsOn} <= CURRENT_DATE)`,
           sql`(${s.userRates.endsOn} IS NULL OR ${s.userRates.endsOn} >= CURRENT_DATE)`
         )

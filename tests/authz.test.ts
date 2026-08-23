@@ -326,6 +326,140 @@ describe("rate redaction", () => {
       ).rejects.toMatchObject({ code: "forbidden" });
     });
 
+    /*
+      setRate, not createRate.
+
+      Every "refuses" test here used to call `createRate`, so the endpoint the
+      screen actually calls had two happy paths and no negative ones. A reviewer
+      changed `assertMayWriteRate(ctx, userId, input.kind)` to a hard-coded
+      "billable" inside `setRate` alone, which lets a Project Manager write a
+      cost rate through the live path, and the whole suite still passed.
+    */
+    it("does not hand a Project Manager the rates of people outside their reach", async () => {
+      /*
+        The leak that granting this profile `rates:view_billable` opened.
+
+        Every profile that held it before had account-wide reach, so capability
+        and reach were the same question and nothing separated them. A reviewer
+        found `listRates` answering 404 for an outsider while `getUser` returned
+        their billable rate, and `listUsers` put every colleague's rate in the
+        bootstrap payload on every page load.
+      */
+      // The outsider needs a rate for this to mean anything: asserting that an
+      // absent number is absent passes whatever the code does, which is how the
+      // first version of this test survived deleting the filter it exists for.
+      await db.insert(s.userRates).values({
+        id: newId(),
+        userId: people.outsider!,
+        kind: "billable",
+        amountCents: 33_300,
+        startsOn: null,
+        endsOn: null,
+      });
+
+      const pm = await ctxFor("project_manager");
+
+      await expect(listRates(pm, people.outsider!)).rejects.toMatchObject({ code: "not_found" });
+
+      const outsider = (await listUsers(pm)).find((u) => u.id === people.outsider);
+      expect(outsider, "the person is still listed").toBeDefined();
+      expect(
+        outsider!.billableRateCents,
+        "but their rate is not, because reach applies to the number too"
+      ).toBeUndefined();
+
+      // And somebody they do manage still shows one, or the fix went too far.
+      const managed = (await listUsers(pm)).find((u) => u.id === people.member);
+      expect(managed!.billableRateCents).toBe(15000);
+    });
+
+    it("refuses a Project Manager a cost rate through setRate as well", async () => {
+      const ctx = await ctxFor("project_manager");
+      await expect(
+        setRate(ctx, people.member!, { kind: "cost", amountCents: 7_000, effectiveFrom: "2026-09-01" as IsoDate })
+      ).rejects.toMatchObject({ code: "forbidden" });
+    });
+
+    it("refuses setRate for somebody outside a Project Manager's reach", async () => {
+      const ctx = await ctxFor("project_manager");
+      await expect(
+        setRate(ctx, people.outsider!, { kind: "billable", amountCents: 20_000, effectiveFrom: "2026-09-01" as IsoDate })
+      ).rejects.toMatchObject({ code: "not_found" });
+    });
+
+    it("refuses a Member setRate entirely", async () => {
+      const ctx = await ctxFor("member");
+      await expect(
+        setRate(ctx, people.member!, { kind: "billable", amountCents: 20_000, effectiveFrom: "2026-09-01" as IsoDate })
+      ).rejects.toMatchObject({ code: "forbidden" });
+    });
+
+    it("refuses anybody but the owner setting their own rate", async () => {
+      /*
+        The self-dealing case. `assertWithinReach` waves the self case through,
+        because reach is a question about other people, so a Project Manager
+        could price their own labour and invoice a client at it.
+      */
+      const pm = await ctxFor("project_manager");
+      await expect(
+        setRate(pm, people.project_manager!, { kind: "billable", amountCents: 99_900, effectiveFrom: "2026-09-01" as IsoDate })
+      ).rejects.toMatchObject({ code: "validation_failed" });
+
+      const admin = await ctxFor("administrator");
+      await expect(
+        setRate(admin, people.administrator!, { kind: "billable", amountCents: 99_900, effectiveFrom: "2026-09-01" as IsoDate })
+      ).rejects.toMatchObject({ code: "validation_failed" });
+    });
+
+    it("keeps a rate scheduled for later, and runs the new one up to it", async () => {
+      /*
+        The reviewer's blocker. Setting a backdated rate used to DELETE every
+        range starting on or after it, so one PUT erased a person's rate history
+        and any change already scheduled, with `before: null` in the audit row.
+      */
+      const admin = await ctxFor("administrator");
+      await setRate(admin, people.outsider!, {
+        kind: "billable",
+        amountCents: 10_000,
+        effectiveFrom: "2026-01-01" as IsoDate,
+      });
+      await setRate(admin, people.outsider!, {
+        kind: "billable",
+        amountCents: 30_000,
+        effectiveFrom: "2026-07-01" as IsoDate,
+      });
+
+      // Now reach back between the two.
+      await setRate(admin, people.outsider!, {
+        kind: "billable",
+        amountCents: 20_000,
+        effectiveFrom: "2026-04-01" as IsoDate,
+      });
+
+      const rates = (await listRates(admin, people.outsider!))
+        .filter((r) => r.kind === "billable")
+        .sort((a, b) => (a.startsOn ?? "").localeCompare(b.startsOn ?? ""));
+
+      expect(
+        rates.map((r) => [r.startsOn, r.endsOn, r.amountCents]),
+        "the July raise survives, and the backdated rate runs up to it"
+      ).toEqual([
+        ["2026-01-01", "2026-03-31", 10_000],
+        ["2026-04-01", "2026-06-30", 20_000],
+        ["2026-07-01", null, 30_000],
+      ]);
+    });
+
+    it("amends a range that already starts on that day rather than stacking another", async () => {
+      const admin = await ctxFor("administrator");
+      await setRate(admin, people.outsider!, { kind: "billable", amountCents: 10_000, effectiveFrom: "2026-01-01" as IsoDate });
+      await setRate(admin, people.outsider!, { kind: "billable", amountCents: 11_000, effectiveFrom: "2026-01-01" as IsoDate });
+
+      const rates = (await listRates(admin, people.outsider!)).filter((r) => r.kind === "billable");
+      expect(rates).toHaveLength(1);
+      expect(rates[0]!.amountCents).toBe(11_000);
+    });
+
     it("lets an Administrator set either kind", async () => {
       const ctx = await ctxFor("administrator");
       await withTransaction(ctx, (tx) => createRate(tx, people.outsider!, billable));
@@ -335,15 +469,20 @@ describe("rate redaction", () => {
       expect(rates.map((r) => r.kind).sort()).toEqual(["billable", "cost"]);
     });
 
-    it("refuses to let a Project Manager delete a cost rate they cannot see", async () => {
+    it("answers 404 when a Project Manager names a cost rate they cannot see", async () => {
       const admin = await ctxFor("administrator");
       const seeded = await listRates(admin, people.member!);
       const costRate = seeded.find((r) => r.kind === "cost")!;
 
       const pm = await ctxFor("project_manager");
+      /*
+        404, not 403. `listRates` filters cost rows out entirely for this
+        profile, so answering "forbidden" would confirm the existence of a row
+        the list denies. The house rule is 404 for anything outside scope.
+      */
       await expect(
         withTransaction(pm, (tx) => deleteRate(tx, people.member!, costRate.id))
-      ).rejects.toMatchObject({ code: "forbidden" });
+      ).rejects.toMatchObject({ code: "not_found" });
 
       // And it is still there.
       expect((await listRates(admin, people.member!)).some((r) => r.id === costRate.id)).toBe(true);

@@ -1150,6 +1150,14 @@ export interface Rate {
 
 export const listRates = (userId: ID): Promise<Rate[]> => get<Rate[]>(`/users/${userId}/rates`);
 
+/** What a rate write answers with: the values it was given, plus the new id. */
+export interface RateSet {
+  id: ID;
+  kind: "billable" | "cost";
+  amountCents: number;
+  effectiveFrom: string;
+}
+
 /**
  * Change a rate from a date.
  *
@@ -1161,7 +1169,15 @@ export const listRates = (userId: ID): Promise<Rate[]> => get<Rate[]>(`/users/${
 export const setRate = (
   userId: ID,
   input: { kind: "billable" | "cost"; amountCents: number; effectiveFrom: string }
-): Promise<Rate> => put<Rate>(`/users/${userId}/rates`, input);
+  /*
+    Not `Rate`. The service returns only what it was asked to set: id, kind,
+    amountCents, effectiveFrom. There is no currency and no resolved range on
+    it, because the range the write produces depends on rows the caller did not
+    send. Typing it as `Rate` promised two fields that never arrive, which is
+    the kind of lie a caller only discovers by rendering `undefined`. The panel
+    refetches the list after a save, so nothing needs the fuller shape here.
+  */
+): Promise<RateSet> => put<RateSet>(`/users/${userId}/rates`, input);
 
 export const deleteRate = (userId: ID, rateId: ID): Promise<void> =>
   del<void>(`/users/${userId}/rates/${rateId}`);

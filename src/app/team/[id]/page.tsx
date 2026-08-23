@@ -474,7 +474,14 @@ export default function PersonDetailPage() {
             </div>
           </Card>
 
-            <RatesPanel userId={person.id} />
+            {/* Editable here, not only in the editor.
+
+                A Project Manager holds `rates:manage` and not `people:manage`,
+                so the Edit person button never appears for them and the editor,
+                where this panel first lived, was unreachable by the one profile
+                the split was built for. The panel decides for itself what to
+                offer, and the server refuses anything it should not. */}
+            <RatesPanel userId={person.id} editable />
           </>
         )}
       </PageBody>

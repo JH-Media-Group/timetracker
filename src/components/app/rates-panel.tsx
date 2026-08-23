@@ -28,14 +28,21 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "@/lib/api";
 import { Button, Card, Field, Input, Select, Spinner } from "@/components/ui/primitives";
 import { SectionTitle } from "@/components/app/kpi";
-import { useCan } from "@/components/app/providers";
+import { useApp, useCan } from "@/components/app/providers";
 import { useToast } from "@/components/ui/toast";
 import { formatMoney } from "@/lib/format";
+import { dayIn } from "@/domain/calendar";
 
-/** Today in the browser's zone, which is the sensible default for "from when". */
-function today(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+/**
+ * Today in the **account's** timezone.
+ *
+ * This read the browser's zone, which is a third notion of "today" in a system
+ * that already has two: `rateFor` resolves in UTC and `listUsers` in the
+ * Postgres session zone. A rate set from a laptop in Tokyo would take effect a
+ * day later than the person setting it meant. `dayIn` exists for exactly this.
+ */
+function todayIn(timezone: string): string {
+  return dayIn(timezone, new Date());
 }
 
 function describeRange(rate: api.Rate): string {
@@ -47,6 +54,7 @@ function describeRange(rate: api.Rate): string {
 
 export function RatesPanel({ userId, editable = false }: { userId: string; editable?: boolean }) {
   const can = useCan();
+  const { settings } = useApp();
   const toast = useToast();
   const queryClient = useQueryClient();
 
@@ -54,7 +62,7 @@ export function RatesPanel({ userId, editable = false }: { userId: string; edita
   const mayEdit = editable && can("rates:manage");
   const mayEditCost = mayEdit && can("rates:view_cost");
 
-  const { data: rates, isLoading } = useQuery({
+  const { data: rates, isLoading, isError } = useQuery({
     queryKey: ["rates", userId],
     queryFn: () => api.listRates(userId),
     enabled: maySeeAny,
@@ -62,7 +70,7 @@ export function RatesPanel({ userId, editable = false }: { userId: string; edita
 
   const [kind, setKind] = React.useState<"billable" | "cost">("billable");
   const [amount, setAmount] = React.useState("");
-  const [from, setFrom] = React.useState(today);
+  const [from, setFrom] = React.useState(() => todayIn(settings.timezone));
 
   const save = useMutation({
     mutationFn: () =>
@@ -89,11 +97,33 @@ export function RatesPanel({ userId, editable = false }: { userId: string; edita
 
   if (!maySeeAny) return null;
 
-  const current = (k: "billable" | "cost") =>
-    (rates ?? []).find((r) => r.kind === k && !r.endsOn) ?? null;
+  /*
+    In force today, not merely open-ended.
 
-  const history = (rates ?? []).filter((r) => r.endsOn);
-  const amountIsValid = amount.trim() !== "" && Number.isFinite(Number(amount)) && Number(amount) >= 0;
+    Picking the row with no end date reported a raise scheduled for next quarter
+    as the person's rate, while `/team` (which asks the database for the range
+    covering today) showed the real one, and today's actual rate was folded away
+    under "Earlier rates". That is the same two-displays-disagreeing problem
+    this panel replaced the KpiRows to avoid.
+  */
+  const now = todayIn(settings.timezone);
+  const inForce = (k: "billable" | "cost") =>
+    (rates ?? []).find(
+      (r) => r.kind === k && (!r.startsOn || r.startsOn <= now) && (!r.endsOn || r.endsOn >= now)
+    ) ?? null;
+
+  const scheduled = (rates ?? []).filter((r) => r.startsOn && r.startsOn > now);
+  const history = (rates ?? []).filter((r) => r.endsOn && r.endsOn < now);
+  /*
+    Two decimal places, and nothing clever.
+
+    `Number()` accepts more than money does. The change handler strips
+    everything but digits and a dot, so "1e3" arrives as "13" and would have
+    been saved as thirteen dollars rather than a thousand, and "-5" as five.
+    Three decimals rounded silently. A regex is the honest filter here: if it
+    does not look like money, the button stays off.
+  */
+  const amountIsValid = /^\d{1,7}(\.\d{1,2})?$/.test(amount.trim());
 
   return (
     <Card>
@@ -101,10 +131,21 @@ export function RatesPanel({ userId, editable = false }: { userId: string; edita
 
       {isLoading ? (
         <Spinner />
+      ) : isError ? (
+        /*
+          Refused, not empty. The rate endpoint answers 404 for somebody outside
+          your reach, and rendering the fallback below would state that they
+          have no rate, which is a different claim and not one this screen can
+          make. The header of this file says an absence and a redaction are
+          different facts; without this branch it said it and did not do it.
+        */
+        <p className="text-sm text-ink-tertiary">
+          You cannot see this person&apos;s rates.
+        </p>
       ) : (
         <div className="grid gap-3">
           {(["billable", "cost"] as const).map((k) => {
-            const rate = current(k);
+            const rate = inForce(k);
             const hidden = k === "cost" && !can("rates:view_cost");
             return (
               <div key={k} className="flex items-baseline justify-between gap-4">
@@ -128,6 +169,22 @@ export function RatesPanel({ userId, editable = false }: { userId: string; edita
               </div>
             );
           })}
+
+          {scheduled.length > 0 && (
+            <div className="mt-1 grid gap-1 border-t border-border pt-2">
+              {scheduled.map((r) => (
+                <div key={r.id} className="flex justify-between gap-4 text-xs">
+                  <span className="text-ink-secondary">
+                    Scheduled {r.kind === "cost" ? "cost" : "billable"}
+                  </span>
+                  <span className="tabular-nums text-ink-secondary">
+                    {formatMoney(r.amountCents, r.currency)}{" "}
+                    <span className="text-ink-tertiary">{describeRange(r)}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
 
           {history.length > 0 && (
             <details className="mt-1">

@@ -16,6 +16,15 @@
  * queued message is left alone: if mail starts working later, the same link is
  * delivered, and it is the same token rather than a second one.
  *
+ * **It runs as the system actor, so it grants whatever profile it is handed.**
+ * The commit that added this said `assertMayGrantProfile` still refuses to
+ * grant capabilities the caller does not hold. It does not: that function
+ * returns early for `kind: "system"`, and the system actor holds everything
+ * anyway. Running this at all needs a shell on the host and the database
+ * credentials, which is already more authority than any profile confers, so
+ * the check would be theatre rather than a control. Stated plainly rather than
+ * left implying a guard that is not there.
+ *
  *   pnpm invite:link --email a@b.com
  *   pnpm invite:link --email a@b.com --first Ada --last Lovelace --profile Administrator
  *
