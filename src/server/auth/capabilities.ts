@@ -126,6 +126,20 @@ export const BASE_PROFILES: Record<BaseProfileKey, ProfileDefinition> = {
       "task:manage",
       "report:view_team",
       "bulk:execute",
+
+      /*
+        Billable rates, and deliberately not cost.
+
+        A project manager prices the work their projects sell, so they set
+        what a client is charged. What a person costs is a different fact
+        about a colleague, and `rates:view_cost` is what gates it:
+        `createRate` refuses a cost rate without it, so this profile can
+        price work without learning anybody's pay. Their reach is `team`,
+        and the rate service checks reach too, so this is the people they
+        manage rather than everybody.
+      */
+      "rates:view_billable",
+      "rates:manage",
     ],
   },
 

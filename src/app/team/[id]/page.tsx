@@ -27,6 +27,7 @@ import { PageBody, PageHeader, PeriodPicker, usePeriod } from "@/components/app/
 import { Kpi, KpiRow, SectionTitle } from "@/components/app/kpi";
 import { BarChart, Donut, Legend } from "@/components/app/charts";
 import { useApp, useCan } from "@/components/app/providers";
+import { RatesPanel } from "@/components/app/rates-panel";
 import { PROFILE_LABEL } from "@/lib/labels";
 import { useToast } from "@/components/ui/toast";
 
@@ -455,6 +456,7 @@ export default function PersonDetailPage() {
         )}
 
         {tab === "details" && (
+          <>
           <Card className="mt-3">
             <div className="grid gap-x-8 gap-y-3 md:grid-cols-2">
               <KpiRow label="Email" value={person.email} />
@@ -465,10 +467,15 @@ export default function PersonDetailPage() {
               <KpiRow label="Departments" value={person.departments.join(", ") || "None"} />
               <KpiRow label="Time zone" value={person.timezone} />
               <KpiRow label="Started" value={person.startedOn ? formatDateUS(person.startedOn) : "Not recorded"} />
-              {can("rates:view_billable") && <KpiRow label="Billable rate" value={`${formatMoney(person.billableRateCents)} / hour`} />}
-              {can("rates:view_cost") && <KpiRow label="Cost rate" value={`${formatMoney(person.costRateCents)} / hour`} />}
+              {/* The rates themselves are in the panel below, which carries
+                  their effective dates and what came before. Two displays of
+                  one number is how they end up disagreeing: these read the
+                  cached bootstrap and the panel reads live. */}
             </div>
           </Card>
+
+            <RatesPanel userId={person.id} />
+          </>
         )}
       </PageBody>
     </>

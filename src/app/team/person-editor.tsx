@@ -20,6 +20,7 @@
  */
 
 import * as React from "react";
+import { RatesPanel } from "@/components/app/rates-panel";
 import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
@@ -329,6 +330,11 @@ function PersonForm({ existing }: { existing: User }) {
               </div>
             </div>
           </Card>
+
+          {/* Rates are their own card: what somebody is paid is a different
+              decision from what they may do, gated by different capabilities,
+              and the panel decides for itself what to show. */}
+          <RatesPanel userId={existing.id} editable />
 
           {canManage && !existing.isOwner && !isSelf && <RemoveCard person={existing} />}
         </div>

@@ -100,7 +100,7 @@ Work is tracked in Jira project **TALLY** and documented in Confluence space **T
 
 **Last updated:** 2026-08-15. Maintain this section manually.
 
-- Backend and wiring complete. E0 through E13 in docs/BUILD_EPICS.md are ticked. **631 tests, 14 data invariants.**
+- Backend and wiring complete. E0 through E13 in docs/BUILD_EPICS.md are ticked. **672 tests, 14 data invariants.**
 - **Email is built (TALLY-48, 49, 50):** invites and password resets, an `outbound_messages` queue drained by `pnpm jobs:mail` with claim/lease and backoff, and overdue invoice reminders on a three-step escalation. Nothing sends until `SMTP_URL` and `MAIL_FROM` are both set; `MAIL_TO_DISK=1` writes to `.mail/` instead. **`MAIL_FROM` is now required whenever `SMTP_URL` is set**, because the old fallback earned a 5xx and 5xx means permanent, so every message failed on its first attempt.
 - **Do not point production at SendGrid without draining or expiring the backlog first.** Messages queued before a transport existed are claimable now. Auth mail past its token's life is failed unsent automatically (`report.expired`), but check `outbound_messages` before the first real run.
 - **Six adversarial rounds ran on the email work**, Claude and codex in parallel, each round reviewing the previous round's fixes. Every round found a defect introduced by the round before it, which is the argument for doing more than one. The last round found no blocker. The findings worth carrying forward:

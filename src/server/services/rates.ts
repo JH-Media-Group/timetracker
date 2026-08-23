@@ -8,11 +8,13 @@
  */
 
 import { and, desc, eq, inArray, sql } from "drizzle-orm";
-import { assertCan, type Ctx } from "@/server/ctx";
+import { assertCan, withTransaction, type Ctx } from "@/server/ctx";
+import { visibleUserIds } from "@/server/auth/scope";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
 import { notFound, validationFailed } from "@/server/errors";
 import { resolveRates, type DatedRate, type ResolvedRates } from "@/domain/rates";
+import { addDays } from "@/domain/calendar";
 import type { IsoDate } from "@/domain/calendar";
 
 /** Every dated rate for a person, newest first. */
@@ -152,10 +154,55 @@ export interface RateInput {
   endsOn: IsoDate | null;
 }
 
+/**
+ * Who may write a rate, and for whom.
+ *
+ * Three separate questions, and `createRate` used to ask only the first.
+ *
+ * **The capability.** `rates:manage` is the floor for touching rates at all.
+ *
+ * **The kind.** Setting what somebody *costs* additionally needs
+ * `rates:view_cost`. Writing a number you are not allowed to read is a strange
+ * power to hold, and it is the difference between a manager pricing their own
+ * project's work and a manager learning what a colleague is paid. Project
+ * Managers hold `rates:manage` and not `rates:view_cost`, so they set billable
+ * rates and cost stays with Administrators.
+ *
+ * **The person.** Nothing here checked reach, so with `rates:manage` alone the
+ * path `POST /users/{anybody}/rates` worked for anybody in the account. That
+ * did not matter while Administrators were the only holders, because their
+ * reach is everyone. It matters the moment a profile with `team` reach holds
+ * it. 404 rather than 403, as everywhere else: the API does not confirm that a
+ * person outside your reach exists.
+ */
+async function assertMayWriteRate(ctx: Ctx, userId: string, kind: "billable" | "cost"): Promise<void> {
+  assertCan(ctx, "rates:manage");
+  if (kind === "cost") assertCan(ctx, "rates:view_cost");
+  await assertWithinReach(ctx, userId);
+}
+
+/** The person is yourself, or somebody your profile's reach covers. */
+async function assertWithinReach(ctx: Ctx, userId: string): Promise<void> {
+  if (userId === ctx.actor.userId || ctx.actor.kind === "system") return;
+
+  const [row] = await ctx.db
+    .select({ id: s.users.id })
+    .from(s.users)
+    .where(and(eq(s.users.id, userId), sql`${s.users.id} IN ${visibleUserIds(ctx)}`))
+    .limit(1);
+
+  if (!row) throw notFound("That person");
+}
+
 export async function listRates(ctx: Ctx, userId: string) {
   // Cost rates are money about a person. Seeing your own is fine; seeing
   // everybody's needs the capability.
-  if (userId !== ctx.actor.userId) assertCan(ctx, "rates:view_billable");
+  // The capability says "may see rates", not "may see everyone's", so the
+  // person has to be within reach as well.
+  if (userId !== ctx.actor.userId) {
+    assertCan(ctx, "rates:view_billable");
+    await assertWithinReach(ctx, userId);
+  }
 
   const rows = await ctx.db
     .select()
@@ -177,7 +224,7 @@ export async function listRates(ctx: Ctx, userId: string) {
 }
 
 export async function createRate(ctx: Ctx, userId: string, input: RateInput) {
-  assertCan(ctx, "rates:manage");
+  await assertMayWriteRate(ctx, userId, input.kind);
 
   if (input.amountCents < 0) {
     throw validationFailed({ amountCents: ["A rate cannot be negative."] });
@@ -214,8 +261,85 @@ export async function createRate(ctx: Ctx, userId: string, input: RateInput) {
  * alone let `DELETE /users/{alice}/rates/{bob-rate}` delete Bob's rate and file
  * the audit row under a path naming Alice.
  */
+/**
+ * Change what somebody is paid or charged, from a date.
+ *
+ * `createRate` inserts, and the database forbids overlapping ranges for one
+ * person and kind, so "put this person on a new rate" through `createRate`
+ * alone fails the moment they already have one: an open-ended row covers every
+ * future day, and the new one collides with it. Every screen that offers to
+ * change a rate needs this, so it lives here rather than being rebuilt in the
+ * UI out of a delete and an insert that are not in the same transaction.
+ *
+ * **History is not rewritten, and that is the point.** A time entry carries the
+ * rate that applied when it was written, in `billableRateCents` and
+ * `costRateCents`. Closing the old range and opening a new one changes what
+ * future entries resolve to and leaves every existing entry exactly as it was,
+ * so last quarter's profitability does not move because somebody had a raise.
+ * The re-rate action is the only thing that touches a snapshot.
+ */
+export async function setRate(
+  ctx: Ctx,
+  userId: string,
+  input: { kind: "billable" | "cost"; amountCents: number; effectiveFrom: IsoDate }
+) {
+  await assertMayWriteRate(ctx, userId, input.kind);
+
+  if (input.amountCents < 0) {
+    throw validationFailed({ amountCents: ["A rate cannot be negative."] });
+  }
+
+  return withTransaction(ctx, async (tx) => {
+    const existing = await tx.db
+      .select()
+      .from(s.userRates)
+      .where(and(eq(s.userRates.userId, userId), eq(s.userRates.kind, input.kind)))
+      .for("update");
+
+    for (const row of existing) {
+      // Starts on or after the new date: entirely superseded, so it goes.
+      if (row.startsOn && row.startsOn >= input.effectiveFrom) {
+        await tx.db.delete(s.userRates).where(eq(s.userRates.id, row.id));
+        continue;
+      }
+      // Still running on the new date: close it the day before.
+      if (!row.endsOn || row.endsOn >= input.effectiveFrom) {
+        await tx.db
+          .update(s.userRates)
+          .set({ endsOn: addDays(input.effectiveFrom, -1) })
+          .where(eq(s.userRates.id, row.id));
+      }
+    }
+
+    const id = newId();
+    await tx.db.insert(s.userRates).values({
+      id,
+      userId,
+      kind: input.kind,
+      amountCents: input.amountCents,
+      startsOn: input.effectiveFrom,
+      endsOn: null,
+      createdBy: tx.actor.userId,
+    });
+
+    tx.audit({
+      action: "rate.set",
+      entityType: "user_rate",
+      entityId: id,
+      entityLabel: `${input.kind} rate from ${input.effectiveFrom}`,
+      after: { userId, ...input },
+    });
+
+    return { id, ...input };
+  });
+}
+
+
 export async function deleteRate(ctx: Ctx, userId: string, rateId: string) {
+  // The capability floor first, so a Member gets the same answer whether or
+  // not the rate exists. The kind is only knowable once the row is read.
   assertCan(ctx, "rates:manage");
+  await assertWithinReach(ctx, userId);
 
   const [existing] = await ctx.db
     .select()
@@ -223,6 +347,10 @@ export async function deleteRate(ctx: Ctx, userId: string, rateId: string) {
     .where(and(eq(s.userRates.id, rateId), eq(s.userRates.userId, userId)))
     .limit(1);
   if (!existing) throw notFound("That rate");
+
+  // Deleting a cost rate changes what the business believes it spends, so it
+  // needs the same standing as setting one.
+  if (existing.kind === "cost") assertCan(ctx, "rates:view_cost");
 
   await ctx.db.delete(s.userRates).where(eq(s.userRates.id, rateId));
 

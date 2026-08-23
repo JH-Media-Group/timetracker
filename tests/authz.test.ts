@@ -18,9 +18,10 @@ import { BASE_PROFILES, type BaseProfileKey, type Capability } from "@/server/au
 import { listClients, getClient, createClient } from "@/server/services/clients";
 import { listProjects, getProject } from "@/server/services/projects";
 import { archiveUser, listProfiles, listUsers, getUser, updateUser } from "@/server/services/people";
-import { listRates } from "@/server/services/rates";
+import { createRate, deleteRate, listRates, setRate } from "@/server/services/rates";
 import { search } from "@/server/services/search";
 import { AppError } from "@/server/errors";
+import type { IsoDate } from "@/domain/calendar";
 
 let profiles: Record<string, string>;
 const people: Record<string, string> = {};
@@ -227,6 +228,126 @@ describe("rate redaction", () => {
 
     const admin = await listRates(await ctxFor("administrator"), people.member!);
     expect(admin.map((r) => r.kind).sort()).toEqual(["billable", "cost"]);
+  });
+
+  /*
+    Who may WRITE a rate, which is a different question from who may read one.
+
+    `createRate` used to ask only for `rates:manage`, so any holder could set a
+    cost rate for anybody in the account. That was harmless while Administrators
+    were the only holders, because their reach is everyone and they may see cost
+    anyway. Project Managers hold it now, so both halves matter: the kind, and
+    the person.
+  */
+  describe("writing rates", () => {
+    const billable = { kind: "billable" as const, amountCents: 20_000, startsOn: null, endsOn: null };
+    const cost = { kind: "cost" as const, amountCents: 7_000, startsOn: null, endsOn: null };
+
+    it("lets a Project Manager set the billable rate for somebody they manage", async () => {
+      /*
+        Through `setRate`, which is what a screen calls. `createRate` alone
+        fails here and should: the person already has an open-ended billable
+        rate, and the database forbids two ranges of one kind covering the same
+        day. Closing the old one and opening the new one is the whole job.
+      */
+      const ctx = await ctxFor("project_manager");
+      await setRate(ctx, people.member!, {
+        kind: "billable",
+        amountCents: 20_000,
+        effectiveFrom: "2026-09-01" as IsoDate,
+      });
+
+      const rates = await listRates(await ctxFor("administrator"), people.member!);
+      const bill = rates.filter((r) => r.kind === "billable");
+      expect(bill.map((r) => r.amountCents)).toContain(20_000);
+      expect(
+        bill.find((r) => r.amountCents === 15_000)?.endsOn,
+        "the old rate is closed the day before, not deleted"
+      ).toBe("2026-08-31");
+    });
+
+    it("leaves the rate already written onto a time entry alone", async () => {
+      /*
+        The invariant the whole dated-range design exists for. A raise must not
+        move last month's profitability, so the snapshot on an existing entry
+        does not change when the rate behind it does.
+      */
+      const admin = await ctxFor("administrator");
+      const taskId = newId();
+      await db.insert(s.tasks).values({ id: taskId, name: `Task ${taskId.slice(-6)}` });
+      const projectTaskId = await makeProjectTask(projectA, taskId);
+      const entryId = newId();
+      await db.insert(s.timeEntries).values({
+        id: entryId,
+        userId: people.member!,
+        projectId: projectA,
+        projectTaskId,
+        spentOn: "2026-08-01",
+        durationSeconds: 3600,
+        isBillable: true,
+        billableRateCents: 15_000,
+        costRateCents: 6_000,
+      });
+
+      await setRate(admin, people.member!, {
+        kind: "billable",
+        amountCents: 99_000,
+        effectiveFrom: "2026-08-01" as IsoDate,
+      });
+
+      const [after] = await db
+        .select({ billable: s.timeEntries.billableRateCents })
+        .from(s.timeEntries)
+        .where(eq(s.timeEntries.id, entryId));
+      expect(after!.billable).toBe(15_000);
+    });
+
+    it("refuses to let a Project Manager set a cost rate", async () => {
+      // The point of the split: they price the work, they do not learn the pay.
+      const ctx = await ctxFor("project_manager");
+      await expect(
+        withTransaction(ctx, (tx) => createRate(tx, people.member!, cost))
+      ).rejects.toMatchObject({ code: "forbidden" });
+    });
+
+    it("refuses a Project Manager somebody outside their reach, and does not confirm they exist", async () => {
+      // `outsider` is on no project this manager runs. 404, not 403.
+      const ctx = await ctxFor("project_manager");
+      await expect(
+        withTransaction(ctx, (tx) => createRate(tx, people.outsider!, billable))
+      ).rejects.toMatchObject({ code: "not_found" });
+    });
+
+    it("refuses a Member entirely, even for themselves", async () => {
+      // The whole reason rates are not on the person's own settings page.
+      const ctx = await ctxFor("member");
+      await expect(
+        withTransaction(ctx, (tx) => createRate(tx, people.member!, billable))
+      ).rejects.toMatchObject({ code: "forbidden" });
+    });
+
+    it("lets an Administrator set either kind", async () => {
+      const ctx = await ctxFor("administrator");
+      await withTransaction(ctx, (tx) => createRate(tx, people.outsider!, billable));
+      await withTransaction(ctx, (tx) => createRate(tx, people.outsider!, cost));
+
+      const rates = await listRates(await ctxFor("administrator"), people.outsider!);
+      expect(rates.map((r) => r.kind).sort()).toEqual(["billable", "cost"]);
+    });
+
+    it("refuses to let a Project Manager delete a cost rate they cannot see", async () => {
+      const admin = await ctxFor("administrator");
+      const seeded = await listRates(admin, people.member!);
+      const costRate = seeded.find((r) => r.kind === "cost")!;
+
+      const pm = await ctxFor("project_manager");
+      await expect(
+        withTransaction(pm, (tx) => deleteRate(tx, people.member!, costRate.id))
+      ).rejects.toMatchObject({ code: "forbidden" });
+
+      // And it is still there.
+      expect((await listRates(admin, people.member!)).some((r) => r.id === costRate.id)).toBe(true);
+    });
   });
 
   it("refuses to list another person's rates without the capability", async () => {

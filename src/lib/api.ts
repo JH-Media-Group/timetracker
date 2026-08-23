@@ -1129,6 +1129,44 @@ export async function updateUser(id: ID, p: Partial<User>): Promise<User> {
   return fromUser(await patch<UserWire>(`/users/${id}`, body));
 }
 
+/* ------------------------------------------------------------------ rates */
+
+/**
+ * A person's rate, as a dated range.
+ *
+ * `endsOn: null` means "still in force". The server hides cost rows entirely
+ * from anybody without `rates:view_cost`, so an empty cost list here means
+ * either there are none or you may not see them, and the UI must not present
+ * the difference as fact.
+ */
+export interface Rate {
+  id: ID;
+  kind: "billable" | "cost";
+  amountCents: number;
+  currency: string;
+  startsOn: string | null;
+  endsOn: string | null;
+}
+
+export const listRates = (userId: ID): Promise<Rate[]> => get<Rate[]>(`/users/${userId}/rates`);
+
+/**
+ * Change a rate from a date.
+ *
+ * PUT rather than POST: the server closes whatever range is in force and opens
+ * a new one, in one transaction. Posting a second open-ended range instead
+ * collides with the overlap constraint, which is the error every hand-rolled
+ * version of this produces.
+ */
+export const setRate = (
+  userId: ID,
+  input: { kind: "billable" | "cost"; amountCents: number; effectiveFrom: string }
+): Promise<Rate> => put<Rate>(`/users/${userId}/rates`, input);
+
+export const deleteRate = (userId: ID, rateId: ID): Promise<void> =>
+  del<void>(`/users/${userId}/rates/${rateId}`);
+
+
 export async function archiveUser(id: ID, archived = true): Promise<User> {
   const path = archived ? `/users/${id}/archive` : `/users/${id}/restore`;
   return fromUser(await post<UserWire>(path));

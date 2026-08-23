@@ -185,6 +185,19 @@ export const rateSchema = z.object({
   endsOn: isoDate.nullable().default(null),
 });
 
+/**
+ * Changing a rate from a date, which is what a screen offers.
+ *
+ * `rateSchema` describes an explicit dated range and collides with whatever
+ * is already there; this one says "from this day, the rate is X" and lets
+ * `setRate` close the previous range.
+ */
+export const rateSetSchema = z.object({
+  kind: z.enum(["billable", "cost"]),
+  amountCents: z.number().int().min(0),
+  effectiveFrom: isoDate,
+});
+
 /* ------------------------------------------------------------- invoices */
 
 export const invoiceLineSchema = z.object({
