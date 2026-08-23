@@ -10,9 +10,9 @@
  */
 
 import * as React from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { X } from "lucide-react";
+import { Plus, X } from "lucide-react";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import type { BillBy, BillingType, BudgetBy, Project } from "@/lib/types";
@@ -24,6 +24,7 @@ import { useToast } from "@/components/ui/toast";
 import { PageBody, PageHeader } from "@/components/app/page-chrome";
 import { useApp } from "@/components/app/providers";
 import { formatHours, formatMoney, parseMoney } from "@/lib/format";
+import { withParam } from "@/lib/return-to";
 
 /**
  * The project has to be loaded before the form mounts. Field state is
@@ -55,6 +56,7 @@ export function ProjectEditor({ projectId }: { projectId?: string }) {
 function ProjectForm({ existing }: { existing?: Project }) {
   const search = useSearchParams();
   const router = useRouter();
+  const pathname = usePathname();
   const qc = useQueryClient();
   const toast = useToast();
   const { clients, tasks, users, clientById, taskById, userById } = useApp();
@@ -68,8 +70,14 @@ function ProjectForm({ existing }: { existing?: Project }) {
      * a question the app already knows the answer to (TALLY-43). Falling back
      * to the first client alphabetically is a guess, and a wrong one often
      * enough to be worth not making silently.
+     *
+     * The parameter beats the existing value on purpose: it is how "Add new
+     * client" gets back here with the client it just made selected, and on an
+     * edit form the existing value would otherwise win and the round trip
+     * would appear to have done nothing. Nothing is saved until Update is
+     * pressed, so this changes a default and not a record.
      */
-    clientId: existing?.clientId ?? search.get("client") ?? clients[0]?.id ?? "",
+    clientId: search.get("client") ?? existing?.clientId ?? clients[0]?.id ?? "",
     code: existing?.code ?? "",
     startsOn: existing?.startsOn ?? "",
     endsOn: existing?.endsOn ?? "",
@@ -163,7 +171,25 @@ function ProjectForm({ existing }: { existing?: Project }) {
           <Card>
             <h2 className="mb-4 text-md font-semibold text-ink">Identity</h2>
             <div className="grid gap-4 lg:grid-cols-2">
-              <Field label="Client" required>
+              <Field
+                label="Client"
+                required
+                /*
+                  The client you need may not exist yet, and finding that out
+                  here used to mean abandoning the form, navigating to Clients,
+                  making one, and coming back to an empty form. `next` brings
+                  you back to this page with the new client chosen.
+                */
+                action={
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => router.push(withParam("/clients/new", "next", pathname))}
+                  >
+                    <Plus className="size-3.5" />Add new client
+                  </Button>
+                }
+              >
                 <Select value={form.clientId} onChange={(e) => patch("clientId", e.target.value)}>
                   {[...clients].sort((a, b) => a.name.localeCompare(b.name)).map((c) => (
                     <option key={c.id} value={c.id}>{c.name}</option>

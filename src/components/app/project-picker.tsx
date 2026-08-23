@@ -55,23 +55,31 @@ function fuzzy(haystack: string, needle: string): boolean {
 }
 
 export function ProjectPicker({
-  projectId, onChange, className, disabled, id, portal = true,
+  projectId, onChange, className, disabled, id, portal,
 }: {
   projectId?: ID; onChange: (projectId: ID) => void;
   className?: string; disabled?: boolean; id?: string;
   /**
-   * Pass `false` when this sits inside a Dialog.
-   *
-   * A Dialog traps focus in its own subtree, and a portalled popover renders
-   * outside it, so the dialog takes focus back and closes the picker before a
-   * key can reach it (TALLY-39). Everywhere else the portal is what stops a
-   * scrolling ancestor clipping the list.
+   * Leave this unset. `PopoverContent` decides, from whether it is inside a
+   * modal Dialog, and getting that wrong is what made this picker unusable in
+   * the new time entry dialog: it opened and shut, and nobody could pick a
+   * project. See `useInsideDialog`.
    */
   portal?: boolean;
 }) {
   const { projects, clientById, me, taskById } = useApp();
   const [open, setOpen] = React.useState(false);
   const [q, setQ] = React.useState("");
+  /*
+    Which row the arrow keys are on.
+
+    The list was mouse-only: typing narrowed it and then you had to leave the
+    keyboard to choose. Held as an index into `order` below rather than as an
+    id, so Down from the last row and Up from the first both wrap without
+    needing to know what is in the list.
+  */
+  const [cursor, setCursor] = React.useState(0);
+  const listId = React.useId();
 
   const assigned = React.useMemo(
     () => projects.filter((p) => !p.archivedAt && (p.memberIds.includes(me.id) || p.managerIds.includes(me.id))),
@@ -109,6 +117,44 @@ export function ProjectPicker({
     return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
   }, [filtered, clientById]);
 
+  /*
+    The rows in the order they are drawn, which is what the arrow keys walk.
+
+    Recents are repeated below in their client group on purpose, and both
+    entries are separately reachable, because that is what is on the screen. A
+    cursor that skipped the duplicate would stop on a row the eye is not on.
+  */
+  const order = React.useMemo(
+    () => [
+      ...(!q ? recents.map((p) => `r-${p.id}`) : []),
+      ...grouped.flatMap(([, list]) => list.map((p) => p.id)),
+    ],
+    [q, recents, grouped]
+  );
+
+  // Back to the top whenever the list changes under it, or the old index points
+  // at a row that is no longer there.
+  React.useEffect(() => { setCursor(0); }, [q, open]);
+
+  const idAt = (i: number) => order[i]?.replace(/^r-/, "");
+
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (order.length === 0) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setCursor((c) => (c + 1) % order.length);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      setCursor((c) => (c - 1 + order.length) % order.length);
+    } else if (e.key === "Enter") {
+      // The search box is inside a form in the time entry dialog, so without
+      // this the first Enter submits the form instead of choosing a project.
+      e.preventDefault();
+      const pid = idAt(cursor);
+      if (pid) choose(pid);
+    }
+  };
+
   const choose = (pid: ID) => { onChange(pid); setOpen(false); setQ(""); };
 
   return (
@@ -140,17 +186,29 @@ export function ProjectPicker({
           <Search className="size-4 shrink-0 text-ink-tertiary" aria-hidden />
           <input
             autoFocus value={q} onChange={(e) => setQ(e.target.value)}
+            onKeyDown={onKeyDown}
             placeholder="Search projects, clients, tasks…"
             className="w-full bg-transparent text-base outline-none placeholder:text-ink-tertiary"
+            /*
+              The list below is the listbox this input drives. Without these a
+              screen reader is told about a text field and never hears which
+              row the arrow keys moved to.
+            */
+            role="combobox"
+            aria-expanded
+            aria-controls={listId}
+            aria-activedescendant={order[cursor] ? `${listId}-${order[cursor]}` : undefined}
           />
         </div>
 
-        <div className="max-h-[320px] overflow-y-auto p-1">
+        <div className="max-h-[320px] overflow-y-auto p-1" id={listId} role="listbox">
           {!q && recents.length > 0 && (
             <>
               <div className="px-2 py-1.5 text-xs font-semibold uppercase tracking-[0.06em] text-ink-tertiary">Recent</div>
               {recents.map((p) => (
-                <Row key={`r-${p.id}`} project={p} client={clientById.get(p.clientId)?.name} selected={p.id === projectId} onSelect={() => choose(p.id)} />
+                <Row key={`r-${p.id}`} rowId={`${listId}-r-${p.id}`} project={p}
+                  client={clientById.get(p.clientId)?.name} selected={p.id === projectId}
+                  active={order[cursor] === `r-${p.id}`} onSelect={() => choose(p.id)} />
               ))}
               <div className="my-1 h-px bg-border" />
             </>
@@ -164,7 +222,8 @@ export function ProjectPicker({
             <div key={client}>
               <div className="px-2 py-1.5 text-xs font-semibold uppercase tracking-[0.06em] text-ink-tertiary">{client}</div>
               {list.map((p) => (
-                <Row key={p.id} project={p} selected={p.id === projectId} onSelect={() => choose(p.id)} />
+                <Row key={p.id} rowId={`${listId}-${p.id}`} project={p} selected={p.id === projectId}
+                  active={order[cursor] === p.id} onSelect={() => choose(p.id)} />
               ))}
             </div>
           ))}
@@ -174,18 +233,34 @@ export function ProjectPicker({
   );
 }
 
-function Row({ project, client, selected, onSelect }: {
+function Row({ project, client, selected, active, onSelect, rowId }: {
   project: { id: string; name: string; billingType: string; endsOn?: string };
-  client?: string; selected?: boolean; onSelect: () => void;
+  client?: string; selected?: boolean;
+  /** Where the arrow keys are, which is not the same as what is chosen. */
+  active?: boolean;
+  onSelect: () => void; rowId?: string;
 }) {
+  const ref = React.useRef<HTMLButtonElement>(null);
+
+  // Keep the arrow-key cursor on screen. `nearest` rather than `center` so a
+  // row already visible does not make the list jump under the pointer.
+  React.useEffect(() => {
+    if (active) ref.current?.scrollIntoView({ block: "nearest" });
+  }, [active]);
+
   return (
     <button
+      ref={ref}
+      id={rowId}
+      role="option"
+      aria-selected={!!selected}
       type="button"
       onClick={onSelect}
       className={cn(
         "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-base",
         "hover:bg-surface-hover focus-visible:bg-surface-hover focus-visible:outline-none",
-        selected && "bg-bg-muted"
+        selected && "bg-bg-muted",
+        active && "bg-surface-hover"
       )}
     >
       <span className="min-w-0 flex-1 truncate">

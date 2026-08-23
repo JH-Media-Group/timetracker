@@ -99,9 +99,18 @@ export function parseTimeRange(input: string): { start: number; end: number } | 
   return { start: a, end };
 }
 
+/**
+ * One regex, read by both the parser and the ambiguity check.
+ *
+ * They had a copy each for about an hour. Two regexes that must agree about
+ * what a clock time looks like are one edit away from disagreeing, and the
+ * failure would be silent: a form the parser accepts and the resolver thinks
+ * is unambiguous gets read as 3am.
+ */
+const CLOCK_RE = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/;
+
 export function parseClockTime(input: string): number | null {
-  const s = input.trim().toLowerCase();
-  const m = s.match(/^(\d{1,2})(?::(\d{2}))?\s*(am|pm)?$/);
+  const m = input.trim().toLowerCase().match(CLOCK_RE);
   if (!m) return null;
   let h = +m[1]!;
   const min = m[2] ? +m[2]! : 0;
@@ -110,6 +119,121 @@ export function parseClockTime(input: string): number | null {
   if (mer === "am" && h === 12) h = 0;
   if (h > 23 || min > 59) return null;
   return h * 60 + min;
+}
+
+/**
+ * Was the meridiem left off a time that needs one?
+ *
+ * "3:15" is two different times and the machine has to pick. "3:15pm" and
+ * "15:15" are one time each and it must not.
+ *
+ * Twelve counts, and an earlier version of this said it did not, on the
+ * grounds that a bare "12" reads as noon to everybody. It does, standing
+ * alone. It does not after a start of 8pm, which is the case that opened the
+ * ticket. So twelve is ambiguous like the rest, and the no-context fallback
+ * below is what keeps it meaning noon when there is nothing to resolve it
+ * against.
+ */
+export function clockTimeIsAmbiguous(input: string): boolean {
+  const m = input.trim().toLowerCase().match(CLOCK_RE);
+  if (!m || m[3]) return false;
+  const h = +m[1]!;
+  return h >= 1 && h <= 12;
+}
+
+/**
+ * Resolve a typed time, using the other end of the entry to settle a bare hour.
+ *
+ * `parseClockTime` reads what was typed and nothing more, which is right for a
+ * parser and wrong for a timesheet: somebody who types 3:15 into a workday
+ * means the afternoon, and reading it as 3:15am produced an end before its
+ * start and a raw `time_entries_clock_ordered` error in their face.
+ *
+ * Two rules, in order:
+ *
+ *   1. **If there is a time at the other end, use it.** The reading that makes
+ *      the shortest positive shift wins. From 8pm, a bare "12" is midnight (4
+ *      hours) rather than noon (16). From 9am, a bare "5" is 5pm (8 hours)
+ *      rather than 5am (20). This is what makes an overnight shift work without
+ *      anybody typing "am".
+ *   2. **Otherwise read it as an office day.** 1 through 6 are the afternoon, 7
+ *      through 11 the morning. Chosen because it is a rule somebody can hold in
+ *      their head and predict, which "nearest to noon" is not: it makes 6
+ *      a coin toss and 3:15 depend on the minutes.
+ *
+ * Anything unambiguous is returned exactly as typed, both rules skipped.
+ */
+export function resolveClockTime(
+  input: string,
+  opts: { after?: number | null; before?: number | null } = {}
+): number | null {
+  const literal = parseClockTime(input);
+  if (literal == null || !clockTimeIsAmbiguous(input)) return literal;
+
+  // Modulo, because the other reading of a bare 12 is midnight, not 24:00.
+  const other = (literal + 12 * 60) % (24 * 60);
+  const { after, before } = opts;
+
+  // A shift of zero means "the same clock time", which as a span is a whole
+  // day rather than nothing, so it sorts last rather than first.
+  const shift = (n: number) => (n === 0 ? 24 * 60 : n);
+
+  if (after != null) {
+    return shift(elapsedMinutes(after, literal)) <= shift(elapsedMinutes(after, other))
+      ? literal
+      : other;
+  }
+  if (before != null) {
+    return shift(elapsedMinutes(literal, before)) <= shift(elapsedMinutes(other, before))
+      ? literal
+      : other;
+  }
+
+  // Nothing to resolve against: read it as an office day. Noon stays noon.
+  const hour = Math.floor(literal / 60);
+  return hour >= 1 && hour <= 6 ? other : literal;
+}
+
+/**
+ * Minutes from one clock time to another, going forwards.
+ *
+ * An end before its start is the next day, not a negative number: 8pm to 12am
+ * is four hours. Equal is zero rather than a full day, because somebody who
+ * types the same time twice means an empty entry, not a 24 hour one.
+ */
+export function elapsedMinutes(startMinutes: number, endMinutes: number): number {
+  const raw = endMinutes - startMinutes;
+  return raw >= 0 ? raw : raw + 24 * 60;
+}
+
+/** Whether an entry running from `start` to `end` runs past midnight. */
+export const crossesMidnight = (startMinutes: number, endMinutes: number) => endMinutes < startMinutes;
+
+/**
+ * Longer than this and we say so, without refusing it.
+ *
+ * The number comes from the cases somebody actually listed: 7pm to 2am is
+ * seven hours and fine, 11am to 12am is thirteen and probably a missing "pm",
+ * 8am to 3am is nineteen and certainly wrong. Twelve separates them.
+ *
+ * It warns rather than blocks on purpose. Long days happen, and a system that
+ * refuses to record one teaches people to log it wrong instead.
+ */
+export const IMPLAUSIBLE_SPAN_MINUTES = 12 * 60;
+
+/** The sentence shown under a span that looks like a mistake, or null. */
+export function implausibleSpanWarning(startMinutes: number, endMinutes: number): string | null {
+  const minutes = elapsedMinutes(startMinutes, endMinutes);
+  if (minutes <= IMPLAUSIBLE_SPAN_MINUTES) return null;
+  const hours = Math.round((minutes / 60) * 10) / 10;
+  return `That is ${hours} hours. Check the start and end are the right way round.`;
+}
+
+/** The day after an ISO date, for an end time that landed past midnight. */
+export function nextIsoDay(spentOn: string): string {
+  const [y, m, d] = spentOn.split("-").map(Number) as [number, number, number];
+  const next = new Date(Date.UTC(y, m - 1, d + 1));
+  return next.toISOString().slice(0, 10);
 }
 
 export function formatClockTime(minutes: number): string {

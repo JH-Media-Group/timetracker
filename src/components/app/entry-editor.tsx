@@ -21,7 +21,8 @@ import { useToast } from "@/components/ui/toast";
 import { ProjectPicker, TaskSelect, defaultTaskFor, pushRecent } from "./project-picker";
 import { useApp } from "./providers";
 import {
-  formatClockTime, formatDuration, instantAt, isoDate, minutesOfDay, parseClockTime, parseDuration,
+  crossesMidnight, elapsedMinutes, formatClockTime, formatDuration, implausibleSpanWarning,
+  instantAt, isoDate, minutesOfDay, nextIsoDay, parseDuration, resolveClockTime,
 } from "@/lib/format";
 
 /* ------------------------------------------------------------------ store */
@@ -92,16 +93,50 @@ export function EntryForm({
 
   const project = projectId ? projectById.get(projectId) : undefined;
 
-  /** Any two of start / end / duration drive the third. */
-  const syncFromTimes = (s: string, e: string) => {
-    const a = parseClockTime(s), b = parseClockTime(e);
-    if (a != null && b != null && b > a) setDurationText(formatDuration((b - a) * 60, settings.timeDisplay));
+  /*
+    Any two of start / end / duration drive the third.
+
+    Both times resolve against each other rather than in isolation, so a bare
+    hour lands on the reading that makes sense for the entry: from 8pm, "12" is
+    midnight. That is also what makes an overnight shift work at all. See
+    `resolveClockTime`.
+
+    The duration used to be filled only when the end was strictly after the
+    start on the clock, which meant that entering 8pm to 12am left it at zero
+    and reported nothing wrong.
+  */
+  const readTimes = (s: string, e: string) => {
+    const a = resolveClockTime(s, { before: resolveClockTime(e) });
+    const b = resolveClockTime(e, { after: a });
+    return { start: a, end: b };
   };
+
+  const syncFromTimes = (s: string, e: string) => {
+    const { start, end } = readTimes(s, e);
+    if (start == null || end == null) return;
+    setDurationText(formatDuration(elapsedMinutes(start, end) * 60, settings.timeDisplay));
+  };
+
   const syncFromDuration = (d: string) => {
     const secs = parseDuration(d);
-    const a = parseClockTime(startText);
-    if (secs != null && a != null) setEndText(formatClockTime(a + Math.round(secs / 60)));
+    const a = resolveClockTime(startText);
+    // Modulo, because a duration added to a start time can run past midnight,
+    // and `formatClockTime` would otherwise be handed minutes past 1440.
+    if (secs != null && a != null) setEndText(formatClockTime((a + Math.round(secs / 60)) % (24 * 60)));
   };
+
+  /*
+    A span long enough to be worth a second look, shown but never blocking.
+
+    Computed on every render rather than memoised: it is two string parses on
+    fields nobody types into quickly, and a memo would need `readTimes` in its
+    dependency list, which changes identity on every render anyway.
+  */
+  const spanWarning = (() => {
+    if (!startEndMode) return null;
+    const { start, end } = readTimes(startText, endText);
+    return start != null && end != null ? implausibleSpanWarning(start, end) : null;
+  })();
 
   const onProject = (pid: string) => {
     setProjectId(pid);
@@ -120,8 +155,7 @@ export function EntryForm({
     mutationFn: async (opts: { start?: boolean }) => {
       if (!projectId || !taskId) throw new Error("Choose a project and a task.");
       const seconds = parseDuration(durationText) ?? 0;
-      const startMin = parseClockTime(startText);
-      const endMin = parseClockTime(endText);
+      const { start: startMin, end: endMin } = readTimes(startText, endText);
       const base = {
         projectId, taskId, spentOn, notes: notes.trim() || undefined,
         isBillable: !nonBillable,
@@ -135,7 +169,22 @@ export function EntryForm({
           build. It also took the previous day anywhere east of UTC.
         */
         startedAt: startMin != null ? instantAt(spentOn, startMin, zone) : undefined,
-        endedAt: endMin != null ? instantAt(spentOn, endMin, zone) : undefined,
+        /*
+          An end before its start belongs to the next day.
+
+          Without this, 8pm to 12am built both instants on `spentOn`, the end
+          landed twenty hours before the start, and the database refused it with
+          `time_entries_clock_ordered` shown raw to whoever was typing. Late
+          finishes are ordinary here, so the fix is to record the day the clock
+          says, not to refuse the entry.
+        */
+        endedAt: endMin != null
+          ? instantAt(
+              startMin != null && crossesMidnight(startMin, endMin) ? nextIsoDay(spentOn) : spentOn,
+              endMin,
+              zone
+            )
+          : undefined,
       };
       if (entry) {
         /*
@@ -215,11 +264,19 @@ export function EntryForm({
             <>
               <Input className="w-[92px]" placeholder="Start" value={startText}
                 onChange={(e) => setStartText(e.target.value)}
-                onBlur={(e) => { const m = parseClockTime(e.target.value); if (m != null) setStartText(formatClockTime(m)); syncFromTimes(e.target.value, endText); }} />
+                onBlur={(e) => {
+                  const m = resolveClockTime(e.target.value, { before: resolveClockTime(endText) });
+                  if (m != null) setStartText(formatClockTime(m));
+                  syncFromTimes(e.target.value, endText);
+                }} />
               <span className="text-ink-tertiary">to</span>
               <Input className="w-[92px]" placeholder="End" value={endText}
                 onChange={(e) => setEndText(e.target.value)}
-                onBlur={(e) => { const m = parseClockTime(e.target.value); if (m != null) setEndText(formatClockTime(m)); syncFromTimes(startText, e.target.value); }} />
+                onBlur={(e) => {
+                  const m = resolveClockTime(e.target.value, { after: resolveClockTime(startText) });
+                  if (m != null) setEndText(formatClockTime(m));
+                  syncFromTimes(startText, e.target.value);
+                }} />
               <span className="text-ink-tertiary">=</span>
             </>
           )}
@@ -231,6 +288,9 @@ export function EntryForm({
               if (startEndMode) syncFromDuration(e.target.value);
             }} />
         </div>
+        {spanWarning && !error && (
+          <div className="mt-1.5 text-sm text-warning" role="status">{spanWarning}</div>
+        )}
       </Field>
 
       {project?.billingType !== "non_billable" && (

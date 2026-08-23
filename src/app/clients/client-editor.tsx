@@ -9,7 +9,7 @@
  */
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Trash2 } from "lucide-react";
 import * as api from "@/lib/api";
@@ -21,6 +21,8 @@ import { useToast } from "@/components/ui/toast";
 import { PageBody, PageHeader } from "@/components/app/page-chrome";
 import { SectionTitle } from "@/components/app/kpi";
 import { useApp } from "@/components/app/providers";
+import { PhoneInput } from "@/components/app/phone-input";
+import { safeReturnPath, withParam } from "@/lib/return-to";
 
 type DraftContact = Omit<ClientContact, "clientId"> & { clientId?: string };
 
@@ -61,6 +63,15 @@ function ClientForm({ existing }: { existing?: Client }) {
   const router = useRouter();
   const qc = useQueryClient();
   const toast = useToast();
+  /*
+    Where to go after saving, when something sent us here to make a client.
+
+    Checked rather than trusted: see `safeReturnPath`. Only offered for a new
+    client, because "update this client and then go fill in that other form" is
+    not a journey anything asks for.
+  */
+  const search = useSearchParams();
+  const returnTo = existing ? null : safeReturnPath(search.get("next"));
 
   const [form, setForm] = React.useState(() => ({
     name: existing?.name ?? "",
@@ -118,7 +129,7 @@ function ClientForm({ existing }: { existing?: Client }) {
         return { ...old, clients };
       });
       toast.push({ tone: "success", title: existing ? "Client updated." : "Client created." });
-      router.push(`/clients/${c.id}`);
+      router.push(returnTo ? withParam(returnTo, "client", c.id) : `/clients/${c.id}`);
       qc.invalidateQueries({ queryKey: ["bootstrap"] });
     },
   });
@@ -132,7 +143,7 @@ function ClientForm({ existing }: { existing?: Client }) {
         title={existing ? "Edit client" : "New client"}
         actions={
           <>
-            <Button variant="ghost" onClick={() => router.back()}>Cancel</Button>
+            <Button variant="ghost" onClick={() => (returnTo ? router.push(returnTo) : router.back())}>Cancel</Button>
             <Button variant="primary" disabled={!canSave} loading={save.isPending} onClick={() => save.mutate()}>
               {existing ? "Update client" : "Create client"}
             </Button>
@@ -233,7 +244,7 @@ function ClientForm({ existing }: { existing?: Client }) {
                       <Input type="email" value={c.email ?? ""} onChange={(e) => patchContact(c.id, { email: e.target.value })} placeholder="name@example.com" />
                     </Field>
                     <Field label="Phone">
-                      <Input value={c.phone ?? ""} onChange={(e) => patchContact(c.id, { phone: e.target.value })} placeholder="(312) 555-0100" />
+                      <PhoneInput value={c.phone ?? ""} onChange={(v) => patchContact(c.id, { phone: v })} />
                     </Field>
                   </div>
                 </div>

@@ -572,7 +572,7 @@ function ExpenseDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (v
       >
         <div className="flex flex-col gap-4">
           <Field label="Project" required>
-            <ProjectPicker projectId={projectId} onChange={setProjectId} portal={false} />
+            <ProjectPicker projectId={projectId} onChange={setProjectId} />
           </Field>
 
           <div className="grid gap-4 md:grid-cols-2">

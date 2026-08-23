@@ -82,17 +82,31 @@ export const Textarea = React.forwardRef<HTMLTextAreaElement, React.TextareaHTML
 Textarea.displayName = "Textarea";
 
 export function Field({
-  label, help, error, required, children, className, htmlFor,
+  label, help, error, required, children, className, htmlFor, action,
 }: {
   label?: React.ReactNode; help?: React.ReactNode; error?: React.ReactNode;
   required?: boolean; children: React.ReactNode; className?: string; htmlFor?: string;
+  /**
+   * A control on the label row, for the thing you need before you can fill the
+   * field in: "Add new client" beside a client picker, say.
+   *
+   * Outside the `<label>` element rather than inside it, because clicking a
+   * label activates its control, and a link that both navigates away and
+   * focuses a select is a small trap.
+   */
+  action?: React.ReactNode;
 }) {
   return (
     <div className={cn("min-w-0", className)}>
-      {label && (
-        <label className={cn(labelClass, "mb-1.5")} htmlFor={htmlFor}>
-          {label}{required && <span className={requiredMarkClass} aria-hidden>*</span>}
-        </label>
+      {(label || action) && (
+        <div className="mb-1.5 flex items-end justify-between gap-2">
+          {label ? (
+            <label className={cn(labelClass, "mb-0")} htmlFor={htmlFor}>
+              {label}{required && <span className={requiredMarkClass} aria-hidden>*</span>}
+            </label>
+          ) : <span />}
+          {action}
+        </div>
       )}
       {children}
       {help && !error && <div className={helpTextClass}>{help}</div>}
@@ -353,6 +367,26 @@ export function Meter({
 
 /* ------------------------------------------------------- Overlays: Dialog */
 
+/**
+ * Whether the subtree is inside a modal Dialog.
+ *
+ * This exists so that an overlay does not have to be told. A modal Dialog traps
+ * focus and blocks pointer events outside its own DOM subtree, so a popover
+ * that portals to the document root is dismissed the instant it opens. The rule
+ * was written in prose on `PopoverContent` and on `ProjectPicker`, and the most
+ * used dialog in the product broke it anyway: the picker in the new time entry
+ * dialog opened and shut, and the report read "clicking project doesn't do
+ * anything".
+ *
+ * A default nobody has to remember is worth more than a comment everybody can
+ * read. `Tray` deliberately does not provide this: it is `modal={false}`, traps
+ * nothing, and its body scrolls, so a portalled popover is right there.
+ */
+const InsideDialogContext = React.createContext(false);
+
+/** True when the calling component is rendered inside a modal Dialog. */
+export const useInsideDialog = () => React.useContext(InsideDialogContext);
+
 export function Dialog({ open, onOpenChange, children }: { open: boolean; onOpenChange: (v: boolean) => void; children: React.ReactNode }) {
   return <RDialog.Root open={open} onOpenChange={onOpenChange}>{children}</RDialog.Root>;
 }
@@ -370,17 +404,19 @@ export function DialogContent({
     <RDialog.Portal>
       <RDialog.Overlay className={dialogOverlayClass} />
       <RDialog.Content className={cn(dialogContentClass, widths[size], "max-h-[88vh] overflow-y-auto", className)}>
-        <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
-          <div>
-            <RDialog.Title className="text-lg font-semibold text-ink">{title}</RDialog.Title>
-            {description && <RDialog.Description className="mt-1 text-base text-ink-secondary">{description}</RDialog.Description>}
+        <InsideDialogContext.Provider value={true}>
+          <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-4">
+            <div>
+              <RDialog.Title className="text-lg font-semibold text-ink">{title}</RDialog.Title>
+              {description && <RDialog.Description className="mt-1 text-base text-ink-secondary">{description}</RDialog.Description>}
+            </div>
+            <RDialog.Close asChild>
+              <Button variant="ghost" size="icon-sm" aria-label="Close"><X className="size-4" /></Button>
+            </RDialog.Close>
           </div>
-          <RDialog.Close asChild>
-            <Button variant="ghost" size="icon-sm" aria-label="Close"><X className="size-4" /></Button>
-          </RDialog.Close>
-        </div>
-        <div className="px-5 py-4">{children}</div>
-        {footer && <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3">{footer}</div>}
+          <div className="px-5 py-4">{children}</div>
+          {footer && <div className="flex items-center justify-end gap-2 border-t border-border px-5 py-3">{footer}</div>}
+        </InsideDialogContext.Provider>
       </RDialog.Content>
     </RDialog.Portal>
   );
@@ -477,31 +513,39 @@ export const PopoverTrigger = RPopover.Trigger;
 export const PopoverAnchor = RPopover.Anchor;
 
 export function PopoverContent({
-  children, className, align = "start", sideOffset = 6, onOpenAutoFocus, portal = true,
+  children, className, align = "start", sideOffset = 6, onOpenAutoFocus, portal,
 }: {
   children: React.ReactNode; className?: string; align?: "start" | "center" | "end"; sideOffset?: number;
   onOpenAutoFocus?: (e: Event) => void;
   /**
-   * Whether to render in a portal at the document root.
+   * Whether to render in a portal at the document root. **Leave it unset.**
    *
-   * True is right almost everywhere: it escapes any `overflow: hidden` ancestor,
-   * which is what a popover inside a scrolling grid cell needs.
+   * Portalling is right almost everywhere: it escapes any `overflow: hidden`
+   * ancestor, which is what a popover inside a scrolling grid cell needs.
    *
-   * **False is required inside a Dialog.** A Dialog is modal, so it traps focus
-   * and blocks pointer events outside its own subtree. A portalled popover
-   * renders outside that subtree, so the dialog pulls focus straight back out
-   * and dismisses it: the picker opened, closed, and sent typing to the topbar
-   * search instead (TALLY-39).
+   * **It is wrong inside a modal Dialog.** The dialog traps focus and blocks
+   * pointer events outside its own subtree, so a portalled popover renders
+   * outside that subtree, is pulled straight back out, and dismisses itself:
+   * the picker opened, closed, and sent typing to the topbar search instead
+   * (TALLY-39).
+   *
+   * Unset, that decision is made here from `useInsideDialog`, and no caller has
+   * to know. Passing a boolean overrides it, which is for the case that has not
+   * happened yet; `tests/dialog-portal.test.ts` is what stops it being used to
+   * put the bug back.
    */
   portal?: boolean;
 }) {
+  const insideDialog = useInsideDialog();
+  const shouldPortal = portal ?? !insideDialog;
+
   const content = (
     <RPopover.Content align={align} sideOffset={sideOffset} onOpenAutoFocus={onOpenAutoFocus}
       className={cn(popoverClass, "p-0", className)}>
       {children}
     </RPopover.Content>
   );
-  return portal ? <RPopover.Portal>{content}</RPopover.Portal> : content;
+  return shouldPortal ? <RPopover.Portal>{content}</RPopover.Portal> : content;
 }
 
 /* ----------------------------------------------------- Overlays: Dropdown */

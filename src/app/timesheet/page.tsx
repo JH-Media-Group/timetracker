@@ -9,7 +9,8 @@ import { cn } from "@/lib/cn";
 import {
   addDays, formatDayLong, formatDuration, formatWeekRange, isoDate, startOfWeek, toDate,
 } from "@/lib/format";
-import {Button, Segmented, Select,
+import {
+  Button, Segmented, Select, Tooltip,
 } from "@/components/ui/primitives";
 import { PageBody, PageHeader, useUrlState } from "@/components/app/page-chrome";
 import { useApp } from "@/components/app/providers";
@@ -187,7 +188,7 @@ export default function TimesheetPage() {
             const total = dayTotals[key] ?? 0;
             const isWeekday = d.getDay() !== 0 && d.getDay() !== 6;
             const missing = isWeekday && total === 0 && d < api.TODAY;
-            return (
+            const day = (
               <button key={key} onClick={() => setDate(d)}
                 className={cn("flex flex-col items-start gap-0.5 bg-surface px-3 py-2.5 text-left transition-colors hover:bg-surface-hover",
                   isSel && "bg-nav-active")}>
@@ -197,7 +198,7 @@ export default function TimesheetPage() {
                 <span className={cn("flex items-center gap-1 text-md", isSel ? "font-semibold text-ink" : "text-ink-secondary")}>
                   {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"][(d.getDay() + 6) % 7]}
                   {isToday && !isSel && <span className="size-1 rounded-full bg-ink-tertiary" aria-hidden />}
-                  {missing && <span className="size-1.5 rounded-full bg-warning" title="No time tracked" aria-hidden />}
+                  {missing && <span className="size-1.5 rounded-full bg-warning" aria-hidden />}
                 </span>
                 <span className={cn("text-lg tabular-nums", total ? "font-semibold text-ink" : "text-ink-tertiary")}>
                   {formatDuration(total, settings.timeDisplay)}
@@ -205,6 +206,16 @@ export default function TimesheetPage() {
                 {isSel && <span className="mt-0.5 h-0.5 w-full rounded-full bg-accent" aria-hidden />}
               </button>
             );
+
+            /*
+              The warning dot carried a `title`, which meant the explanation was
+              behind a six pixel hover target that people were not finding. The
+              tooltip goes on the whole day instead, which is the thing being
+              rolled over.
+            */
+            return missing
+              ? <Tooltip key={key} content="No time tracked">{day}</Tooltip>
+              : day;
           })}
           <div className="flex flex-col items-end gap-0.5 bg-surface px-3 py-2">
             <span className="text-md text-ink-secondary">Week total</span>
