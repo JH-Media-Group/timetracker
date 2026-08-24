@@ -54,3 +54,6 @@ tsconfig.tsbuildinfo
 # Scratch copies made by review agents. Never part of the tree.
 .probe-*/
 scripts/.probe-*
+
+# Local deployment transfer artifacts.
+/.deploy-*.tar

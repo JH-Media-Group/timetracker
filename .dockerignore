@@ -39,3 +39,6 @@ design system
 .idea
 Thumbs.db
 .DS_Store
+
+# Local deployment transfer artifacts.
+.deploy-*.tar
