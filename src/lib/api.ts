@@ -1678,6 +1678,40 @@ export async function sendInvoice(
   return fromInvoice(await post<InvoiceWire>(`/invoices/${id}/send`, message));
 }
 
+/* ============================================================== API tokens */
+
+export interface ApiTokenView {
+  id: string;
+  label: string;
+  prefix: string;
+  scopes: string[];
+  lastUsedAt: string | null;
+  expiresAt: string | null;
+  revokedAt: string | null;
+  createdAt: string;
+}
+
+export interface CreatedApiTokenView extends ApiTokenView {
+  /** The raw token string. Shown once at creation and never again. */
+  token: string;
+}
+
+export async function listApiTokens(): Promise<ApiTokenView[]> {
+  return get<ApiTokenView[]>("/api-tokens");
+}
+
+export async function createApiToken(input: {
+  label: string;
+  scopes?: string[];
+  expiresInDays?: number;
+}): Promise<CreatedApiTokenView> {
+  return post<CreatedApiTokenView>("/api-tokens", input);
+}
+
+export async function revokeApiToken(id: ID): Promise<void> {
+  await del(`/api-tokens/${id}`);
+}
+
 /* ================================================================= reports */
 
 export interface ReportRow {

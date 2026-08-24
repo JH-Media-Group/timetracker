@@ -10,9 +10,9 @@
 
 import * as React from "react";
 import Link from "next/link";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Building2, Boxes, Download, KeyRound, Plug, Receipt, SlidersHorizontal, Users,
+  Building2, Boxes, Copy, Download, KeyRound, Plug, Plus, Receipt, SlidersHorizontal, Trash2, Users,
 } from "lucide-react";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
@@ -557,7 +557,162 @@ function SecuritySection() {
           and when. The log is append only and is kept for seven years.
         </p>
       </Card>
+
+      <ApiTokensCard />
     </div>
+  );
+}
+
+/* -------------------------------------------------------------- API tokens */
+
+function ApiTokensCard() {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [showCreate, setShowCreate] = React.useState(false);
+  const [newToken, setNewToken] = React.useState<string | null>(null);
+  const [label, setLabel] = React.useState("");
+
+  const { data: tokens, isLoading } = useQuery({
+    queryKey: ["api-tokens"],
+    queryFn: api.listApiTokens,
+  });
+
+  const create = useMutation({
+    mutationFn: api.createApiToken,
+    onSuccess: (result) => {
+      setNewToken(result.token);
+      setLabel("");
+      setShowCreate(false);
+      qc.invalidateQueries({ queryKey: ["api-tokens"] });
+    },
+    onError: (e) =>
+      toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not create token." }),
+  });
+
+  const revoke = useMutation({
+    mutationFn: api.revokeApiToken,
+    onSuccess: () => {
+      toast.push({ tone: "neutral", title: "Token revoked." });
+      qc.invalidateQueries({ queryKey: ["api-tokens"] });
+    },
+    onError: (e) =>
+      toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not revoke token." }),
+  });
+
+  const copyToken = () => {
+    if (!newToken) return;
+    navigator.clipboard.writeText(newToken).then(() => {
+      toast.push({ tone: "neutral", title: "Copied to clipboard." });
+    });
+  };
+
+  const active = tokens?.filter((t) => !t.revokedAt) ?? [];
+  const revoked = tokens?.filter((t) => t.revokedAt) ?? [];
+
+  return (
+    <Card>
+      <div className="flex items-center justify-between">
+        <SectionTitle>API tokens</SectionTitle>
+        <Button variant="ghost" size="sm" onClick={() => { setShowCreate(true); setNewToken(null); }}>
+          <Plus className="size-3.5" />Create token
+        </Button>
+      </div>
+      <p className="mb-3 text-base text-ink-secondary">
+        Tokens let scripts and MCP clients act as you. Each token has a 90-day
+        default expiry and can be revoked at any time.
+      </p>
+
+      {newToken && (
+        <div className="mb-3 rounded-md border border-tint-amber/40 bg-tint-amber/5 p-3">
+          <p className="mb-1 text-sm font-medium text-ink-primary">
+            Copy this token now. It will not be shown again.
+          </p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 break-all rounded bg-surface-secondary px-2 py-1 text-xs">
+              {newToken}
+            </code>
+            <Button variant="ghost" size="sm" onClick={copyToken}>
+              <Copy className="size-3.5" />
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {showCreate && (
+        <div className="mb-3 flex items-end gap-2">
+          <Field label="Label" className="flex-1">
+            <Input
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="e.g. Claude Desktop"
+            />
+          </Field>
+          <Button
+            loading={create.isPending}
+            onClick={() => label.trim() && create.mutate({ label: label.trim() })}
+          >
+            Create
+          </Button>
+          <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
+        </div>
+      )}
+
+      {isLoading && <Spinner className="size-4" />}
+
+      {active.length > 0 && (
+        <div className="flex flex-col gap-1">
+          {active.map((t) => (
+            <div key={t.id} className="flex items-center justify-between rounded px-2 py-1.5 hover:bg-surface-secondary">
+              <div>
+                <span className="text-sm font-medium text-ink-primary">{t.label}</span>
+                <span className="ml-2 text-xs text-ink-tertiary">tally_{t.prefix}_...</span>
+                {t.lastUsedAt && (
+                  <span className="ml-2 text-xs text-ink-tertiary">
+                    Last used {new Date(t.lastUsedAt).toLocaleDateString()}
+                  </span>
+                )}
+                {t.expiresAt && (
+                  <span className="ml-2 text-xs text-ink-tertiary">
+                    Expires {new Date(t.expiresAt).toLocaleDateString()}
+                  </span>
+                )}
+              </div>
+              <Button
+                variant="danger-ghost"
+                size="sm"
+                loading={revoke.isPending}
+                onClick={() => {
+                  if (window.confirm(`Revoke "${t.label}"? Any script using it will stop working immediately.`)) {
+                    revoke.mutate(t.id);
+                  }
+                }}
+              >
+                <Trash2 className="size-3.5" />
+              </Button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {revoked.length > 0 && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs text-ink-tertiary">
+            {revoked.length} revoked token{revoked.length === 1 ? "" : "s"}
+          </summary>
+          <div className="mt-1 flex flex-col gap-1">
+            {revoked.map((t) => (
+              <div key={t.id} className="flex items-center gap-2 px-2 py-1 text-xs text-ink-tertiary line-through">
+                {t.label} (tally_{t.prefix}_...)
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      {!isLoading && active.length === 0 && !showCreate && (
+        <p className="text-sm text-ink-tertiary">No active tokens.</p>
+      )}
+    </Card>
   );
 }
 

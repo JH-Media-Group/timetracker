@@ -27,6 +27,7 @@
     "db:invariants": "tsx scripts/invariants.mts",
     "jobs:recurring": "tsx scripts/recurring.mts",
     "jobs:mail": "tsx scripts/mail.mts",
+    "mcp": "tsx src/mcp/index.ts",
     "harvest:import": "tsx scripts/harvest-import.mts",
     "harvest:reconcile": "tsx scripts/harvest-reconcile.mts",
     "sweep": "tsx scripts/sweep.mts",
@@ -59,7 +60,8 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "tailwind-merge": "^3.0.1",
-    "zod": "^4.4.3"
+    "zod": "^4.4.3",
+    "@modelcontextprotocol/sdk": "^1.12.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.0.6",

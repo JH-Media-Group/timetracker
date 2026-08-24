@@ -38,6 +38,7 @@ import {
   type DomainEvent,
 } from "./ctx";
 import { resolveSession } from "./auth/session";
+import { resolveBearer } from "./auth/api-key";
 import { enforce, type RouteClass } from "./auth/rate-limit";
 import { db } from "./db/client";
 import * as s from "./db/schema";
@@ -113,11 +114,18 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
       // never answers for another origin. That is already two locks. This is
       // the third, and it is the only one that does not depend on a browser
       // getting the first two right.
-      if (mutating && !options.public) assertSameOrigin(req);
+      // API tokens are not cookies. CSRF is a browser concern and does not
+      // apply to bearer-authenticated requests from an MCP client.
+      if (mutating && !options.public && ctx.actor.kind !== "api") assertSameOrigin(req);
 
       // Rate limit before anything expensive happens.
       const bucket = options.rateLimit ?? (mutating ? "write" : "read");
-      const actorKey = ctx.actor.kind === "api" ? `ip:${clientIp(req) ?? "unknown"}` : `user:${ctx.actor.userId}`;
+      // Authenticated API tokens key on the user. The publicCtx "api" actor
+      // (no real user) still keys on IP.
+      const actorKey =
+        ctx.actor.kind === "api" && ctx.actor.userId === "00000000-0000-0000-0000-000000000000"
+          ? `ip:${clientIp(req) ?? "unknown"}`
+          : `user:${ctx.actor.userId}`;
       await enforce(bucket, actorKey);
 
       if (options.capability) assertCan(ctx, options.capability);
@@ -275,6 +283,27 @@ const isEnvelope = <T,>(v: unknown): v is Envelope<T> =>
 /* ------------------------------------------------------------- session */
 
 async function authenticatedCtx(req: NextRequest, requestId: string): Promise<Ctx> {
+  // Bearer token takes precedence: if the header is present and valid, use it.
+  // If it is present and invalid, fall through to session auth rather than
+  // refusing, because a badly formed Authorization header should not lock out
+  // a browser that happens to send one.
+  const authHeader = req.headers.get("authorization");
+  if (authHeader) {
+    const resolved = await resolveBearer(authHeader);
+    if (resolved) {
+      return createCtx({
+        actor: resolved.actor,
+        request: {
+          requestId,
+          ip: clientIp(req),
+          // The token prefix in the user-agent slot, so audit rows record which
+          // token made the change without a schema migration.
+          userAgent: `api-token/${resolved.prefix}`,
+        },
+      });
+    }
+  }
+
   const actor = await resolveSession(req);
   if (!actor) throw unauthenticated();
   return createCtx({

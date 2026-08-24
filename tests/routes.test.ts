@@ -123,6 +123,9 @@ const EXEMPT: Record<string, string> = {
     "service: gated by rates:manage inside, plus rates:view_cost to remove a cost " +
     "rate, and 404 rather than 403 for one the actor may not see",
 
+  "api-tokens": "self-service: every person manages their own tokens, no capability needed",
+  "api-tokens/[id]": "self-service: revocation is scoped to the caller's own tokens",
+
   // Outside v1. These are infrastructure endpoints, not part of the API the
   // app calls, and they are deliberately unauthenticated so that a proxy and a
   // container runtime can poll them before anybody has a session.
