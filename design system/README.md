@@ -115,12 +115,12 @@ Chrome is neutral. Colour carries exactly four meanings:
 
 | Colour | Means |
 |---|---|
-| `--live` orange | a timer is running |
+| `--live` green | a timer is running |
 | `--info` blue | billable, and the sequential ramp for magnitude |
 | success / warning / danger | budget health, invoice state, approval state, always with a word |
 | `--viz-*` | chart series identity only |
 
-Primary buttons use `--accent`, the near-black/near-white inverse of the background, **not** a brand hue. That is deliberate. It keeps orange meaning exactly one thing, and in a time tracker the running state is the one thing that must never be ambiguous.
+Primary buttons use `--accent`, the near-black/near-white inverse of the background, **not** a brand hue. The dedicated green `--live` family follows the familiar active/running convention while remaining distinct from static success messages.
 
 ---
 

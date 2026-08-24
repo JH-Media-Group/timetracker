@@ -10,19 +10,37 @@
  */
 
 import * as React from "react";
+import { Info } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { Badge, Card } from "@/components/ui/primitives";
+import { Badge, Card, Tooltip } from "@/components/ui/primitives";
 import type { InvoiceState } from "@/lib/types";
 
+const KPI_ICON_TONE = {
+  neutral: "border-border bg-bg-muted text-ink-secondary",
+  info: "border-info-border bg-info-bg text-info",
+  success: "border-success-border bg-success-bg text-success",
+  warning: "border-warning-border bg-warning-bg text-warning",
+  danger: "border-danger-border bg-danger-bg text-danger",
+  billable: "border-info-border bg-info-bg text-billable",
+} as const;
+
 export function Kpi({
-  label, value, children, danger, muted,
+  label, value, children, danger, muted, icon, tone = "neutral",
 }: {
   label: React.ReactNode; value: string; children?: React.ReactNode;
-  danger?: boolean; muted?: boolean;
+  danger?: boolean; muted?: boolean; icon?: React.ReactNode;
+  tone?: keyof typeof KPI_ICON_TONE;
 }) {
   return (
     <Card className="flex flex-col gap-1">
-      <div className="text-base text-ink-secondary">{label}</div>
+      <div className="flex items-center gap-2 text-base text-ink-secondary">
+        {icon && (
+          <span className={cn("grid size-7 shrink-0 place-items-center rounded-md border", KPI_ICON_TONE[tone])} aria-hidden>
+            {icon}
+          </span>
+        )}
+        {label}
+      </div>
       <div className={cn(
         "text-3xl font-semibold tracking-(--ls-tighter)",
         danger ? "text-danger" : muted ? "text-ink-tertiary" : "text-ink"
@@ -31,6 +49,23 @@ export function Kpi({
       </div>
       {children}
     </Card>
+  );
+}
+
+export function KpiHelpLabel({ label, help }: { label: string; help: string }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      {label}
+      <Tooltip content={help}>
+        <button
+          type="button"
+          aria-label={`What does ${label.toLowerCase()} mean?`}
+          className="grid size-5 place-items-center rounded-full text-ink-tertiary hover:bg-info-bg hover:text-info focus-visible:outline-2 focus-visible:outline-focus focus-visible:outline-offset-1"
+        >
+          <Info className="size-3.5" />
+        </button>
+      </Tooltip>
+    </span>
   );
 }
 

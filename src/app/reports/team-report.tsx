@@ -17,11 +17,12 @@ import { cn } from "@/lib/cn";
 import { formatDuration, formatMoney, formatPercent } from "@/lib/format";
 import { utilization } from "@/lib/derive";
 import type { TimeEntry } from "@/lib/types";
+import { CircleAlert, Clock, Gauge, PieChart } from "lucide-react";
 import { Avatar, Badge, Card, Meter, Segmented } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { DataGrid } from "@/components/app/data-grid";
 import { BarChart } from "@/components/app/charts";
-import { Kpi } from "@/components/app/kpi";
+import { Kpi, KpiHelpLabel } from "@/components/app/kpi";
 import { useApp, useCan } from "@/components/app/providers";
 import { useUrlState, type Period } from "@/components/app/page-chrome";
 import type { GridRow } from "@/components/ui/grid";
@@ -151,16 +152,21 @@ export function TeamReport({ period }: { period: Period }) {
   return (
     <>
       <div className="mb-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Kpi label="Utilization" value={formatPercent(totals.util)}>
+        <Kpi icon={<Gauge className="size-4" />} tone={totals.util > 1.15 ? "danger" : "success"} label="Utilization" value={formatPercent(totals.util)}>
           <div className="mt-2">
             <Meter segments={[{ value: Math.min(totals.util, 1), tone: totals.util >= 0.75 ? "ok" : "near" }]} />
           </div>
         </Kpi>
-        <Kpi label="Tracked" value={formatDuration(totals.tracked)}>
+        <Kpi icon={<Clock className="size-4" />} tone="info" label="Tracked" value={formatDuration(totals.tracked)}>
           <div className="mt-2 text-base text-ink-secondary">of {formatDuration(totals.capacity)} capacity</div>
         </Kpi>
-        <Kpi label="Billable share" value={formatPercent(totals.billableShare)} />
-        <Kpi label="Attention" value={`${over + under}`} muted={over + under === 0}>
+        <Kpi
+          icon={<PieChart className="size-4" />}
+          tone="billable"
+          label={<KpiHelpLabel label="Billable share" help="The percentage of tracked time in this period that is billable to clients." />}
+          value={formatPercent(totals.billableShare)}
+        />
+        <Kpi icon={<CircleAlert className="size-4" />} tone={over + under ? "warning" : "neutral"} label="Attention" value={`${over + under}`} muted={over + under === 0}>
           <div className="mt-2 text-base text-ink-secondary">
             {over > 0 && `${over} over capacity`}
             {over > 0 && under > 0 && ", "}

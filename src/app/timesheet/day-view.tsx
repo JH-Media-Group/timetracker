@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ChevronDown, Clock, Copy, Lock, MoreHorizontal, Play } from "lucide-react";
+import { ChevronDown, Clock, Copy, Lock, MoreHorizontal, Play, Square } from "lucide-react";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { entryRowVariants } from "@/components/ui/recipes";
@@ -128,7 +128,7 @@ export function DayView({ date, userId, entries, loading }: {
           <Menu trigger={<Button variant="secondary" size="icon" aria-label="Copy options" disabled={!source}><ChevronDown className="size-4" /></Button>}>
             <MenuItem onSelect={() => copy.mutate(true)}>Copy with durations</MenuItem>
           </Menu>
-          <Button variant="primary" onClick={() => entry.open({ spentOn: date, userId })}>Add your first entry</Button>
+          <Button className="ml-auto" variant="primary" onClick={() => entry.open({ spentOn: date, userId })}>Add your first entry</Button>
         </div>
       </div>
     );
@@ -198,17 +198,19 @@ function EntryRow({ entry, expanded, onToggle }: { entry: TimeEntry; expanded: b
   return (
     <div className={cn("border-b border-border last:border-b-0")}>
       <div className={entryRowVariants({ state: isRunning ? "running" : locked ? "locked" : "default" })}>
-        <div className="w-[84px] shrink-0 text-md text-ink-secondary">
-          {entry.startedAt ? (
-            <>
-              <div className="font-medium text-ink">{formatClockTime(minutesOfDay(entry.startedAt, zone))}</div>
-              <div className="text-base">
-                {isRunning
-                  ? <span className="font-medium text-live">running</span>
-                  : entry.endedAt ? formatClockTime(minutesOfDay(entry.endedAt, zone)) : "—"}
-              </div>
-            </>
-          ) : <div className="text-ink-tertiary">—</div>}
+        <div className="w-[96px] shrink-0 text-md text-ink-secondary">
+          <div className="flex items-center gap-1.5 font-medium text-ink">
+            <Play className="size-3 fill-current text-success" aria-hidden />
+            <span>{entry.startedAt ? formatClockTime(minutesOfDay(entry.startedAt, zone)) : "-"}</span>
+          </div>
+          <div className={cn("flex items-center gap-1.5 text-base", isRunning && "font-medium text-live")}>
+            <Square className={cn("size-3", isRunning ? "fill-current text-live" : "text-ink-tertiary")} aria-hidden />
+            <span>
+              {isRunning
+                ? "running"
+                : entry.endedAt ? formatClockTime(minutesOfDay(entry.endedAt, zone)) : "-"}
+            </span>
+          </div>
         </div>
 
         <button className="min-w-0 flex-1 text-left" onClick={onToggle} aria-expanded={expanded}>

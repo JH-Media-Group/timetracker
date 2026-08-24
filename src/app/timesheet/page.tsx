@@ -140,42 +140,44 @@ export default function TimesheetPage() {
         )}
 
         <div className="mb-4 flex flex-wrap items-center gap-2">
-          <Button variant="primary" size="icon" aria-label="New entry"
+          <Button variant="primary" aria-label="New entry"
             onClick={() => entry.open({ spentOn: dateStr, userId })}>
             <Plus className="size-4" />
+            New entry
           </Button>
-          <div className="flex items-center gap-1">
-            <Button variant="secondary" size="icon-sm" aria-label="Previous" onClick={() => step(-1)}><ChevronLeft className="size-4" /></Button>
-            <span className="flex h-8 items-center gap-2 rounded-md border border-border bg-surface px-3 text-base">
-              <CalIcon className="size-3.5 text-ink-tertiary" aria-hidden />
-              {view === "day"
-                ? <>{isoDate(date) === isoDate(api.TODAY) && <span className="font-medium">Today</span>}<span className={isoDate(date) === isoDate(api.TODAY) ? "text-ink-secondary" : "font-medium"}>{formatDayLong(date)}</span></>
-                : <span className="font-medium">{formatWeekRange(weekStart)}</span>}
-            </span>
-            <Button variant="secondary" size="icon-sm" aria-label="Next" onClick={() => step(1)}><ChevronRight className="size-4" /></Button>
+          <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
+            {/*
+              Filter the week to one project (TALLY-16). Only offered when there
+              is more than one to choose between, because a dropdown with a single
+              option is furniture.
+            */}
+            {weekProjects.length > 1 && (
+              <Select
+                aria-label="Filter this week by project"
+                value={projectFilter}
+                onChange={(e) => setProjectFilter(e.target.value)}
+                className="w-[230px]"
+              >
+                <option value="">All projects</option>
+                {weekProjects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </Select>
+            )}
+            {isoDate(date) !== isoDate(api.TODAY) && (
+              <button className="text-base text-link underline" onClick={() => setDate(api.TODAY)}>Return to today</button>
+            )}
+            <div className="flex items-center gap-1">
+              <Button variant="secondary" size="icon-sm" aria-label="Previous" onClick={() => step(-1)}><ChevronLeft className="size-4" /></Button>
+              <span className="flex h-8 items-center gap-2 rounded-md border border-border bg-surface px-3 text-base">
+                <CalIcon className="size-3.5 text-ink-tertiary" aria-hidden />
+                {view === "day"
+                  ? <>{isoDate(date) === isoDate(api.TODAY) && <span className="font-medium">Today</span>}<span className={isoDate(date) === isoDate(api.TODAY) ? "text-ink-secondary" : "font-medium"}>{formatDayLong(date)}</span></>
+                  : <span className="font-medium">{formatWeekRange(weekStart)}</span>}
+              </span>
+              <Button variant="secondary" size="icon-sm" aria-label="Next" onClick={() => step(1)}><ChevronRight className="size-4" /></Button>
+            </div>
           </div>
-          {isoDate(date) !== isoDate(api.TODAY) && (
-            <button className="text-base text-link underline" onClick={() => setDate(api.TODAY)}>Return to today</button>
-          )}
-
-          {/*
-            Filter the week to one project (TALLY-16). Only offered when there
-            is more than one to choose between, because a dropdown with a single
-            option is furniture.
-          */}
-          {weekProjects.length > 1 && (
-            <Select
-              aria-label="Filter this week by project"
-              value={projectFilter}
-              onChange={(e) => setProjectFilter(e.target.value)}
-              className="ml-auto w-[230px]"
-            >
-              <option value="">All projects</option>
-              {weekProjects.map((p) => (
-                <option key={p.id} value={p.id}>{p.name}</option>
-              ))}
-            </Select>
-          )}
         </div>
 
         {/* Week strip */}

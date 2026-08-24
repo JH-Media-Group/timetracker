@@ -14,11 +14,11 @@ import { useQuery } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
 import * as api from "@/lib/api";
 import { formatDuration, formatMoney, formatPercent, toDate } from "@/lib/format";
-import { X } from "lucide-react";
+import { BriefcaseBusiness, CircleDollarSign, Clock, ListTree, PieChart, X } from "lucide-react";
 import { Badge, Card, Meter, Segmented, Select } from "@/components/ui/primitives";
 import { DataGrid } from "@/components/app/data-grid";
 import { StackedBarChart, Legend } from "@/components/app/charts";
-import { Kpi } from "@/components/app/kpi";
+import { Kpi, KpiHelpLabel } from "@/components/app/kpi";
 import { useApp, useCan } from "@/components/app/providers";
 import { useUrlState, type Period } from "@/components/app/page-chrome";
 import type { GridRow } from "@/components/ui/grid";
@@ -148,8 +148,8 @@ export function TimeReport({ period }: { period: Period }) {
   return (
     <>
       <div className="mb-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <Kpi label="Total hours" value={formatDuration(totals.total)} />
-        <Kpi label="Billable hours" value={formatDuration(totals.billable)}>
+        <Kpi icon={<Clock className="size-4" />} tone="info" label="Total hours" value={formatDuration(totals.total)} />
+        <Kpi icon={<BriefcaseBusiness className="size-4" />} tone="billable" label="Billable hours" value={formatDuration(totals.billable)}>
           <div className="mt-2">
             <Meter segments={[
               { value: totals.total ? totals.billable / totals.total : 0, tone: "billable" },
@@ -157,10 +157,17 @@ export function TimeReport({ period }: { period: Period }) {
             ]} />
           </div>
         </Kpi>
-        <Kpi label="Billable share" value={formatPercent(totals.total ? totals.billable / totals.total : 0)} />
+        <Kpi
+          icon={<PieChart className="size-4" />}
+          tone="billable"
+          label={<KpiHelpLabel label="Billable share" help="The percentage of tracked time in this period that is billable to clients." />}
+          value={formatPercent(totals.total ? totals.billable / totals.total : 0)}
+        />
         {can("rates:view_billable")
-          ? <Kpi label="If billed hourly" value={formatMoney(totals.amount)} />
+          ? <Kpi icon={<CircleDollarSign className="size-4" />} tone="warning" label="If billed hourly" value={formatMoney(totals.amount)} />
           : <Kpi
+              icon={<ListTree className="size-4" />}
+              tone="info"
               label={groupBy === "client" ? "Clients" : groupBy === "project" ? "Projects" : groupBy === "task" ? "Tasks" : "People"}
               value={String(rows.length)}
             />}

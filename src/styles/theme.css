@@ -228,7 +228,7 @@
 }
 
 /* Reduced motion kills the pulse entirely rather than slowing it. The dot stays
-   solid, which still reads as "running" because it is orange and it is there. */
+   solid, which still reads as "running" because it is green and it is there. */
 @media (prefers-reduced-motion: reduce) {
   @keyframes pulse-live { 0%, 100% { box-shadow: none; } }
   @keyframes shimmer    { from, to { background-position: 0 0; } }

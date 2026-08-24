@@ -115,9 +115,9 @@ The token set is lifted directly from `visual-debugger/app.css` (the Toado desig
   --info:    #2563EB;  --info-bg:    #EFF6FF;  --info-border:    #BFDBFE;
 
   /* Running timer (Tally-specific, replaces visual-debugger's --mcp slot) */
-  --live:        #EA580C;
-  --live-bg:     #FFF7ED;
-  --live-border: #FED7AA;
+  --live:        #16A34A;
+  --live-bg:     #F0FDF4;
+  --live-border: #BBF7D0;
 
   /* Spacing */
   --sp-1: 4px;  --sp-2: 8px;  --sp-3: 12px; --sp-4: 16px;
@@ -166,7 +166,7 @@ The token set is lifted directly from `visual-debugger/app.css` (the Toado desig
   --warning: #FBBF24; --warning-bg: rgba(245,158,11,0.12); --warning-border: rgba(245,158,11,0.35);
   --danger:  #F87171; --danger-bg:  rgba(239,68,68,0.12);  --danger-border:  rgba(239,68,68,0.35);
   --info:    #60A5FA; --info-bg:    rgba(59,130,246,0.12); --info-border:    rgba(59,130,246,0.35);
-  --live:    #FB923C; --live-bg:    rgba(234,88,12,0.14);  --live-border:    rgba(234,88,12,0.38);
+  --live:    #4ADE80; --live-bg:    rgba(34,197,94,0.14);  --live-border:    rgba(34,197,94,0.38);
 
   --sh-xs: 0 1px 2px rgba(0,0,0,0.3);
   --sh-sm: 0 1px 3px rgba(0,0,0,0.4), 0 1px 2px rgba(0,0,0,0.3);
@@ -180,12 +180,12 @@ The token set is lifted directly from `visual-debugger/app.css` (the Toado desig
 
 | Colour | Means |
 |---|---|
-| `--live` orange | A timer is running, right now, somewhere. |
+| `--live` green | A timer is running, right now, somewhere. |
 | `--info` blue | Billable. Also the sequential ramp for magnitude bars. |
 | `--success` / `--warning` / `--danger` | Budget health, invoice status, approval status. Always paired with an icon and a label. |
 | Categorical series palette (§2.4) | Chart series identity only. Never chrome, never status. |
 
-Primary buttons are `--accent` (near-black in light, near-white in dark), *not* a brand colour. This is deliberate: it keeps orange exclusively meaning "running", which is the single most important state in a time tracker.
+Primary buttons are `--accent` (near-black in light, near-white in dark), *not* a brand colour. The dedicated green `--live` family follows the familiar active/running convention and remains reserved for the single most important state in a time tracker.
 
 ### 2.2 Theme mechanics
 
