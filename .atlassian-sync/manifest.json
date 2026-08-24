@@ -258,11 +258,66 @@
       "title": "Prerequisite: the droplet has no scheduled anything, so add timers and a nightly pg_dump",
       "lastState": "Done",
       "parent": "TALLY-60"
+    },
+    "testing-round-three": {
+      "key": "TALLY-78",
+      "type": "Epic",
+      "title": "Testing round three: Jason's walkthrough, 2026-08-24",
+      "lastState": "Done"
+    },
+    "rates-editor-comprehension": {
+      "key": "TALLY-79",
+      "type": "Task",
+      "title": "Rates editor does not explain itself, and hides the current rates",
+      "lastState": "Done",
+      "parent": "TALLY-78"
+    },
+    "project-money-inputs": {
+      "key": "TALLY-80",
+      "type": "Task",
+      "title": "Money inputs are right-aligned and unformatted on the project editor",
+      "lastState": "Done",
+      "parent": "TALLY-78"
+    },
+    "dark-theme-switches": {
+      "key": "TALLY-81",
+      "type": "Task",
+      "title": "Module toggles are invisible in dark theme: white thumb on a light track",
+      "lastState": "Done",
+      "parent": "TALLY-78"
+    },
+    "project-new-invoice": {
+      "key": "TALLY-82",
+      "type": "Task",
+      "title": "New Invoice from a project lands on the invoice list instead of a draft with the client chosen",
+      "lastState": "Done",
+      "parent": "TALLY-78"
+    },
+    "team-avatar-initials": {
+      "key": "TALLY-83",
+      "type": "Task",
+      "title": "Team page avatar initials sit low in the circle",
+      "lastState": "Done",
+      "parent": "TALLY-78"
+    },
+    "permission-profile-tag-alignment": {
+      "key": "TALLY-84",
+      "type": "Task",
+      "title": "Permission profile tags are not vertically centred against their select",
+      "lastState": "Done",
+      "parent": "TALLY-78"
+    },
+    "new-project-default-tasks": {
+      "key": "TALLY-85",
+      "type": "Task",
+      "title": "Confirm how default tasks are chosen for a new project (unconfirmed)",
+      "lastState": "Done",
+      "parent": "TALLY-78"
     }
   },
   "session": {
     "handoffPageId": "2969501697",
-    "handoffRemoteVersion": 4,
-    "lastEntryAt": "2026-08-24T04:08:36Z"
+    "handoffRemoteVersion": 5,
+    "lastEntryAt": "2026-08-24T05:30:00Z"
   }
 }
