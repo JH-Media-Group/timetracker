@@ -196,6 +196,8 @@ Four rules the `<Chart>` wrapper enforces so no chart can opt out:
 
 **Numbers in columns get tabular figures.** `base.css` applies this to `td`, `th`, `time`, and anything marked `.tabular`. Standalone hero figures keep proportional figures, which are better spaced. Without this, a ticking timer makes its row jitter every second.
 
+**Money follows its context.** A money input in a form is left-aligned against its currency prefix and formats to grouped, two-decimal dollars on blur. Money in a grid stays right-aligned with tabular figures so values can be compared down the column.
+
 **Every interactive recipe ships its own focus-visible and disabled state.** A recipe that omits them is incomplete, not minimal.
 
 **Motion is `transform` and `opacity` only.** Never height, never top. Durations come from the three tokens, and `prefers-reduced-motion` collapses all three to 1ms at the token layer.

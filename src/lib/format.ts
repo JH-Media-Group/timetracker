@@ -28,6 +28,28 @@ export function formatMoneyShort(cents: number): string {
   return `$${Math.round(v)}`;
 }
 
+/**
+ * Tidy a money amount somebody typed into a form field, for display on blur.
+ *
+ * Not `formatMoney`, which prepends a currency symbol. These fields sit inside
+ * an `Affix` that already shows the "$", so the symbol would appear twice.
+ *
+ * Anything unparseable comes back untouched, so a half-typed value is never
+ * destroyed mid-edit, and an empty field stays empty rather than becoming 0.00.
+ * `parseMoney` strips separators, so re-formatting an already-formatted value
+ * is stable.
+ */
+export function formatMoneyInput(input: string): string {
+  const trimmed = input.trim();
+  if (!trimmed) return "";
+  const cents = parseMoney(trimmed);
+  if (cents == null) return input;
+  return (cents / 100).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+}
+
 export function parseMoney(input: string): number | null {
   const cleaned = input.replace(/[^0-9.\-]/g, "");
   if (!cleaned || cleaned === "-" || cleaned === ".") return null;

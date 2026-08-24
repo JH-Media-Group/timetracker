@@ -350,3 +350,30 @@ describe("em dashes in the code", () => {
     ).toEqual([]);
   });
 });
+
+/* --------------------------------------------------------- UI colour tokens */
+
+describe("UI colour tokens", () => {
+  const files = tracked.filter(
+    (path) => path.startsWith("src/components/ui/") && /\.(ts|tsx)$/.test(path)
+  );
+
+  it("has UI source files to check", () => {
+    expect(files.length).toBeGreaterThan(2);
+  });
+
+  it("does not use literal Tailwind background colours", () => {
+    const offenders = files.flatMap((path) =>
+      read(path)
+        .split("\n")
+        .map((text, index) => ({ path, line: index + 1, text }))
+        .filter(({ text }) => /\bbg-(?:white|black)\b|\bbg-\[#[0-9a-f]+\]/i.test(text))
+        .map(({ path, line, text }) => `  ${path}:${line}  ${text.trim()}`)
+    );
+
+    expect(
+      offenders,
+      "UI backgrounds use semantic design tokens, not literal colours:\n" + offenders.join("\n")
+    ).toEqual([]);
+  });
+});

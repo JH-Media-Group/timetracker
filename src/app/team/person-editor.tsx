@@ -320,14 +320,18 @@ function PersonForm({ existing }: { existing: User }) {
                   ))}
                 </Select>
               </Field>
-              <div className="flex items-end gap-2 pb-1">
-                <Badge variant={existing.employmentType === "contractor" ? "warning" : "neutral"}>
-                  {existing.employmentType === "contractor" ? "Contractor" : "Employee"}
-                </Badge>
-                <Badge variant={existing.isOwner ? "info" : "neutral"}>
-                  {existing.isOwner ? "Owner" : PROFILE_LABEL[existing.profile]}
-                </Badge>
-              </div>
+              {/* The field row and control-height wrapper align the badges to
+                  the select without a hand-tuned offset. */}
+              <Field label="Current access">
+                <div className="flex h-9 items-center gap-2">
+                  <Badge variant={existing.employmentType === "contractor" ? "warning" : "neutral"}>
+                    {existing.employmentType === "contractor" ? "Contractor" : "Employee"}
+                  </Badge>
+                  <Badge variant={existing.isOwner ? "info" : "neutral"}>
+                    {existing.isOwner ? "Owner" : PROFILE_LABEL[existing.profile]}
+                  </Badge>
+                </div>
+              </Field>
             </div>
           </Card>
 

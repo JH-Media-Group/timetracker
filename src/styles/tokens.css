@@ -283,6 +283,7 @@
   --fs-3xl:  32px;   /* KPI values */
   --fs-4xl:  40px;   /* hero figures */
 
+  --lh-none:    1;
   --lh-tight:   1.25;
   --lh-normal:  1.5;
   --lh-relaxed: 1.65;

@@ -197,7 +197,7 @@ export default function ProjectDetailPage() {
             )}
             <Menu trigger={<Button variant="secondary">Actions<ChevronDown className="size-3.5" /></Button>}>
               <MenuItem onSelect={() => router.push(`/reports?by=project&project=${id}`)}>View time report</MenuItem>
-              <MenuItem onSelect={() => router.push(`/invoices?project=${id}`)}>New invoice</MenuItem>
+              <MenuItem onSelect={() => router.push(`/invoices/new?client=${project.clientId}`)}>New invoice</MenuItem>
               <MenuItem onSelect={() => pin.mutate()}>{pinned ? "Unpin" : "Pin"}</MenuItem>
               <MenuSeparator />
               <MenuItem
@@ -337,7 +337,7 @@ export default function ProjectDetailPage() {
             {(summary?.overbilledCents ?? 0) > 0 && (
               <KpiRow label="Billed ahead" value={formatMoney(summary!.overbilledCents)} />
             )}
-            <Link href={`/invoices?project=${id}`} className="text-base text-link underline">New invoice</Link>
+            <Link href={`/invoices/new?client=${project.clientId}`} className="text-base text-link underline">New invoice</Link>
           </Kpi>
           )}
         </div>

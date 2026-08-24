@@ -26,11 +26,11 @@
 import * as React from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import * as api from "@/lib/api";
-import { Button, Card, Field, Input, Select, Spinner } from "@/components/ui/primitives";
+import { Button, Card, Field, Input, Spinner } from "@/components/ui/primitives";
 import { SectionTitle } from "@/components/app/kpi";
 import { useApp, useCan } from "@/components/app/providers";
 import { useToast } from "@/components/ui/toast";
-import { formatMoney } from "@/lib/format";
+import { formatMoney, formatMoneyInput, parseMoney } from "@/lib/format";
 import { dayIn } from "@/domain/calendar";
 
 /**
@@ -52,6 +52,23 @@ function describeRange(rate: api.Rate): string {
   return `${rate.startsOn} to ${rate.endsOn}`;
 }
 
+type RateKind = "billable" | "cost";
+
+/**
+ * The form accepts plain or grouped decimal dollars. The shared parser is
+ * intentionally permissive for imported values, so the form validates the
+ * human-facing shape before asking it for cents.
+ */
+function editableAmount(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^(?:\d{1,7}|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?$/.test(trimmed)) return null;
+  return parseMoney(trimmed);
+}
+
+function amountFor(rate: api.Rate | null): string {
+  return rate ? formatMoneyInput(String(rate.amountCents / 100)) : "";
+}
+
 export function RatesPanel({ userId, editable = false }: { userId: string; editable?: boolean }) {
   const can = useCan();
   const { settings } = useApp();
@@ -68,31 +85,74 @@ export function RatesPanel({ userId, editable = false }: { userId: string; edita
     enabled: maySeeAny,
   });
 
-  const [kind, setKind] = React.useState<"billable" | "cost">("billable");
-  const [amount, setAmount] = React.useState("");
+  const [draft, setDraft] = React.useState<Record<RateKind, string>>({ billable: "", cost: "" });
+  const [dirty, setDirty] = React.useState<Record<RateKind, boolean>>({ billable: false, cost: false });
   const [from, setFrom] = React.useState(() => todayIn(settings.timezone));
 
+  const now = todayIn(settings.timezone);
+  const inForce = (kind: RateKind) =>
+    (rates ?? []).find(
+      (rate) =>
+        rate.kind === kind &&
+        (!rate.startsOn || rate.startsOn <= now) &&
+        (!rate.endsOn || rate.endsOn >= now)
+    ) ?? null;
+
+  const current = {
+    billable: inForce("billable"),
+    cost: inForce("cost"),
+  };
+  const values = {
+    billable: dirty.billable ? draft.billable : amountFor(current.billable),
+    cost: dirty.cost ? draft.cost : amountFor(current.cost),
+  };
+  const editableKinds: RateKind[] = mayEditCost ? ["billable", "cost"] : ["billable"];
+  const changed = editableKinds.flatMap((kind) => {
+    if (!dirty[kind]) return [];
+    const amountCents = editableAmount(values[kind]);
+    if (amountCents == null || amountCents === current[kind]?.amountCents) return [];
+    return [{ kind, amountCents }];
+  });
+  const hasInvalidEdit = editableKinds.some(
+    (kind) => dirty[kind] && editableAmount(values[kind]) == null
+  );
+
+  const editAmount = (kind: RateKind, value: string) => {
+    setDraft((existing) => ({ ...existing, [kind]: value }));
+    setDirty((existing) => ({ ...existing, [kind]: true }));
+  };
+
   const save = useMutation({
-    mutationFn: () =>
-      api.setRate(userId, {
-        kind,
-        // Cents, because money is cents everywhere. Rounded rather than
-        // truncated so 152.505 does not quietly become 152.50.
-        amountCents: Math.round(Number(amount) * 100),
-        effectiveFrom: from,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["rates", userId] });
-      // The person's page shows the rate in force, and it just changed.
-      queryClient.invalidateQueries({ queryKey: ["bootstrap"] });
-      setAmount("");
-      toast.push({ tone: "success", title: `${kind === "cost" ? "Cost" : "Billable"} rate updated.` });
+    mutationFn: async () => {
+      const updated: RateKind[] = [];
+      for (const change of changed) {
+        await api.setRate(userId, { ...change, effectiveFrom: from });
+        updated.push(change.kind);
+      }
+      return updated;
     },
-    onError: (error) =>
+    onSuccess: async (updated) => {
+      await queryClient.invalidateQueries({ queryKey: ["rates", userId] });
+      // The person's page shows the rate in force, and it just changed.
+      await queryClient.invalidateQueries({ queryKey: ["bootstrap"] });
+      setDirty((existing) => ({
+        ...existing,
+        ...Object.fromEntries(updated.map((kind) => [kind, false])),
+      }));
+      toast.push({
+        tone: "success",
+        title: updated.length === 2
+          ? "Rates updated."
+          : `${updated[0] === "cost" ? "Cost" : "Billable"} rate updated.`,
+      });
+    },
+    onError: (error) => {
+      queryClient.invalidateQueries({ queryKey: ["rates", userId] });
       toast.push({
         tone: "danger",
         title: error instanceof Error ? error.message : "Could not change that rate.",
-      }),
+      });
+    },
   });
 
   if (!maySeeAny) return null;
@@ -106,28 +166,17 @@ export function RatesPanel({ userId, editable = false }: { userId: string; edita
     under "Earlier rates". That is the same two-displays-disagreeing problem
     this panel replaced the KpiRows to avoid.
   */
-  const now = todayIn(settings.timezone);
-  const inForce = (k: "billable" | "cost") =>
-    (rates ?? []).find(
-      (r) => r.kind === k && (!r.startsOn || r.startsOn <= now) && (!r.endsOn || r.endsOn >= now)
-    ) ?? null;
-
   const scheduled = (rates ?? []).filter((r) => r.startsOn && r.startsOn > now);
   const history = (rates ?? []).filter((r) => r.endsOn && r.endsOn < now);
-  /*
-    Two decimal places, and nothing clever.
-
-    `Number()` accepts more than money does. The change handler strips
-    everything but digits and a dot, so "1e3" arrives as "13" and would have
-    been saved as thirteen dollars rather than a thousand, and "-5" as five.
-    Three decimals rounded silently. A regex is the honest filter here: if it
-    does not look like money, the button stays off.
-  */
-  const amountIsValid = /^\d{1,7}(\.\d{1,2})?$/.test(amount.trim());
 
   return (
     <Card>
       <SectionTitle>Rates</SectionTitle>
+      <p className="mb-4 text-sm text-ink-secondary">
+        These are the hourly rates in force today. Billable is what the client is charged, and cost is
+        what the person is paid. Setting a rate from a date leaves earlier time entries at the rate they
+        were written with.
+      </p>
 
       {isLoading ? (
         <Spinner />
@@ -145,7 +194,7 @@ export function RatesPanel({ userId, editable = false }: { userId: string; edita
       ) : (
         <div className="grid gap-3">
           {(["billable", "cost"] as const).map((k) => {
-            const rate = inForce(k);
+            const rate = current[k];
             const hidden = k === "cost" && !can("rates:view_cost");
             return (
               <div key={k} className="flex items-baseline justify-between gap-4">
@@ -208,29 +257,36 @@ export function RatesPanel({ userId, editable = false }: { userId: string; edita
 
       {mayEdit && (
         <div className="mt-4 border-t border-border pt-4">
-          <div className="grid gap-3 sm:grid-cols-3">
-            <Field label="Rate">
-              <Select value={kind} onChange={(e) => setKind(e.target.value as "billable" | "cost")}>
-                <option value="billable">Billable</option>
-                {/* Offering cost to somebody who cannot set it would be a
-                    button that always fails. The server refuses it regardless. */}
-                {mayEditCost && <option value="cost">Cost</option>}
-              </Select>
-            </Field>
-            <Field label="Hourly amount">
+          <div className={mayEditCost ? "grid gap-3 md:grid-cols-2" : "grid gap-3"}>
+            <Field label="Billable rate" help="What the client is charged per hour.">
               <Input
                 inputMode="decimal"
                 placeholder="150.00"
-                value={amount}
-                onChange={(e) => setAmount(e.target.value.replace(/[^0-9.]/g, ""))}
+                value={values.billable}
+                onChange={(e) => editAmount("billable", e.target.value)}
+                onBlur={(e) => editAmount("billable", formatMoneyInput(e.target.value))}
               />
             </Field>
+            {/* A manager may change billable rates without learning pay. The
+                server enforces the same boundary even if this field is forged. */}
+            {mayEditCost && (
+              <Field label="Cost rate" help="What the person is paid per hour.">
+                <Input
+                  inputMode="decimal"
+                  placeholder="60.00"
+                  value={values.cost}
+                  onChange={(e) => editAmount("cost", e.target.value)}
+                  onBlur={(e) => editAmount("cost", formatMoneyInput(e.target.value))}
+                />
+              </Field>
+            )}
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
             <Field label="From" help="Earlier entries keep the rate they were written with.">
               <Input type="date" value={from} onChange={(e) => setFrom(e.target.value)} />
             </Field>
-          </div>
-          <div className="mt-3 flex justify-end">
-            <Button onClick={() => save.mutate()} loading={save.isPending} disabled={!amountIsValid || !from}>
+            <Button onClick={() => save.mutate()} loading={save.isPending}
+              disabled={!from || hasInvalidEdit || changed.length === 0}>
               Set rate
             </Button>
           </div>

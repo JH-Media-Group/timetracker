@@ -266,6 +266,25 @@ describe("rate redaction", () => {
       ).toBe("2026-08-31");
     });
 
+    it("changes only the submitted rate kind and returns both current values to an Administrator", async () => {
+      const admin = await ctxFor("administrator");
+      await setRate(admin, people.member!, {
+        kind: "billable",
+        amountCents: 18_500,
+        effectiveFrom: "2026-09-01" as IsoDate,
+      });
+
+      const rates = await listRates(admin, people.member!);
+      expect(rates.some((rate) => rate.kind === "billable" && rate.amountCents === 18_500)).toBe(true);
+      expect(rates.some((rate) => rate.kind === "cost" && rate.amountCents === 6_000)).toBe(true);
+
+      const stored = await db
+        .select()
+        .from(s.userRates)
+        .where(eq(s.userRates.userId, people.member!));
+      expect(stored.filter((rate) => rate.kind === "cost")).toHaveLength(1);
+    });
+
     it("leaves the rate already written onto a time entry alone", async () => {
       /*
         The invariant the whole dated-range design exists for. A raise must not

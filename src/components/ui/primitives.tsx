@@ -202,7 +202,9 @@ export function Switch({ checked, onCheckedChange, id, "aria-label": ariaLabel }
         "data-[state=unchecked]:bg-bg-strong data-[state=checked]:bg-accent"
       )}
     >
-      <RSwitch.Thumb className="block size-4 rounded-full bg-white transition-transform duration-(--dur-fast) data-[state=checked]:translate-x-4" />
+      {/* Each state uses the inverse of its track, so both themes keep the
+          thumb visible without a literal colour. */}
+      <RSwitch.Thumb className="block size-4 rounded-full transition-[transform,background-color] duration-(--dur-fast) data-[state=unchecked]:bg-accent data-[state=checked]:translate-x-4 data-[state=checked]:bg-accent-ink" />
     </RSwitch.Root>
   );
 }

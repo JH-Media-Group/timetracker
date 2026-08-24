@@ -242,12 +242,15 @@ export const avatarVariants = cva(
   ],
   {
     variants: {
+      /* The leading token follows the font-size utility in every variant.
+         tailwind-merge otherwise treats the later text utility as authoritative
+         and drops a base leading class, restoring the grid row's line-height. */
       size: {
-        xs: "size-[18px] text-[9px]",
-        sm: "size-[22px] text-[10px]",
-        md: "size-7 text-[11px]",
-        lg: "size-9 text-base",
-        xl: "size-14 text-lg",
+        xs: "size-[18px] text-[9px] leading-(--lh-none)",
+        sm: "size-[22px] text-[10px] leading-(--lh-none)",
+        md: "size-7 text-[11px] leading-(--lh-none)",
+        lg: "size-9 text-base leading-(--lh-none)",
+        xl: "size-14 text-lg leading-(--lh-none)",
       },
       /** System and integration actors get a squircle so a bot is never mistaken
        *  for a person at a glance. */

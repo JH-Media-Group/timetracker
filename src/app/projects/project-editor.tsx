@@ -10,6 +10,7 @@
  */
 
 import * as React from "react";
+import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, X } from "lucide-react";
@@ -23,7 +24,7 @@ import {
 import { useToast } from "@/components/ui/toast";
 import { PageBody, PageHeader } from "@/components/app/page-chrome";
 import { useApp } from "@/components/app/providers";
-import { formatHours, formatMoney, parseMoney } from "@/lib/format";
+import { formatHours, formatMoney, formatMoneyInput, parseMoney } from "@/lib/format";
 import { withParam } from "@/lib/return-to";
 
 /**
@@ -123,12 +124,12 @@ function ProjectForm({ existing }: { existing?: Project }) {
     notes: existing?.notes ?? "",
     billingType: (existing?.billingType ?? "time_and_materials") as BillingType,
     billBy: (existing?.billBy ?? "people") as BillBy,
-    hourlyRate: existing?.hourlyRateCents ? String(existing.hourlyRateCents / 100) : "",
-    fee: existing?.feeCents ? String(existing.feeCents / 100) : "",
+    hourlyRate: existing?.hourlyRateCents != null ? formatMoneyInput(String(existing.hourlyRateCents / 100)) : "",
+    fee: existing?.feeCents != null ? formatMoneyInput(String(existing.feeCents / 100)) : "",
     feeCadence: existing?.feeCadence ?? "single",
     budgetBy: (existing?.budgetBy ?? "none") as BudgetBy,
     budgetValue: existing?.budgetSeconds ? formatHours(existing.budgetSeconds)
-      : existing?.budgetFeeCents ? String(existing.budgetFeeCents / 100) : "",
+      : existing?.budgetFeeCents != null ? formatMoneyInput(String(existing.budgetFeeCents / 100)) : "",
     budgetResetsMonthly: existing?.budgetResetsMonthly ?? false,
     alertOn: existing?.budgetAlertPercent != null,
     alertPercent: String(existing?.budgetAlertPercent ?? 80),
@@ -163,7 +164,8 @@ function ProjectForm({ existing }: { existing?: Project }) {
   const save = useMutation({
     mutationFn: async () => {
       const budgetIsHours = form.budgetBy === "project_hours";
-      const value = parseFloat(form.budgetValue);
+      const hoursValue = parseFloat(form.budgetValue);
+      const moneyValue = parseMoney(form.budgetValue);
       const body: Partial<Project> & { name: string; clientId: string } = {
         name: form.name.trim(),
         clientId: form.clientId,
@@ -178,8 +180,8 @@ function ProjectForm({ existing }: { existing?: Project }) {
         feeCents: form.billingType === "fixed_fee" ? (parseMoney(form.fee) ?? undefined) : undefined,
         feeCadence: form.billingType === "fixed_fee" ? (form.feeCadence as "single" | "monthly") : undefined,
         budgetBy: form.budgetBy,
-        budgetSeconds: budgetIsHours && !Number.isNaN(value) ? Math.round(value * 3600) : undefined,
-        budgetFeeCents: !budgetIsHours && form.budgetBy !== "none" && !Number.isNaN(value) ? Math.round(value * 100) : undefined,
+        budgetSeconds: budgetIsHours && !Number.isNaN(hoursValue) ? Math.round(hoursValue * 3600) : undefined,
+        budgetFeeCents: !budgetIsHours && form.budgetBy !== "none" ? (moneyValue ?? undefined) : undefined,
         budgetResetsMonthly: form.budgetResetsMonthly,
         budgetAlertPercent: form.alertOn ? Number(form.alertPercent) : undefined,
         taskIds: form.taskIds,
@@ -314,7 +316,8 @@ function ProjectForm({ existing }: { existing?: Project }) {
                   {form.billBy === "project" && (
                     <Field label="Project hourly rate">
                       <Affix prefix="$" suffix="per hour">
-                        <Input align="right" value={form.hourlyRate} onChange={(e) => patch("hourlyRate", e.target.value)} />
+                        <Input value={form.hourlyRate} onChange={(e) => patch("hourlyRate", e.target.value)}
+                          onBlur={(e) => patch("hourlyRate", formatMoneyInput(e.target.value))} />
                       </Affix>
                     </Field>
                   )}
@@ -329,7 +332,10 @@ function ProjectForm({ existing }: { existing?: Project }) {
                         <option value="single">Single fee</option>
                         <option value="monthly">Monthly</option>
                       </Select>
-                      <Affix prefix="$"><Input align="right" value={form.fee} onChange={(e) => patch("fee", e.target.value)} /></Affix>
+                      <Affix prefix="$">
+                        <Input value={form.fee} onChange={(e) => patch("fee", e.target.value)}
+                          onBlur={(e) => patch("fee", formatMoneyInput(e.target.value))} />
+                      </Affix>
                     </div>
                   </Field>
                 </div>
@@ -346,7 +352,13 @@ function ProjectForm({ existing }: { existing?: Project }) {
                 {form.budgetBy !== "none" && (
                   <Field label={`Budget (${budgetUnit})`}>
                     <Affix prefix={form.budgetBy === "project_fees" ? "$" : undefined} suffix={form.budgetBy === "project_hours" ? "hours" : undefined}>
-                      <Input align="right" value={form.budgetValue} onChange={(e) => patch("budgetValue", e.target.value)} />
+                      <Input value={form.budgetValue} onChange={(e) => patch("budgetValue", e.target.value)}
+                        onBlur={(e) =>
+                          patch(
+                            "budgetValue",
+                            form.budgetBy === "project_fees" ? formatMoneyInput(e.target.value) : e.target.value
+                          )
+                        } />
                     </Affix>
                   </Field>
                 )}
@@ -382,13 +394,21 @@ function ProjectForm({ existing }: { existing?: Project }) {
 
           {/* Tasks */}
           <Card padded={false}>
-            <div className="flex items-center justify-between border-b border-border px-4 py-3">
-              <h2 className="text-md font-semibold text-ink">Tasks</h2>
-              <div className="flex items-center gap-2 text-sm text-ink-secondary">
-                Select
-                <button className="text-link underline" onClick={() => patch("taskIds", tasks.map((t) => t.id))}>All</button>/
-                <button className="text-link underline" onClick={() => patch("taskIds", [])}>None</button>
+            <div className="border-b border-border px-4 py-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-md font-semibold text-ink">Tasks</h2>
+                <div className="flex items-center gap-2 text-sm text-ink-secondary">
+                  Select
+                  <button className="text-link underline" onClick={() => patch("taskIds", tasks.map((t) => t.id))}>All</button>/
+                  <button className="text-link underline" onClick={() => patch("taskIds", [])}>None</button>
+                </div>
               </div>
+              {!existing && (
+                <p className="mt-1 text-sm text-ink-tertiary">
+                  New projects start with tasks marked Common on the{" "}
+                  <Link href="/tasks" className="text-link underline">Tasks page</Link>.
+                </p>
+              )}
             </div>
             <div className="max-h-[280px] overflow-y-auto">
               {[...tasks].sort((a, b) => a.name.localeCompare(b.name)).map((t) => {
