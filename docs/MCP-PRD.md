@@ -251,10 +251,28 @@ without reading while one offering "Read only", "Read and log time", "Full
 access" gets a decision. Toado's `SCOPE_LABELS` and `SCOPE_PRESETS` are the
 model.
 
-The scope set is **one exported constant** consumed by the token minting, the
-route permission table, the consent UI, and the tool definitions, so adding a
-scope is a compile error everywhere it needs handling rather than a thing to
+The scope set is **one exported constant**, consumed by the token minting, the
+capability narrowing in 3.2, the consent UI, and the tool definitions, so adding
+a scope is a compile error everywhere it needs handling rather than a thing to
 remember in four files.
+
+### The thing capability narrowing does not give you
+
+Narrowing enforces a scope wherever an `assertCan` already stands. **It cannot
+enforce anything where no capability is checked at all**, and the route table it
+replaced had that covered by refusing unlisted mutating routes outright.
+
+The gap is real and small: a route that declares no `capability`, whose service
+also performs no `assertCan`, is reachable by any token whatever its scope. That
+is exactly the pair of functions (`projectSummary`, `projectChart`) that once
+shipped able to hand a Member the company's cost base.
+
+**Close it in the list that already exists** rather than by building a second
+one. `tests/routes.test.ts` already insists every route declares a capability or
+names itself in `EXEMPT` with a written reason. Extend that reason to say what a
+token gets: "everyone, tokens included" or "session only". A new route is then
+closed until somebody writes the sentence, which is the same safe default the
+route table offered, in a file that is already maintained.
 
 ---
 
@@ -389,10 +407,12 @@ in the same commits:
 1. **The MCP process cannot reach the database.** A check that nothing under the
    MCP app imports the Drizzle schema or the db client, or reads `DATABASE_URL`.
    Section 2 made enforceable, and it is one grep.
-2. **Every mutating route is in the permission table or refuses tokens.** The
-   sibling of `tests/routes.test.ts`, and for the same reason: `projectSummary`
-   and `projectChart` shipped with no `assertCan` because the rule was applied by
-   hand and two functions were missed.
+2. **Every route says what a token gets.** An extension of
+   `tests/routes.test.ts` rather than a new file: each `EXEMPT` entry must state
+   the token position as well as the session one. Same reason as the original:
+   `projectSummary` and `projectChart` shipped with no `assertCan` because the
+   rule was applied by hand and two functions were missed. See the end of
+   section 4 for why this replaces the route permission table.
 3. **A Member token gets a Member's answers.** The MCP equivalent of
    `pnpm authz:scope`: a Member, a manager, and an outsider; every read tool with
    each token; assert the Member sees only their own rows, no money anywhere, and
@@ -405,13 +425,27 @@ in the same commits:
    revert the guard, watch a named test fail.
 7. **The audit row names the token.** Asserted on the row, not on the code path.
 
+**Where the testable part has to live.** This repo has no DOM test environment,
+and vitest cannot parse a `.tsx` while `tsconfig.json` sets `jsx: "preserve"`,
+which Next requires. A rule written inside a React component or beside JSX is
+therefore a rule no test can reach. This was learned the expensive way on the
+same day this plan was written: a keyboard handler in the project picker could
+submit a form, and the fix only became testable once the decision moved to
+`src/lib/picker-keys.ts` as a pure function.
+
+For the MCP work that means: scope resolution, the `EXEMPT` token positions,
+undo eligibility, and the checkpoint walk are **plain functions in plain `.ts`
+modules**, called by tool handlers and route handlers rather than living inside
+them. Anything shaped like `if (somethingComplicated) return early` belongs
+somewhere a test can call it.
+
 ---
 
 ## 9. Order of work
 
 | Phase | What | Sessions |
 | --- | --- | --- |
-| A0 | `api_tokens` connected: Settings UI, `actorFromToken`, revocation, the route permission table with default-deny, the audit change in 6.1 | ~1 |
+| A0 | `api_tokens` connected: Settings UI, `actorFromToken` with the capability narrowing from 3.2, revocation, the `EXEMPT` extension from section 4, the audit change in 6.1 | ~1 |
 | A1 | The MCP process: streamable HTTP, request-scoped context, the API client, read-only tools | ~1 |
 | A2 | Timers and own time, with undo tokens | 1 to 1.5 |
 | A3 | Manager tools: others' time within reach, approvals | ~0.5 |
@@ -428,17 +462,17 @@ or without copy and paste, actually matters.
 ## 10. Open questions for Jason
 
 1. **Own subdomain or a path?** Toado is `mcp.toado.dev` as its own service. The
-   Twenty connector is a path on an existing domain, `crm.jhmediagroup.com/mcp`,
-   which needed no new certificate or DNS. Tally is joining a shared droplet, so
-   the path is probably right, but it depends on question 5.
+   Twenty connector is a path on an existing domain. Section 12 settles the
+   mechanics; what is left is taste. A path on `tally.jhmediagroup.com` needs no
+   DNS record and no certificate, and Caddy already terminates TLS for it.
 2. **Who may hold a token to begin with?** Everybody, or administrators only?
    Administrators only makes A1 an internal experiment.
 3. **Is the twenty-five threshold in 6.4 right** for how you actually work?
 4. **Does a nightly `pg_dump` exist?** Prerequisite for A4, and worth doing
-   regardless of whether this is ever built.
-5. **nginx or Caddy on the target droplet?** The Twenty connector's deployment
-   files use nginx; Confluence documents the Tally droplet as Caddy. One of those
-   is out of date, and it changes A1.
+   regardless of whether this is ever built. Related and also missing: the
+   droplet has **no systemd timers at all**, so queued mail never sends either.
+   Whoever writes the first timer should write both.
+5. ~~nginx or Caddy on the target droplet?~~ **Answered: Caddy.** See section 12.
 
 ---
 
@@ -454,8 +488,8 @@ is 1,669 lines across ten files, plus scopes in
 `packages/types/src/mcp-scopes.ts`, token management in
 `apps/web/src/routes/settings/tabs/McpTokensTab.tsx`, and PRDs in `docs/prds/`.
 
-**Take:** the architecture in section 2 and the reason for it; the route
-permission table with default-deny; the derived `readOnly` second guard; the
+**Take:** the architecture in section 2 and the reason for it; the derived
+`readOnly` second guard; the
 token-info cache and its three details in 3.5; request-scoped context; the
 consent labels and presets; the two-phase PAT-then-OAuth shape.
 
@@ -474,8 +508,8 @@ compile. **Read the branch's own commit message before touching it**: it records
 what is wrong with it, in detail, including a header comment that claims
 guarantees the code does not have.
 
-**Take:** `capabilitiesForScopes`, which is now section 4 and is better than what
-this document first specified. And `src/server/services/api-keys.ts`, which is
+**Take:** `capabilitiesForScopes`, which is now section 3.2 and is better than
+what this document first specified. And `src/server/services/api-keys.ts`, which is
 most of phase A0 whichever architecture wins, and is careful where it counts:
 self-service only, 404 rather than 403 for another person's token, an archived
 person's tokens dead, a null expiry that fails closed.
@@ -503,3 +537,39 @@ has nothing to do with Tally's `api_tokens`.
 of seven tool categories while the stdio server registered all seven. That is a
 better argument for check 2 in section 8 than anything written above it, because
 it is the same defect shape, in the same place, in a shipped product.
+
+---
+
+## 12. How it would actually be deployed
+
+Observed on 2026-08-23 while deploying the application itself, so this is what
+the droplet does rather than what a document says it does.
+
+**Caddy, not nginx.** `opt-caddy-1` terminates TLS for everything on the box.
+`/opt/Caddyfile` holds one block per site; Tally's is three lines pointing at
+`tally-staging-web:3000`. The Twenty MCP is already live on this droplet as
+`opt-twenty-mcp-1`, reached through Caddy, which makes it the working example of
+an MCP server behind this exact proxy. The nginx config in that repo's `deploy/`
+directory was not what shipped.
+
+**One compose project per application.** Tally is `/opt/tally/compose.yml` plus a
+mode-600 `.env`, publishing no host port and joining the external `opt_default`
+network. An MCP service belongs in that same project, as a second service, so
+that `docker compose up -d` in `/opt/tally` continues to be the whole deployment
+and cannot touch Ideaflow, Twenty, Caddy, or the shared Postgres.
+
+**Deploys are an image tag swap.** Build `tally:<full-sha>` locally (never on the
+two-core droplet), `docker save` to a tar, `scp`, `docker load`, point
+`TALLY_IMAGE` in `/opt/tally/.env` at the new tag, `docker compose up -d`. Roll
+back by putting the old tag back: previous images are retained on the host, and
+the deploy keeps an `.env.bak-<sha>`. **Do not pipe `docker save` through a
+PowerShell pipeline**; it corrupts the stream. Write the tar, copy the tar.
+
+**An MCP service therefore needs no new deployment machinery**, which is worth
+knowing before pricing it. It is a second service in an existing compose file,
+one more Caddy block, and the same tag.
+
+**There are no systemd timers on this host.** Nothing schedules anything today,
+which is why queued mail sits unsent. An MCP server is a long-running service
+rather than a timer, so this does not block it, but the housekeeping the plan
+assumes (expiring tokens, pruning sessions) has nowhere to run yet.
