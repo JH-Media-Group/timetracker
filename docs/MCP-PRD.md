@@ -121,17 +121,39 @@ Toado solves this with a route permission table and, critically, a safe default:
 > Mutation route with no explicit entry: reject MCP tokens by default. That's
 > the safe failure mode.
 
-Tally should copy that shape exactly:
+**Tally should not copy that, because it has something better available.**
 
-- One table mapping method plus path pattern to the scope it needs.
-- `GET` / `HEAD` / `OPTIONS` fall through to the read scope, so reads do not have
-  to be enumerated one by one.
-- **Any mutating route not named in the table refuses an `api` actor.** A new
-  route is therefore closed to tokens until somebody decides otherwise, which is
-  the opposite of how the two missing `assertCan` calls got shipped.
-- A second, independent guard: a token whose granted scopes do not intersect the
-  write set carries a derived `readOnly` flag, and the mutation guard rejects on
-  that alone. Two things have to fail together for a read-only token to write.
+A route table is a second list of who-may-do-what, parallel to the capability
+model, which has to be kept in step with it by hand forever. Tally can avoid
+having the second list at all: **narrow the capability set on the Actor when the
+token is resolved.**
+
+```
+effectiveCapabilities = ownerCapabilities INTERSECT capabilitiesNamedByScopes
+```
+
+A token scoped to time gets an `Actor` holding only the time capabilities its
+owner holds. Every `assertCan` already in the codebase then enforces the scope,
+on the REST API and in a tool alike, with nothing new to maintain and no way for
+the two lists to disagree, because there is only one list.
+
+This is not an idea from the plan. It is from `capabilitiesForScopes` in the
+parked `mcp-wip` branch (section 11), and it is better than what this document
+originally specified.
+
+Two things it does not cover, both of which need deciding rather than
+discovering:
+
+- **Routes gated by no capability at all** stay readable by any token whatever
+  its scope, because there is no capability to intersect away. That is
+  `bootstrap`, `me`, the roster, the reference data, and `search`. Probably
+  acceptable, since it is the same floor every signed-in person has, but it
+  should be a decision with a sentence next to it rather than a side effect.
+- **The derived `readOnly` flag is still worth having** as an independent second
+  guard: a token whose scopes do not intersect the write set is marked read-only,
+  and the mutation path refuses on that alone. Two things then have to fail
+  together for a read-only token to write. Capability narrowing and the flag are
+  not the same mechanism, which is the point of having both.
 
 ### 3.3 The scheme
 
@@ -443,6 +465,28 @@ should not validate the token and should let the first REST call 401. The shippe
 needed before the first call and failing fast gives a better error. The code is
 right and the plan was not, which is a useful thing to remember about this
 document too.
+
+### `mcp-wip` (this repo): a half-built attempt, parked
+
+Thirteen files that appeared in the working tree on 2026-08-23 with no author in
+any session log, committed to the `mcp-wip` branch exactly as found. It does not
+compile. **Read the branch's own commit message before touching it**: it records
+what is wrong with it, in detail, including a header comment that claims
+guarantees the code does not have.
+
+**Take:** `capabilitiesForScopes`, which is now section 4 and is better than what
+this document first specified. And `src/server/services/api-keys.ts`, which is
+most of phase A0 whichever architecture wins, and is careful where it counts:
+self-service only, 404 rather than 403 for another person's token, an archived
+person's tokens dead, a null expiry that fails closed.
+
+**Weigh before reusing:** `src/mcp/*` and its `http.ts` change both assume the
+MCP process imports services directly, which section 2 now argues against.
+
+**Fix on sight if any of it is reused:** the hard-coded nil UUID in `http.ts`
+that decides the rate-limit key. It is correct today and it is a magic string
+duplicated across two files with no shared constant, guarding the "every
+anonymous caller in one bucket" defect this repo has already fixed twice.
 
 ### `twenty-crm-mcp-for-cowork`: the deployment reference
 
