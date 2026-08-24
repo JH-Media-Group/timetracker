@@ -1,0 +1,56 @@
+import { createHash, randomBytes } from "node:crypto";
+import { and, eq, gt, isNull } from "drizzle-orm";
+import type { Ctx } from "@/server/ctx";
+import * as s from "@/server/db/schema";
+import { newId } from "@/server/db/ids";
+import { TOKEN_SCOPES } from "./api-keys";
+import { validationFailed } from "@/server/errors";
+
+const hash = (value: string) => createHash("sha256").update(value).digest("hex");
+const challenge = (value: string) => createHash("sha256").update(value).digest("base64url");
+function redirectUri(value: string) {
+  const url = new URL(value);
+  const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (url.hash || (url.protocol !== "https:" && !(local && url.protocol === "http:"))) throw validationFailed({ redirect_uris: ["Redirect URIs must use HTTPS (HTTP is allowed only on loopback) and cannot contain fragments."] });
+  return url.toString();
+}
+function scopes(value: string | string[]) {
+  const list = Array.isArray(value) ? value : value.split(/\s+/).filter(Boolean);
+  if (!list.length || list.some((item) => !(TOKEN_SCOPES as readonly string[]).includes(item))) throw validationFailed({ scope: ["Request one or more documented Tally scopes."] });
+  return [...new Set(list)];
+}
+
+export async function registerOAuthClient(ctx: Ctx, input: { client_name?: string; redirect_uris: string[] }) {
+  const clientId = randomBytes(24).toString("base64url"), uris = input.redirect_uris.map(redirectUri);
+  if (!uris.length) throw validationFailed({ redirect_uris: ["At least one redirect URI is required."] });
+  await ctx.db.insert(s.oauthClients).values({ id: newId(), clientId, clientName: input.client_name?.trim() || "MCP client", redirectUris: uris });
+  return { client_id: clientId, client_name: input.client_name?.trim() || "MCP client", redirect_uris: uris, token_endpoint_auth_method: "none", grant_types: ["authorization_code"], response_types: ["code"] };
+}
+
+export async function oauthRequest(ctx: Ctx, input: { clientId: string; redirectUri: string; scope: string; codeChallenge: string }) {
+  const [client] = await ctx.db.select().from(s.oauthClients).where(eq(s.oauthClients.clientId, input.clientId)).limit(1);
+  if (!client || !(client.redirectUris as string[]).includes(redirectUri(input.redirectUri))) throw validationFailed({ redirect_uri: ["That redirect URI is not registered for this client."] });
+  if (!/^[A-Za-z0-9_-]{43,128}$/.test(input.codeChallenge)) throw validationFailed({ code_challenge: ["A valid S256 PKCE challenge is required."] });
+  return { clientName: client.clientName, scopes: scopes(input.scope) };
+}
+
+export async function approveOAuth(ctx: Ctx, input: { clientId: string; redirectUri: string; scope: string; codeChallenge: string; state?: string; approved: boolean }) {
+  await oauthRequest(ctx, input);
+  const target = new URL(input.redirectUri);
+  if (!input.approved) { target.searchParams.set("error", "access_denied"); if (input.state) target.searchParams.set("state", input.state); return { redirectTo: target.toString() }; }
+  const rawCode = randomBytes(32).toString("base64url");
+  await ctx.db.insert(s.oauthAuthorizationCodes).values({ id: newId(), codeHash: hash(rawCode), clientId: input.clientId, userId: ctx.actor.userId, redirectUri: target.toString(), codeChallenge: input.codeChallenge, scopes: scopes(input.scope), expiresAt: new Date(ctx.now().getTime() + 10 * 60_000) });
+  target.searchParams.set("code", rawCode); if (input.state) target.searchParams.set("state", input.state);
+  return { redirectTo: target.toString() };
+}
+
+export async function exchangeOAuthCode(ctx: Ctx, input: { code: string; clientId: string; redirectUri: string; codeVerifier: string }) {
+  const now = ctx.now();
+  const [code] = await ctx.db.select().from(s.oauthAuthorizationCodes).where(and(eq(s.oauthAuthorizationCodes.codeHash, hash(input.code)), eq(s.oauthAuthorizationCodes.clientId, input.clientId), eq(s.oauthAuthorizationCodes.redirectUri, redirectUri(input.redirectUri)), isNull(s.oauthAuthorizationCodes.consumedAt), gt(s.oauthAuthorizationCodes.expiresAt, now))).limit(1);
+  if (!code || challenge(input.codeVerifier) !== code.codeChallenge) throw validationFailed({ code: ["The authorization code is invalid, expired, used, or failed PKCE verification."] });
+  const [claimed] = await ctx.db.update(s.oauthAuthorizationCodes).set({ consumedAt: now }).where(and(eq(s.oauthAuthorizationCodes.id, code.id), isNull(s.oauthAuthorizationCodes.consumedAt))).returning({ id: s.oauthAuthorizationCodes.id });
+  if (!claimed) throw validationFailed({ code: ["The authorization code has already been used."] });
+  const prefix = randomBytes(4).toString("hex"), secret = randomBytes(32).toString("base64url"), token = `tally_${prefix}_${secret}`, expiresAt = new Date(now.getTime() + 90 * 86_400_000);
+  await ctx.db.insert(s.apiTokens).values({ id: newId(), userId: code.userId, label: "OAuth MCP client", tokenHash: hash(token), prefix, scopes: code.scopes, expiresAt });
+  return { access_token: token, token_type: "Bearer", expires_in: 90 * 86_400, scope: code.scopes.join(" ") };
+}

@@ -31,6 +31,10 @@ export interface Actor {
   /** The person's timezone, used to resolve calendar days for their own records. */
   timezone: string;
   isOwner: boolean;
+  /** Present only for personal access and OAuth bearer tokens. */
+  tokenPrefix?: string;
+  tokenScopes?: readonly string[];
+  tokenExpiresAt?: Date | null;
   /**
    * Set when this request rolled the session forward, so the response can send
    * the browser a cookie with the new expiry. Null on every other request.
@@ -308,6 +312,7 @@ export async function flush(ctx: Ctx): Promise<void> {
       audits.map((a) => ({
         actorId: ctx.actor.kind === "system" ? null : ctx.actor.userId,
         actorKind: ctx.actor.kind,
+        tokenPrefix: ctx.actor.tokenPrefix ?? null,
         action: a.override ? `${a.action}.override` : a.action,
         entityType: a.entityType,
         entityId: a.entityId ?? null,

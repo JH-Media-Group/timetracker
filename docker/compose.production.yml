@@ -27,6 +27,36 @@ services:
         aliases:
           - tally-staging-web
 
+  mcp:
+    image: ${TALLY_IMAGE:?Set TALLY_IMAGE to the immutable image tag}
+    container_name: tally-staging-mcp
+    command: ["node", "ops/mcp.mjs"]
+    environment:
+      NODE_ENV: "production"
+      MCP_PORT: "3201"
+      TALLY_API_BASE_URL: "http://tally-staging-web:3000"
+      TALLY_PUBLIC_URL: "https://tally.jhmediagroup.com"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    networks:
+      shared:
+        aliases:
+          - tally-staging-mcp
+
 networks:
   shared:
     external: true

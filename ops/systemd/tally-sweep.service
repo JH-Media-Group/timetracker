@@ -1,0 +1,9 @@
+[Unit]
+Description=Remove expired Tally sessions and idempotency claims
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/tally
+ExecStart=/usr/bin/docker compose run --rm web node ops/sweep.mjs

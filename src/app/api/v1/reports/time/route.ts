@@ -6,7 +6,7 @@ import { timeReport } from "@/server/services/reports";
 const schema = z.object({
   from: isoDate,
   to: isoDate,
-  group_by: z.enum(["client", "project", "task", "user"]).default("client"),
+  group_by: z.enum(["client", "project", "task", "user", "day"]).default("client"),
   user_id: z.string().uuid().optional(),
   project_id: z.string().uuid().optional(),
   client_id: z.string().uuid().optional(),
@@ -28,10 +28,13 @@ export const GET = route(
       projectId: q.project_id,
       clientId: q.client_id,
     });
-    return {
-      data: report.rows,
-      meta: { totals: report.totals, series: report.series, rounding: report.rounding },
-    };
+    if (ctx.actor.kind === "api" && !ctx.actor.capabilities.has("rates:view_billable")) {
+      return {
+        data: report.rows.map(({ billableCents: _money, ...row }) => row),
+        meta: { totals: Object.fromEntries(Object.entries(report.totals).filter(([key]) => key !== "billableCents")), series: report.series, rounding: report.rounding },
+      };
+    }
+    return { data: report.rows, meta: { totals: report.totals, series: report.series, rounding: report.rounding } };
   },
   { rateLimit: "report", transactional: false, cacheControl: "private, max-age=15" }
 );

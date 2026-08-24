@@ -95,6 +95,10 @@ const PUBLIC_EXACT = new Set<string>([
   "/api/health",
   "/api/health/live",
   "/api/health/ready",
+  "/.well-known/oauth-protected-resource",
+  "/.well-known/oauth-authorization-server",
+  "/oauth/register",
+  "/oauth/token",
   "/icon.svg",
 ]);
 

@@ -1,121 +1,45 @@
-/**
- * Tally MCP server entry point.
- *
- * A standalone Node process that speaks MCP over streamable HTTP, behind the
- * existing Caddy reverse proxy for TLS. It imports the same services the web
- * app calls, so authorization, auditing, and rate limiting are identical.
- *
- * Run with: pnpm mcp
- *
- * Specification: docs/MCP-PRD.md
- */
-
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { mcpServer } from "./server.js";
-import { resolveApiToken } from "@/server/services/api-keys";
-import { authStore } from "./context.js";
+import { TallyApi, TallyApiError } from "./api-client.js";
+import { requestStore, type TokenInfo } from "./context.js";
+import { createMcpServer } from "./server.js";
 
-const PORT = parseInt(process.env.MCP_PORT ?? "3201", 10);
+const port = Number(process.env.MCP_PORT ?? 3201);
+const baseUrl = process.env.TALLY_API_BASE_URL;
+if (!baseUrl) throw new Error("TALLY_API_BASE_URL is required");
+const publicUrl = (process.env.TALLY_PUBLIC_URL ?? baseUrl).replace(/\/$/, "");
 
-/* ---------------------------------------------------------- body parsing */
-
-async function readBody(req: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) chunks.push(chunk as Buffer);
-  const raw = Buffer.concat(chunks).toString();
-  if (!raw) return undefined;
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return undefined;
-  }
+async function body(req: IncomingMessage) {
+  const chunks: Buffer[] = []; let size = 0;
+  for await (const chunk of req) { const b = Buffer.from(chunk); size += b.length; if (size > 1_048_576) throw new Error("request_too_large"); chunks.push(b); }
+  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+function respond(res: ServerResponse, status: number, value: unknown, headers: Record<string, string> = {}) { res.writeHead(status, { "content-type": "application/json", "cache-control": "no-store", ...headers }); res.end(JSON.stringify(value)); }
+function unauthorized(res: ServerResponse, error: string) {
+  return respond(res, 401, { error }, { "www-authenticate": `Bearer resource_metadata="${publicUrl}/.well-known/oauth-protected-resource"` });
 }
 
-/* ---------------------------------------------------------- HTTP handler */
-
-function jsonError(res: ServerResponse, status: number, error: string): void {
-  res.writeHead(status, { "Content-Type": "application/json" });
-  res.end(JSON.stringify({ error }));
-}
-
-const server = createServer(async (req: IncomingMessage, res: ServerResponse) => {
-  // CORS preflight for remote MCP clients.
-  if (req.method === "OPTIONS") {
-    res.writeHead(204, {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "POST, GET, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Authorization, Content-Type, Mcp-Session-Id",
-      "Access-Control-Max-Age": "86400",
-    });
-    res.end();
-    return;
-  }
-
-  // Only the /mcp endpoint exists.
-  const path = (req.url ?? "").split("?")[0];
-  if (path !== "/mcp") {
-    jsonError(res, 404, "Not found");
-    return;
-  }
-
-  // GET and DELETE are used by stateful sessions (SSE and session
-  // termination). In stateless mode we only need POST, but respond cleanly
-  // to the others so a misconfigured client gets a useful error.
-  if (req.method === "GET") {
-    jsonError(res, 405, "Stateless server: SSE sessions are not supported. Use POST.");
-    return;
-  }
-  if (req.method === "DELETE") {
-    jsonError(res, 405, "Stateless server: session termination is not supported.");
-    return;
-  }
-  if (req.method !== "POST") {
-    jsonError(res, 405, "Method not allowed");
-    return;
-  }
-
-  // ---- Auth: Bearer token required on every request.
-  const authHeader = req.headers.authorization ?? "";
-  if (!authHeader.toLowerCase().startsWith("bearer ")) {
-    jsonError(res, 401, "Bearer token required. Create one in Settings > Security > API tokens.");
-    return;
-  }
-
-  const rawToken = authHeader.slice(7).trim();
-  const resolved = await resolveApiToken(rawToken);
-  if (!resolved) {
-    jsonError(res, 401, "Invalid, expired, or revoked token.");
-    return;
-  }
-
-  // ---- Parse the JSON-RPC body.
-  const body = await readBody(req);
-  if (!body) {
-    jsonError(res, 400, "Request body must be JSON.");
-    return;
-  }
-
-  // ---- CORS headers on every response.
-  res.setHeader("Access-Control-Allow-Origin", "*");
-
-  // ---- Handle the MCP request with the auth context available to tools.
+createServer(async (req, res) => {
+  if ((req.url ?? "").split("?")[0] !== "/mcp") return respond(res, 404, { error: "not_found" });
+  if (req.method !== "POST") return respond(res, 405, { error: "method_not_allowed" });
+  const header = req.headers.authorization ?? "";
+  if (!/^Bearer\s+\S+$/i.test(header)) return unauthorized(res, "bearer_required");
+  const bearer = header.replace(/^Bearer\s+/i, "");
+  const api = new TallyApi(baseUrl, bearer);
   try {
-    await authStore.run(resolved, async () => {
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: undefined, // stateless
-      });
-      await mcpServer.connect(transport);
-      await transport.handleRequest(req, res, body);
+    const token = (await api.get<TokenInfo>("/auth/token-info")).data;
+    const payload = await body(req);
+    await requestStore.run({ api, token }, async () => {
+      const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
+      const server = createMcpServer();
+      await server.connect(transport);
+      await transport.handleRequest(req, res, payload);
     });
-  } catch (e) {
-    console.error("[mcp] request failed:", e);
-    if (!res.headersSent) {
-      jsonError(res, 500, "Internal error");
-    }
+  } catch (error) {
+    if (error instanceof TallyApiError && error.status === 401) return unauthorized(res, "invalid_token");
+    if (error instanceof SyntaxError) return respond(res, 400, { error: "invalid_json" });
+    if (error instanceof Error && error.message === "request_too_large") return respond(res, 413, { error: "request_too_large" });
+    console.error("[mcp] request failed", error);
+    if (!res.headersSent) respond(res, 500, { error: "internal_error" });
   }
-});
-
-server.listen(PORT, () => {
-  console.log(`Tally MCP server listening on :${PORT}`);
-});
+}).listen(port, () => console.log(`Tally MCP listening on :${port}`));

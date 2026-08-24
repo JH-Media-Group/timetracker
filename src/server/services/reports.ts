@@ -32,7 +32,7 @@ export interface Period {
   to: IsoDate;
 }
 
-export type TimeGroupBy = "client" | "project" | "task" | "user";
+export type TimeGroupBy = "client" | "project" | "task" | "user" | "day";
 
 /* ============================================================= time report */
 
@@ -81,6 +81,11 @@ export async function timeReport(
   // Every dimension is expressed as SQL rather than as a column reference, so
   // the four shapes share one type and one query.
   const dimension: Record<TimeGroupBy, { id: SQL<string>; name: SQL<string>; sub: SQL<string | null> }> = {
+    day: {
+      id: sql<string>`${s.timeEntries.spentOn}::text`,
+      name: sql<string>`${s.timeEntries.spentOn}::text`,
+      sub: sql<string | null>`NULL::text`,
+    },
     client: {
       id: sql<string>`${s.clients.id}`,
       name: sql<string>`${s.clients.name}`,

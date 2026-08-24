@@ -844,6 +844,7 @@ export const auditLog = pgTable(
     id: bigserial({ mode: "number" }).primaryKey(),
     actorId: uuid().references(() => users.id),
     actorKind: text().notNull().default("user"),
+    tokenPrefix: text(),
     action: text().notNull(),
     entityType: text().notNull(),
     entityId: uuid(),
@@ -898,6 +899,27 @@ export const apiTokens = pgTable("api_tokens", {
   lastUsedAt: ts(),
   expiresAt: ts(),
   revokedAt: ts(),
+  createdAt: createdAt(),
+});
+
+export const oauthClients = pgTable("oauth_clients", {
+  id: pk(),
+  clientId: text().notNull().unique(),
+  clientName: text().notNull(),
+  redirectUris: jsonb().$type<string[]>().notNull(),
+  createdAt: createdAt(),
+});
+
+export const oauthAuthorizationCodes = pgTable("oauth_authorization_codes", {
+  id: pk(),
+  codeHash: text().notNull().unique(),
+  clientId: text().notNull().references(() => oauthClients.clientId, { onDelete: "cascade" }),
+  userId: uuid().notNull().references(() => users.id, { onDelete: "cascade" }),
+  redirectUri: text().notNull(),
+  codeChallenge: text().notNull(),
+  scopes: text().array().notNull(),
+  expiresAt: ts().notNull(),
+  consumedAt: ts(),
   createdAt: createdAt(),
 });
 

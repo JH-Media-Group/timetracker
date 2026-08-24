@@ -126,6 +126,10 @@ RUN node_modules/.bin/esbuild \
       --banner:js="import{createRequire as __cr}from'node:module';const require=__cr(import.meta.url);" \
       --outfile=ops/bootstrap-owner.mjs \
  && node_modules/.bin/esbuild \
+      src/mcp/index.ts \
+      --bundle --platform=node --format=esm --target=node22 \
+      --outfile=ops/mcp.mjs \
+ && node_modules/.bin/esbuild \
       scripts/invite-link.mts \
       --bundle --platform=node --format=esm --target=node22 \
       --external:@node-rs/argon2 \

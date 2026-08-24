@@ -100,7 +100,7 @@ export const taskPatchSchema = taskSchema.partial().extend({ archived: z.boolean
 export const timeEntrySchema = z.object({
   userId: z.string().uuid().optional(),
   projectId: z.string().uuid("Choose a project."),
-  taskId: z.string().uuid("Choose a task."),
+  taskId: z.string().uuid("Choose a task.").optional(),
   spentOn: isoDate.optional(),
   durationSeconds: z.number().int().min(0).max(24 * 3600).optional(),
   startedAt: z.string().datetime().nullable().optional(),

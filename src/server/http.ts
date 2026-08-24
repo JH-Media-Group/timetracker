@@ -90,6 +90,8 @@ export interface RouteOptions {
   cacheControl?: string;
   /** Ends the caller's own session by clearing the cookie on the way out. */
   clearSessionCookie?: boolean;
+  /** Return the handler's value without the Tally envelope for standard protocol endpoints such as OAuth. */
+  rawResponse?: boolean;
 }
 
 const MUTATING = new Set(["POST", "PATCH", "PUT", "DELETE"]);
@@ -107,6 +109,9 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
     try {
       const ctx = options.public ? publicCtx(req, requestId) : await authenticatedCtx(req, requestId);
 
+      const tokenReadOnly = ctx.actor.tokenScopes?.length === 1 && ctx.actor.tokenScopes[0] === "tally.read";
+      if (mutating && tokenReadOnly) throw forbidden("This token is read only.");
+
       // Cross-site write protection.
       //
       // The session cookie is SameSite=Lax, so a cross-site form POST does not
@@ -122,8 +127,9 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
       const bucket = options.rateLimit ?? (mutating ? "write" : "read");
       // Authenticated API tokens key on the user. The publicCtx "api" actor
       // (no real user) still keys on IP.
-      const actorKey =
-        ctx.actor.kind === "api" && ctx.actor.userId === "00000000-0000-0000-0000-000000000000"
+      const actorKey = ctx.actor.tokenPrefix
+        ? `token:${ctx.actor.tokenPrefix}`
+        : ctx.actor.kind === "api" && ctx.actor.userId === "00000000-0000-0000-0000-000000000000"
           ? `ip:${clientIp(req) ?? "unknown"}`
           : `user:${ctx.actor.userId}`;
       await enforce(bucket, actorKey);
@@ -187,7 +193,7 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
         body = await runHandler(ctx);
       }
 
-      const response = NextResponse.json(body, {
+      const response = NextResponse.json(options.rawResponse ? body.data : body, {
         headers: {
           "Cache-Control": options.cacheControl ?? "private, no-store",
           "X-Request-Id": requestId,
@@ -284,9 +290,8 @@ const isEnvelope = <T,>(v: unknown): v is Envelope<T> =>
 
 async function authenticatedCtx(req: NextRequest, requestId: string): Promise<Ctx> {
   // Bearer token takes precedence: if the header is present and valid, use it.
-  // If it is present and invalid, fall through to session auth rather than
-  // refusing, because a badly formed Authorization header should not lock out
-  // a browser that happens to send one.
+  // If it is present and invalid, refuse it. Falling through to a cookie would
+  // let a broken or revoked bearer silently act with the browser session.
   const authHeader = req.headers.get("authorization");
   if (authHeader) {
     const resolved = await resolveBearer(authHeader);
@@ -302,6 +307,7 @@ async function authenticatedCtx(req: NextRequest, requestId: string): Promise<Ct
         },
       });
     }
+    throw unauthenticated();
   }
 
   const actor = await resolveSession(req);

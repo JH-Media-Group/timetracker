@@ -45,19 +45,32 @@ const digest = (token: string) =>
  * owner's capabilities and the capabilities named by those scopes. An empty
  * scopes array means "everything the owner can do".
  */
-export const SCOPE_GROUPS: Record<string, readonly Capability[]> = {
-  time: [
+export const TOKEN_SCOPES = ["tally.read", "tally.time.write", "tally.expenses", "tally.approvals", "tally.admin"] as const;
+export type TokenScope = (typeof TOKEN_SCOPES)[number];
+
+export const SCOPE_LABELS: Record<TokenScope, { title: string; description: string }> = {
+  "tally.read": { title: "Read only", description: "View the Tally records you can already see." },
+  "tally.time.write": { title: "Log time", description: "Start timers and create, edit, or remove time within your reach." },
+  "tally.expenses": { title: "Manage expenses", description: "Create and update expenses within your reach." },
+  "tally.approvals": { title: "Review time", description: "Submit and review timesheets within your reach." },
+  "tally.admin": { title: "Administer Tally", description: "Change account setup, limited by your Tally permissions and confirmation." },
+};
+
+export const SCOPE_GROUPS: Record<TokenScope, readonly Capability[]> = {
+  "tally.read": [
+    "time:view_others", "expense:view_others", "project:view", "client:view", "people:view",
+    "invoice:view", "report:view_own", "report:view_team", "report:view_all", "report:view_financial",
+    "rates:view_billable", "rates:view_cost", "audit:view",
+  ],
+  "tally.time.write": [
     "time:create_own",
     "time:edit_own",
     "time:delete_own",
     "time:view_others",
     "time:edit_others",
     "time:delete_others",
-    "approval:submit",
-    "approval:review",
-    "approval:review_all",
   ],
-  expenses: [
+  "tally.expenses": [
     "expense:create_own",
     "expense:edit_own",
     "expense:delete_own",
@@ -66,7 +79,8 @@ export const SCOPE_GROUPS: Record<string, readonly Capability[]> = {
     "expense:delete_others",
     "expense:manage",
   ],
-  projects: [
+  "tally.approvals": ["approval:submit", "approval:review", "approval:review_all"],
+  "tally.admin": [
     "project:view",
     "project:manage",
     "project:manage_own",
@@ -74,28 +88,20 @@ export const SCOPE_GROUPS: Record<string, readonly Capability[]> = {
     "client:view",
     "client:manage",
     "task:manage",
-  ],
-  people: [
     "people:view",
     "people:manage",
     "people:invite",
     "rates:view_billable",
     "rates:view_cost",
     "rates:manage",
-  ],
-  invoices: [
     "invoice:view",
     "invoice:manage",
     "invoice:send",
     "invoice:delete",
-  ],
-  reports: [
     "report:view_own",
     "report:view_team",
     "report:view_all",
     "report:view_financial",
-  ],
-  settings: [
     "settings:manage",
     "integrations:manage",
     "audit:view",
@@ -103,7 +109,7 @@ export const SCOPE_GROUPS: Record<string, readonly Capability[]> = {
   ],
 } as const;
 
-const VALID_SCOPES = new Set(Object.keys(SCOPE_GROUPS));
+const VALID_SCOPES = new Set<string>(TOKEN_SCOPES);
 
 /* --------------------------------------------------------- scope resolution */
 
@@ -114,15 +120,15 @@ const VALID_SCOPES = new Set(Object.keys(SCOPE_GROUPS));
  * Non-empty scopes = only capabilities covered by those groups, and only if
  * the owner already holds them.
  */
-function capabilitiesForScopes(
+export function capabilitiesForScopes(
   ownerCaps: ReadonlySet<Capability>,
   scopes: string[]
 ): ReadonlySet<Capability> {
-  if (scopes.length === 0) return ownerCaps;
+  if (scopes.length === 0) return new Set<Capability>();
 
   const allowed = new Set<Capability>();
   for (const scope of scopes) {
-    const group = SCOPE_GROUPS[scope];
+    const group = VALID_SCOPES.has(scope) ? SCOPE_GROUPS[scope as TokenScope] : undefined;
     if (!group) continue;
     for (const cap of group) {
       if (ownerCaps.has(cap)) allowed.add(cap);
@@ -299,6 +305,8 @@ export async function revokeApiToken(
 export interface ResolvedApiToken {
   actor: Actor;
   prefix: string;
+  scopes: string[];
+  expiresAt: Date | null;
 }
 
 /**
@@ -329,6 +337,7 @@ export async function resolveApiToken(
       prefix: s.apiTokens.prefix,
       scopes: s.apiTokens.scopes,
       lastUsedAt: s.apiTokens.lastUsedAt,
+      expiresAt: s.apiTokens.expiresAt,
       userId: s.users.id,
       timezone: s.users.timezone,
       isOwner: s.users.isOwner,
@@ -383,7 +392,10 @@ export async function resolveApiToken(
     kind: "api",
     timezone: row.timezone,
     isOwner: row.isOwner,
+    tokenPrefix: row.prefix,
+    tokenScopes: row.scopes,
+    tokenExpiresAt: row.expiresAt,
   };
 
-  return { actor, prefix: row.prefix };
+  return { actor, prefix: row.prefix, scopes: row.scopes, expiresAt: row.expiresAt };
 }

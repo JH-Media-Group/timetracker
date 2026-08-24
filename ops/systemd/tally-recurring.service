@@ -1,0 +1,9 @@
+[Unit]
+Description=Issue due Tally recurring invoices
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/tally
+ExecStart=/usr/bin/docker compose run --rm web node ops/recurring.mjs

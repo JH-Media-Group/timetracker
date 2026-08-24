@@ -40,6 +40,7 @@ export interface TimeQuery {
   isBillable?: boolean;
   invoiced?: boolean;
   limit?: number;
+  offset?: number;
 }
 
 function conditionsFor(ctx: Ctx, q: TimeQuery) {
@@ -78,7 +79,8 @@ export async function listTimeEntries(ctx: Ctx, q: TimeQuery = {}): Promise<Time
     .leftJoin(s.invoices, eq(s.invoices.id, s.timeEntries.invoiceId))
     .where(conditionsFor(ctx, q))
     .orderBy(desc(s.timeEntries.spentOn), asc(s.timeEntries.startedAt), asc(s.timeEntries.createdAt))
-    .limit(Math.min(q.limit ?? 5000, 10000));
+    .limit(Math.min(q.limit ?? 5000, 10000))
+    .offset(q.offset ?? 0);
 
   if (rows.length === 0) return [];
 
@@ -238,7 +240,7 @@ async function loadEditable(ctx: Ctx, id: string) {
 export interface CreateTimeEntryInput {
   userId?: string;
   projectId: string;
-  taskId: string;
+  taskId?: string;
   spentOn?: IsoDate;
   durationSeconds?: number;
   startedAt?: string | null;
@@ -256,14 +258,30 @@ export interface CreateResult {
   stopped: TimeEntryDto | null;
 }
 
+/** The last task this person used on the project, or the project's first live task. */
+async function defaultTaskFor(ctx: Ctx, userId: string, projectId: string): Promise<string> {
+  const [recent] = await ctx.db
+    .select({ taskId: s.projectTasks.taskId })
+    .from(s.timeEntries)
+    .innerJoin(s.projectTasks, eq(s.projectTasks.id, s.timeEntries.projectTaskId))
+    .where(and(eq(s.timeEntries.userId, userId), eq(s.timeEntries.projectId, projectId), isNull(s.timeEntries.deletedAt), isNull(s.projectTasks.archivedAt)))
+    .orderBy(desc(s.timeEntries.updatedAt))
+    .limit(1);
+  if (recent) return recent.taskId;
+  const [first] = await ctx.db.select({ taskId: s.projectTasks.taskId }).from(s.projectTasks)
+    .where(and(eq(s.projectTasks.projectId, projectId), isNull(s.projectTasks.archivedAt)))
+    .orderBy(asc(s.projectTasks.createdAt)).limit(1);
+  if (!first) throw validationFailed({ taskId: ["That project has no active task."] });
+  return first.taskId;
+}
+
 export async function createTimeEntry(ctx: Ctx, input: CreateTimeEntryInput): Promise<CreateResult> {
   const targetUserId = input.userId ?? ctx.actor.userId;
   const own = targetUserId === ctx.actor.userId;
 
   if (own) assertCan(ctx, "time:create_own");
-  else if (!(await canActOnBehalfOf(ctx, targetUserId))) {
-    throw forbidden("You cannot log time for that person.");
-  }
+  else if (!ctx.actor.capabilities.has("time:edit_others")) throw forbidden("You cannot log time for other people.");
+  else if (!(await canActOnBehalfOf(ctx, targetUserId))) throw notFound("That person");
 
   return withTransaction(ctx, async (tx) => {
     const settings = await getSettings(tx);
@@ -297,7 +315,8 @@ export async function createTimeEntry(ctx: Ctx, input: CreateTimeEntryInput): Pr
     if (!project) throw validationFailed({ projectId: ["That project does not exist."] });
     if (project.archivedAt) throw validationFailed({ projectId: ["That project is archived."] });
 
-    const projectTaskId = await projectTaskFor(tx, input.projectId, input.taskId);
+    const taskId = input.taskId ?? await defaultTaskFor(tx, targetUserId, input.projectId);
+    const projectTaskId = await projectTaskFor(tx, input.projectId, taskId);
 
     // Creating into an approved period is refused for the owner, and flags the
     // submission when an administrator overrides.
@@ -565,9 +584,8 @@ async function stopRunning(ctx: Ctx, userId: string): Promise<TimeEntryDto | nul
 
 export async function stopTimer(ctx: Ctx, userId?: string): Promise<TimeEntryDto | null> {
   const target = userId ?? ctx.actor.userId;
-  if (target !== ctx.actor.userId && !(await canActOnBehalfOf(ctx, target))) {
-    throw forbidden("You cannot stop that person's timer.");
-  }
+  if (target !== ctx.actor.userId && !ctx.actor.capabilities.has("time:edit_others")) throw forbidden("You cannot stop other people's timers.");
+  if (target !== ctx.actor.userId && !(await canActOnBehalfOf(ctx, target))) throw notFound("That person");
   return withTransaction(ctx, async (tx) => stopRunning(tx, target));
 }
 

@@ -1,0 +1,8 @@
+[Unit]
+Description=Create and verify a Tally PostgreSQL dump
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/tally/ops/backup-postgres.sh

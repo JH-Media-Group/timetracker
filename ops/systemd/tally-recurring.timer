@@ -1,0 +1,10 @@
+[Unit]
+Description=Run Tally recurring invoices daily
+
+[Timer]
+OnCalendar=*-*-* 06:15:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

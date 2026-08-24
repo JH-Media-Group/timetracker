@@ -106,6 +106,7 @@ export async function updateInvoiceConfig(ctx: Ctx, patch: ConfigPatch): Promise
 
   await withTransaction(ctx, async (tx) => {
     const before = await getSettings(tx);
+    const beforeConfig = await getInvoiceConfig(tx);
     const update: Record<string, unknown> = { updatedAt: tx.now(), updatedBy: tx.actor.userId };
 
     switch (patch.section) {
@@ -195,7 +196,7 @@ export async function updateInvoiceConfig(ctx: Ctx, patch: ConfigPatch): Promise
       entityType: "settings",
       entityId: null,
       entityLabel: `Invoice configuration: ${patch.section}`,
-      before,
+      before: beforeConfig,
       after: update,
     });
   });

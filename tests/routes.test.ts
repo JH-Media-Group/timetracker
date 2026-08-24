@@ -69,6 +69,7 @@ const EXEMPT: Record<string, string> = {
   "auth/reset":
     "public by necessity: the token is the credential. Rate limited per address, and deliberately " +
     "not per token, so nobody can burn a colleague's invite by spending its attempts",
+  "auth/token-info": "tokens only: validates the calling bearer and returns its own scope metadata",
   "auth/signout": "ending your own session needs no permission",
   "auth/signout-all": "declares settings:manage",
   bootstrap: "everyone: the shell cannot render without it, and it redacts per capability",
@@ -125,6 +126,16 @@ const EXEMPT: Record<string, string> = {
 
   "api-tokens": "self-service: every person manages their own tokens, no capability needed",
   "api-tokens/[id]": "self-service: revocation is scoped to the caller's own tokens",
+  "oauth/request": "everyone with a session: validates a client request before consent",
+  "oauth/authorize": "everyone with a session: consent always acts as the signed-in person",
+  "mcp/time/[id]": "service: ownership and manager reach decide whether edit or delete is allowed",
+  "mcp/time/[id]/delete": "service: ownership and manager reach decide whether confirmation is required",
+  "mcp/undo": "service: the signed token binds the change to the calling API actor",
+
+  "app/.well-known/oauth-protected-resource": "public OAuth discovery metadata",
+  "app/.well-known/oauth-authorization-server": "public OAuth discovery metadata",
+  "app/oauth/register": "public OAuth dynamic client registration with strict redirect validation",
+  "app/oauth/token": "public OAuth token exchange; the one-time code and PKCE verifier are the credentials",
 
   // Outside v1. These are infrastructure endpoints, not part of the API the
   // app calls, and they are deliberately unauthenticated so that a proxy and a

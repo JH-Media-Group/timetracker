@@ -169,6 +169,10 @@ Tally deployment:
 
 The scheduled mail, recurring-invoice, and housekeeping commands run as
 short-lived containers from the exact same image tag as the web service.
+`ops/systemd/` contains the reviewed units. `ops/backup-postgres.sh` creates a
+custom-format Tally-only dump, verifies its catalog before publishing it, and
+retains 14 daily files under `/var/backups/tally`. DigitalOcean server backups
+then retain those files outside the live droplet disk.
 
 ## Deployment procedure
 
@@ -191,7 +195,12 @@ short-lived containers from the exact same image tag as the web service.
    ```caddy
    tally.jhmediagroup.com {
        encode zstd gzip
-       reverse_proxy tally-web:3000
+       handle /mcp {
+           reverse_proxy tally-staging-mcp:3201
+       }
+       handle {
+           reverse_proxy tally-staging-web:3000
+       }
    }
    ```
 
@@ -202,8 +211,12 @@ short-lived containers from the exact same image tag as the web service.
 14. Install isolated systemd services and timers for:
     - queued mail every five minutes;
     - recurring invoices daily;
-    - expired-session and idempotency housekeeping nightly.
-15. Perform a controlled Tally-only restart and rollback test.
+    - expired-session and idempotency housekeeping nightly;
+    - a verified Tally-only PostgreSQL dump nightly.
+15. Run the backup service once, restore that dump into a scratch database, and
+    compare the migration level and table counts before dropping the scratch
+    database.
+16. Perform a controlled Tally-only restart and rollback test.
 
 ## Rollback
 

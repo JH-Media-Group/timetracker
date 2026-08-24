@@ -571,6 +571,7 @@ function ApiTokensCard() {
   const [showCreate, setShowCreate] = React.useState(false);
   const [newToken, setNewToken] = React.useState<string | null>(null);
   const [label, setLabel] = React.useState("");
+  const [scopes, setScopes] = React.useState<string[]>(["tally.read", "tally.time.write"]);
 
   const { data: tokens, isLoading } = useQuery({
     queryKey: ["api-tokens"],
@@ -592,7 +593,7 @@ function ApiTokensCard() {
   const revoke = useMutation({
     mutationFn: api.revokeApiToken,
     onSuccess: () => {
-      toast.push({ tone: "neutral", title: "Token revoked." });
+      toast.push({ tone: "default", title: "Token revoked." });
       qc.invalidateQueries({ queryKey: ["api-tokens"] });
     },
     onError: (e) =>
@@ -602,7 +603,7 @@ function ApiTokensCard() {
   const copyToken = () => {
     if (!newToken) return;
     navigator.clipboard.writeText(newToken).then(() => {
-      toast.push({ tone: "neutral", title: "Copied to clipboard." });
+      toast.push({ tone: "default", title: "Copied to clipboard." });
     });
   };
 
@@ -635,11 +636,15 @@ function ApiTokensCard() {
               <Copy className="size-3.5" />
             </Button>
           </div>
+          <code className="mt-2 block break-all rounded bg-surface-secondary px-2 py-1 text-xs">
+            claude mcp add --transport http tally https://tally.jhmediagroup.com/mcp --header Authorization:&quot;Bearer {newToken}&quot;
+          </code>
         </div>
       )}
 
       {showCreate && (
-        <div className="mb-3 flex items-end gap-2">
+        <div className="mb-3 grid gap-3">
+          <div className="flex items-end gap-2">
           <Field label="Label" className="flex-1">
             <Input
               value={label}
@@ -649,11 +654,22 @@ function ApiTokensCard() {
           </Field>
           <Button
             loading={create.isPending}
-            onClick={() => label.trim() && create.mutate({ label: label.trim() })}
+            onClick={() => label.trim() && create.mutate({ label: label.trim(), scopes })}
           >
             Create
           </Button>
           <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
+          </div>
+          <div className="grid gap-2 md:grid-cols-2">
+            {[
+              ["tally.read", "Read only"], ["tally.time.write", "Log time"],
+              ["tally.expenses", "Manage expenses"], ["tally.approvals", "Review time"],
+              ["tally.admin", "Administer Tally"],
+            ].map(([scope, title]) => <label key={scope} className="flex items-center gap-2 text-sm text-ink-secondary">
+              <input type="checkbox" checked={scopes.includes(scope)} onChange={(event) => setScopes((current) => event.target.checked ? [...current, scope] : current.filter((value) => value !== scope))} />
+              {title}
+            </label>)}
+          </div>
         </div>
       )}
 

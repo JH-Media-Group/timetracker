@@ -1287,6 +1287,13 @@ Three jobs are built, and all run from cron rather than a queue:
 | `scripts/recurring.mts` | `pnpm jobs:recurring` | `0 6 * * *` | Raises the recurring invoices due today |
 | `scripts/mail.mts` | `pnpm jobs:mail` | `*/5 * * * *` | Sends the queued outbound mail |
 
+Production uses the matching units in `ops/systemd/`. A fourth unit runs
+`ops/backup-postgres.sh` nightly at 07:00 UTC. It creates a custom-format dump
+of only `tally_staging`, verifies the archive with `pg_restore --list`, retains
+14 daily files, and relies on the enabled DigitalOcean server backup to retain
+those files outside the live droplet disk. The first deployment includes a
+scratch restore; a dump that has never restored is not counted as a backup.
+
 The reasoning, so this is a decision and not a shortcut:
 
 - **Amended 2026-08-15 (TALLY-49).** The first two talk only to Postgres, in a transaction, so

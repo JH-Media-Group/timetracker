@@ -1,8 +1,9 @@
 # MCP connector
 
-**Status: plan only. Nothing here is built.** Written 2026-08-23 and revised
-twice the same day: once against two working implementations (section 11), and
-once against a review of this document itself, which found eleven weaknesses.
+**Status: implemented locally, awaiting the watched staging deployment.** Written
+and reviewed on 2026-08-23, then implemented against TALLY-61 through TALLY-67.
+The deployment adds the MCP process, OAuth endpoints, migrations, Tally-only
+timers, and a verified nightly dump; none is active until the deployment runs.
 The largest was that it had nothing at all on untrusted content, which is now
 section 6.5 and is the most likely way this connector causes harm.
 
@@ -765,7 +766,7 @@ it is the same defect shape, in the same place, in a shipped product.
 
 ---
 
-## 12. How it would actually be deployed
+## 12. How it is deployed
 
 Observed on 2026-08-23 while deploying the application itself, so this is what
 the droplet does rather than what a document says it does.
@@ -790,11 +791,13 @@ back by putting the old tag back: previous images are retained on the host, and
 the deploy keeps an `.env.bak-<sha>`. **Do not pipe `docker save` through a
 PowerShell pipeline**; it corrupts the stream. Write the tar, copy the tar.
 
-**An MCP service therefore needs no new deployment machinery**, which is worth
-knowing before pricing it. It is a second service in an existing compose file,
-one more Caddy block, and the same tag.
+**The MCP service uses the same immutable image**, as a second service in the
+existing compose project. It receives only `TALLY_API_BASE_URL`, not the web
+environment file or database credentials. Caddy sends `/mcp` to port 3201 and
+all other paths to the web container.
 
-**There are no systemd timers on this host.** Nothing schedules anything today,
-which is why queued mail sits unsent. An MCP server is a long-running service
-rather than a timer, so this does not block it, but the housekeeping the plan
-assumes (expiring tokens, pruning sessions) has nowhere to run yet.
+**The repository now carries the missing timers.** `ops/systemd/` contains
+isolated one-shot services for mail, recurring invoices, housekeeping, and a
+nightly custom-format PostgreSQL dump. Installation and the first scratch
+restore remain deployment steps, because the shared droplet must not be changed
+outside the watched rollout.
