@@ -2,6 +2,8 @@
 
 **Prepared:** 2026-08-16
 
+**Staging deployed:** 2026-08-24
+
 **Production droplet:** `165.245.130.130`
 
 **Hostname:** `tally.jhmediagroup.com`
@@ -11,6 +13,64 @@ DigitalOcean droplet. Tally is joining a sensitive server that already runs
 Caddy, PostgreSQL, Redis, Twenty CRM, Lead Orchestrator, Process Server,
 Twenty MCP, and IdeaFlow. Changes must be narrow, reversible, and must not
 restart unrelated services.
+
+## Staging deployment record: 2026-08-24
+
+Tally staging is live at `https://tally.jhmediagroup.com` on image
+`tally:8f476e5` (image ID
+`sha256:8a3cbc37aae84d60049d74462373510ec572faa3b202f249f88ed9998985dbce`).
+The deployed source passed 52 test files and 784 tests, TypeScript, repository
+hygiene, and a production Next build before transfer. The image transfer and
+every candidate file were checked by SHA-256 before use.
+
+Deployment evidence:
+
+- The owner confirmed DigitalOcean backups and a completed droplet snapshot
+  before deployment.
+- The immediate pre-deployment custom-format dump is
+  `/var/backups/tally/tally-pre-b5ca348-20260824T033702Z.dump`. Its SHA-256 is
+  `1ab23a89b1246f073cce04cca8db809ff31235e1ce4ab5f3dfb754e33f5ca6aa`.
+- The post-deployment backup service produced
+  `/var/backups/tally/tally-20260824T040015Z.dump`. Its SHA-256 is
+  `c3241c0118187bf466cfcb02be5cad2807ee45703886b57db9fe13c89cc83fee`.
+- Both dumps passed `pg_restore --list`. Each was restored as the
+  `tally_staging` owner into a uniquely named scratch database, reconciled,
+  and removed. The post-deployment restore matched 57 users, 364 projects,
+  [private record count] active time entries, zero running timers, and 10 migrations.
+- `tally-staging-web` and `tally-staging-mcp` run the same immutable image.
+  Both are healthy, unexposed on the host, read-only, capability-free,
+  protected by `no-new-privileges`, resource-limited, and configured for
+  three 10 MiB Docker log files.
+- External checks return `200` for readiness and OAuth discovery, `405` for
+  MCP liveness, and `401` plus the protected-resource metadata challenge for
+  an unauthenticated MCP request.
+- Caddy was reloaded without a restart. PostgreSQL, Redis, Caddy, and every
+  unrelated application stayed running with zero restarts and zero OOM events.
+- The mail, recurring, sweep, and backup systemd timers are enabled. Manual
+  runs passed, and the first automatic mail run completed successfully at
+  04:05:16 UTC with an empty queue.
+- Staging has `/etc/systemd/system/tally-mail.service.d/staging-no-reminders.conf`.
+  It adds `--no-reminders`, so invitation and password-reset mail can drain
+  without automatic dunning mail reaching imported client contacts. Remove
+  this override only during the controlled production cutover.
+- No external failure webhook is configured. Failed jobs write a priority
+  `err` journal entry and the notifier exits successfully after noting that no
+  external alert was sent.
+- Root SSH remains enabled. Effective `sshd` configuration reported
+  `permitrootlogin yes` after deployment. Only ports 22, 80, and 443 listen
+  publicly.
+
+Rollback material remains under `/opt/tally/artifacts`, including the prior
+image tar, environment, Compose file, server Caddyfile, and both transferred
+candidate images. Do not prune these until staging has completed its test
+period and a separate cutover rollback set exists.
+
+The Caddyfile is mounted as a single file. Replacing `/opt/Caddyfile` changes
+the host inode while the running container continues seeing the mounted inode.
+For a reload without restarting Caddy, update the complete validated file at
+both `/opt/Caddyfile` and `/etc/caddy/Caddyfile` inside `opt-caddy-1`, verify
+their hashes match, validate, and then reload. The deployment rollback tested
+this behavior before the final successful reload.
 
 ## What Redis means for Tally
 

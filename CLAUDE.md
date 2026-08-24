@@ -14,7 +14,7 @@ Auto-loaded into every Claude Code session in this repo. Read it before doing an
 ## TL;DR
 
 - **Product:** Tally (working codename). An in-house replacement for JH Media Group's Harvest account: time tracking, project profitability, and invoicing. Internal only, never sold, served from a single DigitalOcean droplet.
-- **Status (2026-08-16):** the whole thing runs end to end against Postgres, loaded with the real Harvest account. `pnpm db:setup` then `pnpm dev -p 3200`, sign in as `person01@example.com` / `tally-dev-password`. Clean typecheck, 634 tests, and a clean production image build. **Everything in the product is built and tested. What remains is deployment and optional integration credentials:** Google SSO, the SendGrid key and its sending domain, object storage for receipts and logos, and access to the existing shared droplet. See docs/PERMISSIONS-AND-CREDENTIALS.md.
+- **Status (2026-08-24):** staging is live at `https://tally.jhmediagroup.com` on `tally:8f476e5`. The MCP and OAuth epic is deployed, all four Tally timers are active, and a post-deployment backup passed an owner-preserving scratch restore. Clean typecheck, 784 tests, and a clean production image build. Remaining optional integrations are Google SSO and object storage for receipts and logos. See docs/DEPLOYMENT-AND-SERVER-HARDENING.md and docs/PERMISSIONS-AND-CREDENTIALS.md.
 - **Replaces:** the private Harvest account. Migration must reconcile to the cent; see BACKEND_PRD section 16.3.
 - **User:** Jason. PowerShell on Windows. No em dashes in any generated user-facing text, docs included.
 
@@ -98,7 +98,7 @@ Work is tracked in Jira project **TALLY** and documented in Confluence space **T
 
 ## Current focus snapshot
 
-**Last updated:** 2026-08-15. Maintain this section manually.
+**Last updated:** 2026-08-24. Maintain this section manually.
 
 - Backend and wiring complete. E0 through E13 in docs/BUILD_EPICS.md are ticked. **672 tests, 14 data invariants.**
 - **Email is built (TALLY-48, 49, 50):** invites and password resets, an `outbound_messages` queue drained by `pnpm jobs:mail` with claim/lease and backoff, and overdue invoice reminders on a three-step escalation. Nothing sends until `SMTP_URL` and `MAIL_FROM` are both set; `MAIL_TO_DISK=1` writes to `.mail/` instead. **`MAIL_FROM` is now required whenever `SMTP_URL` is set**, because the old fallback earned a 5xx and 5xx means permanent, so every message failed on its first attempt.
@@ -119,7 +119,8 @@ Work is tracked in Jira project **TALLY** and documented in Confluence space **T
   - **The export files disagree about scope**, and that is the whole design problem: the lists are current-only, the time report is all history. Entities absent from a current list are created archived.
   - **The Uninvoiced screen reads $[private total removed]** because Harvest's `Invoiced?` is only true for work invoiced through Harvest. `--billed-before YYYY-MM-DD` fixes it and is off by default; the cutoff is Jason's to name.
   - Real data immediately found two defects the seed data could not: a pinned-totals row asserting `$0.00` spent, and hours rendered bare in a column shared with money. **Load real data earlier next time.**
-- **Waiting on deployment access or optional credentials rather than product code:** Google SSO (TALLY-20), the SendGrid key and sending domain (TALLY-19; the transport and queue are built and tested), object storage for receipts, logos and stored PDFs (TALLY-21), and SSH access to integrate Tally into the shared droplet (TALLY-22). See docs/PERMISSIONS-AND-CREDENTIALS.md.
+- **Staging deployment completed 2026-08-24:** `tally-staging-web` and `tally-staging-mcp` run `tally:8f476e5` on the shared droplet. Ten migrations are applied, Tally container limits and log rotation are active, four systemd timers are enabled, and both pre-deployment and post-deployment dumps passed scratch restores. Staging mail uses a systemd override with `--no-reminders`; invitation and password-reset mail still drains. Root SSH remains enabled. See docs/DEPLOYMENT-AND-SERVER-HARDENING.md.
+- **Waiting on optional credentials rather than deployment access:** Google SSO (TALLY-20) and object storage for receipts, logos and stored PDFs (TALLY-21). See docs/PERMISSIONS-AND-CREDENTIALS.md.
 - **Production droplet:** `165.245.130.130`. It is shared with the other JH Media Group projects; Confluence documents one `/opt/docker-compose.yml` with Caddy, PostgreSQL 16, and Redis, so inspect that topology before adding Tally and do not create competing public proxy or database services.
 - Deliberately disabled rather than faked: the full account export, CSV import, and the integration connect buttons. Per-grid CSV export does work.
 - Open decisions parked: final product name, whether contractors keep password auth, and whether invoice numbering continues Harvest's sequence (the screen supports either). Droplet capacity is now an inspection question because Tally is joining an existing shared server, not provisioning a new one.
