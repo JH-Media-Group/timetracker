@@ -29,12 +29,27 @@ describe("clockTimeIsAmbiguous", () => {
   });
 
   it("agrees with the parser about what a clock time even is", () => {
-    // The two shared a regex by copy for a while. Anything the parser accepts
-    // must be classified here rather than silently falling through as "not
-    // ambiguous", which reads as 3am.
-    for (const s of ["3", "3:15", "3pm", "3 pm", "03:15", "23:59", "12:00"]) {
-      expect(parseClockTime(s), s).not.toBeNull();
-      expect(typeof clockTimeIsAmbiguous(s), s).toBe("boolean");
+    /*
+      The two shared a regex by copy for a while, so this checks they still
+      classify the same strings the same way.
+
+      It used to assert `typeof ... === "boolean"`, which is the declared return
+      type and therefore true of every possible implementation, `return false`
+      included. Both reviewers named it as the one vacuous test in the file.
+      What it asserts now is the actual property: a bare hour the parser accepts
+      is ambiguous, and one carrying a meridiem or a 24-hour hour is not.
+    */
+    const ambiguous = ["3", "3:15", "1", "11:59", "12", "12:00"];
+    const settled = ["3pm", "3 pm", "23:59", "0:30", "13:00", "00:00"];
+
+    for (const s of [...ambiguous, ...settled]) {
+      expect(parseClockTime(s), `${s} should parse`).not.toBeNull();
+    }
+    for (const s of ambiguous) {
+      expect(clockTimeIsAmbiguous(s), `${s} needs resolving`).toBe(true);
+    }
+    for (const s of settled) {
+      expect(clockTimeIsAmbiguous(s), `${s} says which half of the day it is`).toBe(false);
     }
   });
 });
@@ -124,9 +139,35 @@ describe("crossesMidnight and nextIsoDay", () => {
 });
 
 describe("formatClockTime", () => {
-  it("round-trips everything resolveClockTime can produce", () => {
+  it("round-trips every minute of the day", () => {
     for (let m = 0; m < 24 * 60; m++) {
       expect(parseClockTime(formatClockTime(m)), String(m)).toBe(m);
+    }
+  });
+
+  it("wraps past midnight without help, which is why the caller adds no modulo", () => {
+    // `syncFromDuration` hands it start-plus-duration, which can exceed 1440.
+    // It carried a modulo and a comment claiming that was necessary; it is not,
+    // and a reviewer pointed out the line changed nothing.
+    expect(formatClockTime(24 * 60)).toBe(formatClockTime(0));
+    expect(formatClockTime(25 * 60 + 30)).toBe(formatClockTime(60 + 30));
+  });
+});
+
+describe("resolveClockTime stays inside a day", () => {
+  it("never returns a value outside 0..1439, for any input the parser accepts", () => {
+    // The reviewers proved this by reading the two candidate expressions. This
+    // is the executable version, over every hour and both resolution contexts.
+    for (let h = 0; h <= 23; h++) {
+      for (const suffix of ["", "am", "pm"]) {
+        const s = `${h}:30${suffix}`;
+        for (const ctx of [{}, { after: 0 }, { after: 1439 }, { before: 0 }, { before: 1439 }]) {
+          const v = resolveClockTime(s, ctx);
+          if (v === null) continue;
+          expect(v, `${s} ${JSON.stringify(ctx)}`).toBeGreaterThanOrEqual(0);
+          expect(v, `${s} ${JSON.stringify(ctx)}`).toBeLessThan(24 * 60);
+        }
+      }
     }
   });
 });

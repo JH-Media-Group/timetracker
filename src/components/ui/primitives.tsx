@@ -533,6 +533,19 @@ export function PopoverContent({
    * to know. Passing a boolean overrides it, which is for the case that has not
    * happened yet; `tests/dialog-portal.test.ts` is what stops it being used to
    * put the bug back.
+   *
+   * **It is a trade, not a free win, and the first version of this comment did
+   * not say so.** `dialogContentClass` carries a `translate`, which makes the
+   * dialog the containing block for `position: fixed` descendants, and Radix
+   * positions popovers with `strategy: "fixed"`. Add `overflow-y: auto` and the
+   * dialog becomes a clipping box: a tall popover near the bottom of a short
+   * dialog is cut off, and cannot be scrolled to, because a fixed element adds
+   * nothing to `scrollHeight`. Both reviewers found this.
+   *
+   * It is still the right default. A clipped list is a worse-looking version of
+   * a working control; a portalled one inside a modal dialog is a control that
+   * does not work at all. The mitigation is to keep popovers inside dialogs
+   * short, which is why `ProjectPicker` caps its list.
    */
   portal?: boolean;
 }) {

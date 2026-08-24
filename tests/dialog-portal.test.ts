@@ -49,31 +49,50 @@ describe("the dialog portal rule", () => {
   });
 
   it("Tray does not provide the context, because it traps nothing", () => {
-    // A tray is modal={false} and its body scrolls, so a portalled popover is
-    // both harmless and necessary there. If this ever changes, the popovers in
-    // the approvals tray stop escaping the scroll container.
-    const tray = primitives.slice(primitives.indexOf("function Tray"));
+    /*
+      A tray is modal={false} and its body scrolls, so a portalled popover is
+      both harmless and necessary there.
+
+      The slice is taken from a located index rather than a raw `indexOf`,
+      because `indexOf` returns -1 when the name changes and `slice(-1)` is then
+      the last character of the file, which contains no provider and passes.
+      A reviewer pointed out that renaming Tray disarmed this silently. It also
+      no longer asserts a property of file ordering: only the Tray function
+      body is examined, not everything after it.
+    */
+    const at = primitives.indexOf("export function Tray(");
+    expect(at, "Tray was renamed; this check was reading the wrong text").toBeGreaterThan(-1);
+
+    const after = primitives.slice(at);
+    const end = after.indexOf(String.fromCharCode(10) + "export ", 1);
+    const tray = end === -1 ? after : after.slice(0, end);
+
+    expect(tray).toContain("modal={false}");
     expect(tray).not.toContain("InsideDialogContext.Provider");
-    expect(primitives).toContain("modal={false}");
   });
 
   it("nobody hard-codes the portal decision at a call site", () => {
     /*
-      A literal `portal={true}` or `portal={false}` in JSX, which is the shape
-      that shipped the bug and the shape that would put it back. Forwarding a
-      variable (`portal={portal}`) is not this: undefined forwards as unset and
-      the context still decides, which is what `ProjectPicker` does so that an
-      override stays possible.
+      Any `portal=` attribute at a call site.
 
-      A previous version of this test matched the bare word "portal" followed
-      by a space, which meant it was reading the doc comments. It passed
-      because a sentence had been reworded, not because the rule held.
+      Two earlier versions of this were weaker. The first matched the bare word
+      "portal" followed by a space, so it was reading the doc comments and
+      passed because a sentence had been reworded. The second matched only the
+      literals `portal={true}` and `portal={false}`, and a reviewer pointed out
+      that `portal={force}` or `portal={Boolean(1)}` walked straight past it.
+
+      No regex, because a backslash in this file has now been eaten three times
+      by the tooling that writes it. `includes` cannot be mangled.
+
+      One legitimate forwarder: ProjectPicker passes its own optional prop
+      through, so an override stays possible. It is named rather than pattern
+      matched, so a second forwarder has to be somebody's decision.
     */
     const offenders: string[] = [];
     for (const file of tsxFiles(SRC)) {
       if (file === PRIMITIVES) continue;
-      const body = readFileSync(file, "utf8");
-      if (body.includes("portal={true}") || body.includes("portal={false}")) {
+      if (file.endsWith("project-picker.tsx")) continue;
+      if (readFileSync(file, "utf8").includes("portal={")) {
         offenders.push(relative(process.cwd(), file).split(sep).join("/"));
       }
     }

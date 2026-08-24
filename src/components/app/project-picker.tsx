@@ -19,9 +19,12 @@ import * as React from "react";
 import { Check, ChevronsUpDown, Search } from "lucide-react";
 import { cn } from "@/lib/cn";
 import { useApp } from "./providers";
-import { Popover, PopoverContent, PopoverTrigger, Badge } from "@/components/ui/primitives";
+import {
+  Popover, PopoverContent, PopoverTrigger, Badge, useInsideDialog,
+} from "@/components/ui/primitives";
 import { inputVariants } from "@/components/ui/recipes";
 import type { ID } from "@/lib/types";
+import { pickerKeyAction } from "@/lib/picker-keys";
 
 const RECENTS_KEY = "tally-recent-projects";
 
@@ -80,6 +83,12 @@ export function ProjectPicker({
   */
   const [cursor, setCursor] = React.useState(0);
   const listId = React.useId();
+  /*
+    Inside a dialog the popover is not portalled, so the dialog clips it (see
+    `PopoverContent`). A shorter list is the mitigation, and it is the one that
+    comment promises, so it has to actually exist.
+  */
+  const insideDialog = useInsideDialog();
 
   const assigned = React.useMemo(
     () => projects.filter((p) => !p.archivedAt && (p.memberIds.includes(me.id) || p.managerIds.includes(me.id))),
@@ -132,25 +141,46 @@ export function ProjectPicker({
     [q, recents, grouped]
   );
 
-  // Back to the top whenever the list changes under it, or the old index points
-  // at a row that is no longer there.
+  /*
+    Back to the top when the search or the popover changes, and never past the
+    end of a list that shrank underneath it.
+
+    The dependency list used to be `[q, open]` alone, under a comment claiming
+    it also covered "the old index points at a row that is no longer there". It
+    did not: a bootstrap refetch dropping a project assignment while the popover
+    is open shrinks `order` without touching `q`, and the cursor was then left
+    pointing at nothing, so Enter did nothing at all. Both reviewers found this
+    independently, which is usually a sign the comment was the giveaway.
+  */
   React.useEffect(() => { setCursor(0); }, [q, open]);
+  React.useEffect(() => {
+    setCursor((c) => (c < order.length ? c : 0));
+  }, [order.length]);
 
   const idAt = (i: number) => order[i]?.replace(/^r-/, "");
 
   const onKeyDown = (e: React.KeyboardEvent) => {
-    if (order.length === 0) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      setCursor((c) => (c + 1) % order.length);
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setCursor((c) => (c - 1 + order.length) % order.length);
-    } else if (e.key === "Enter") {
-      // The search box is inside a form in the time entry dialog, so without
-      // this the first Enter submits the form instead of choosing a project.
-      e.preventDefault();
-      const pid = idAt(cursor);
+    const action = pickerKeyAction(e.key, order.length, cursor);
+    if (!action.handled) return;
+    /*
+      Both, and neither is optional.
+
+      `preventDefault` stops implicit form submission. `stopPropagation` stops
+      the entry form's own `onKeyDown`, which saves on Ctrl+Enter, from seeing a
+      keystroke aimed at this search box.
+
+      The version that shipped returned early when the list was empty, before
+      either call. So typing something that matched nothing and pressing Enter
+      submitted the form from inside the picker: an error if no project was
+      chosen yet, and a saved entry if one was. Un-portalling the popover is
+      what made that reachable, because the search box became a real descendant
+      of the form. One reviewer found it; it is the worst thing in the commit.
+    */
+    e.preventDefault();
+    e.stopPropagation();
+    if (action.cursor !== null) setCursor(action.cursor);
+    if (action.choose !== null) {
+      const pid = idAt(action.choose);
       if (pid) choose(pid);
     }
   };
@@ -201,7 +231,11 @@ export function ProjectPicker({
           />
         </div>
 
-        <div className="max-h-[320px] overflow-y-auto p-1" id={listId} role="listbox">
+        <div
+          className={cn("overflow-y-auto p-1", insideDialog ? "max-h-[200px]" : "max-h-[320px]")}
+          id={listId}
+          role="listbox"
+        >
           {!q && recents.length > 0 && (
             <>
               <div className="px-2 py-1.5 text-xs font-semibold uppercase tracking-[0.06em] text-ink-tertiary">Recent</div>

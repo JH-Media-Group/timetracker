@@ -48,14 +48,16 @@ export function PhoneInput({
         inputMode="tel"
         value={rest}
         placeholder={placeholder ?? (selected === "+1" ? "(312) 555-0100" : "Phone number")}
-        onChange={(e) => onChange(joinPhone(selected, e.target.value))}
         /*
-          Shaped on blur rather than on every keystroke. Formatting while
-          somebody types means the caret jumps whenever a bracket or a dash is
-          inserted ahead of it, and editing the middle of a number becomes a
-          fight. Nothing is lost by waiting: the stored value is the same either
-          way.
+          Typing stores exactly what was typed. Shaping happens on blur.
+
+          This comment used to say the same thing while `joinPhone` formatted on
+          every keystroke, so the value jumped and the caret went to the end as
+          soon as a tenth digit arrived, and editing the middle of a number was
+          the fight the comment said it was avoiding. `joinPhone` no longer
+          formats; the blur handler below is the only thing that does.
         */
+        onChange={(e) => onChange(joinPhone(selected, e.target.value))}
         onBlur={(e) => onChange(joinPhone(selected, formatNationalNumber(e.target.value, selected)))}
       />
     </div>

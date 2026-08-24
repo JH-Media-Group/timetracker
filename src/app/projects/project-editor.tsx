@@ -53,6 +53,30 @@ export function ProjectEditor({ projectId }: { projectId?: string }) {
   return <ProjectForm existing={existing} />;
 }
 
+const DRAFT_KEY = "tally-project-draft";
+
+/**
+ * A form left behind on the way to "Add new client", if there is one.
+ *
+ * Read once and removed in the same breath, so a draft cannot outlive the trip
+ * it was saved for and surprise somebody a week later. Returns an empty object
+ * on anything unexpected, which merges into the defaults as nothing.
+ */
+function restoreDraft(): Record<string, unknown> {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = sessionStorage.getItem(DRAFT_KEY);
+    sessionStorage.removeItem(DRAFT_KEY);
+    if (!raw) return {};
+    const parsed: unknown = JSON.parse(raw);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : {};
+  } catch {
+    return {};
+  }
+}
+
 function ProjectForm({ existing }: { existing?: Project }) {
   const search = useSearchParams();
   const router = useRouter();
@@ -61,6 +85,20 @@ function ProjectForm({ existing }: { existing?: Project }) {
   const toast = useToast();
   const { clients, tasks, users, clientById, taskById, userById } = useApp();
 
+  /*
+    The form survives the trip to "Add new client".
+
+    Without this it did not, and the comment on the button claimed otherwise:
+    leaving the page unmounts the component, and only `?client=` came back, so
+    the name, code, dates, budget, billing type, rates, tags and notes were all
+    gone. A reviewer called that out against the very sentence that said the old
+    way "used to mean coming back to an empty form".
+
+    Session storage rather than a query string: it is a whole form, it is
+    per-tab, it dies with the tab, and none of it should end up in a URL that
+    gets pasted somewhere. Read once on mount and cleared immediately, so a
+    stale draft cannot resurrect itself on a later visit.
+  */
   const [form, setForm] = React.useState(() => ({
     name: existing?.name ?? "",
     /**
@@ -98,9 +136,29 @@ function ProjectForm({ existing }: { existing?: Project }) {
     memberIds: existing?.memberIds ?? [],
     managerIds: existing?.managerIds ?? [],
     reportVisibility: "managers",
+    ...restoreDraft(),
+    /*
+      The client that was just created beats whatever the draft remembered.
+
+      The draft is a snapshot from before the trip, so its `clientId` is the old
+      one. Spread after it, or coming back from "Add new client" restores the
+      form perfectly and silently ignores the client the whole trip was for.
+    */
+    ...(search.get("client") ? { clientId: search.get("client")! } : {}),
   }));
 
   const patch = <K extends keyof typeof form>(k: K, v: (typeof form)[K]) => setForm((f) => ({ ...f, [k]: v }));
+
+  /** Keep the half-filled form, then go and make the client it needs. */
+  const addClient = () => {
+    try {
+      sessionStorage.setItem(DRAFT_KEY, JSON.stringify(form));
+    } catch {
+      // A private window, or storage disabled. The trip still works; it just
+      // costs the form, which is what it cost before this existed.
+    }
+    router.push(withParam("/clients/new", "next", pathname));
+  };
 
   const save = useMutation({
     mutationFn: async () => {
@@ -177,17 +235,28 @@ function ProjectForm({ existing }: { existing?: Project }) {
                 /*
                   The client you need may not exist yet, and finding that out
                   here used to mean abandoning the form, navigating to Clients,
-                  making one, and coming back to an empty form. `next` brings
-                  you back to this page with the new client chosen.
+                  making one, and coming back to an empty form.
+
+                  `next` brings you back to this page with the new client
+                  chosen, and the draft above brings the rest of the form with
+                  you. The first version of this comment claimed the second half
+                  while doing only the first, which a reviewer noticed.
+                */
+                /*
+                  A plain button rather than `Button size="sm"`. That is `h-7`,
+                  and `h-11` on a touch screen, either of which makes this
+                  field's label row taller than its grid neighbour's and leaves
+                  the two inputs out of line by ten pixels. A reviewer measured
+                  it. This sits at label height and grows nothing.
                 */
                 action={
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={() => router.push(withParam("/clients/new", "next", pathname))}
+                  <button
+                    type="button"
+                    onClick={addClient}
+                    className="flex items-center gap-1 text-sm font-medium text-accent hover:underline"
                   >
-                    <Plus className="size-3.5" />Add new client
-                  </Button>
+                    <Plus className="size-3" aria-hidden />Add new client
+                  </button>
                 }
               >
                 <Select value={form.clientId} onChange={(e) => patch("clientId", e.target.value)}>

@@ -106,7 +106,24 @@ export function EntryForm({
     and reported nothing wrong.
   */
   const readTimes = (s: string, e: string) => {
-    const a = resolveClockTime(s, { before: resolveClockTime(e) });
+    /*
+      The start settles itself, then the end settles against it. Not the other
+      way around, and not both against each other.
+
+      Resolving the start against the end first looked symmetrical and was
+      wrong twice over. It made the answer depend on which field you left last,
+      so "1" to "7" was 1am to 7am leaving the start field and 1pm to 7pm
+      leaving the end field. And it inverted the office-day rule it was supposed
+      to respect: the end "7" resolved with no context to 7am, which then
+      dragged the start to 1am, so somebody typing an ordinary afternoon got the
+      small hours. Both reviewers found this from different directions.
+
+      One direction only, so there is one answer. The start uses the office-day
+      rule, which is what a lone time means. The end then takes whichever
+      reading falls soonest after it, which is what makes an overnight shift
+      work: from 8pm, "12" is midnight.
+    */
+    const a = resolveClockTime(s);
     const b = resolveClockTime(e, { after: a });
     return { start: a, end: b };
   };
@@ -120,9 +137,11 @@ export function EntryForm({
   const syncFromDuration = (d: string) => {
     const secs = parseDuration(d);
     const a = resolveClockTime(startText);
-    // Modulo, because a duration added to a start time can run past midnight,
-    // and `formatClockTime` would otherwise be handed minutes past 1440.
-    if (secs != null && a != null) setEndText(formatClockTime((a + Math.round(secs / 60)) % (24 * 60)));
+    // No modulo here: `formatClockTime` already floors and takes `% 24` itself,
+    // so minutes past 1440 wrap correctly. A reviewer pointed out that the
+    // modulo this line used to carry changed nothing, under a comment saying it
+    // prevented a bug that could not happen.
+    if (secs != null && a != null) setEndText(formatClockTime(a + Math.round(secs / 60)));
   };
 
   /*
@@ -154,7 +173,6 @@ export function EntryForm({
   const save = useMutation({
     mutationFn: async (opts: { start?: boolean }) => {
       if (!projectId || !taskId) throw new Error("Choose a project and a task.");
-      const seconds = parseDuration(durationText) ?? 0;
       const { start: startMin, end: endMin } = readTimes(startText, endText);
       const base = {
         projectId, taskId, spentOn, notes: notes.trim() || undefined,
@@ -186,6 +204,28 @@ export function EntryForm({
             )
           : undefined,
       };
+
+      /*
+        When both ends are present the instants decide the duration, not the box.
+
+        They can disagree, and twice a year they do. 11pm to 3am on the night the
+        clocks go forward is four hours on the wall and three in the world, so
+        the typed duration said 4:00 while `endedAt - startedAt` said three. Both
+        numbers were stored, money comes off the duration, and nothing reconciled
+        them. A reviewer found it by walking the DST boundary.
+
+        The instants win because they are the truth about how long somebody
+        worked. It also means the two fields on the row can no longer contradict
+        each other, whatever the clocks did that night.
+
+        With only a duration typed and no times, the box is all there is, and it
+        is used as-is.
+      */
+      const seconds =
+        base.startedAt && base.endedAt
+          ? Math.max(0, Math.round((Date.parse(base.endedAt) - Date.parse(base.startedAt)) / 1000))
+          : parseDuration(durationText) ?? 0;
+
       if (entry) {
         /*
           Send the duration only when it changed.
@@ -265,16 +305,17 @@ export function EntryForm({
               <Input className="w-[92px]" placeholder="Start" value={startText}
                 onChange={(e) => setStartText(e.target.value)}
                 onBlur={(e) => {
-                  const m = resolveClockTime(e.target.value, { before: resolveClockTime(endText) });
-                  if (m != null) setStartText(formatClockTime(m));
+                  // Same direction as `readTimes`: the start settles itself.
+                  const { start } = readTimes(e.target.value, endText);
+                  if (start != null) setStartText(formatClockTime(start));
                   syncFromTimes(e.target.value, endText);
                 }} />
               <span className="text-ink-tertiary">to</span>
               <Input className="w-[92px]" placeholder="End" value={endText}
                 onChange={(e) => setEndText(e.target.value)}
                 onBlur={(e) => {
-                  const m = resolveClockTime(e.target.value, { after: resolveClockTime(startText) });
-                  if (m != null) setEndText(formatClockTime(m));
+                  const { end } = readTimes(startText, e.target.value);
+                  if (end != null) setEndText(formatClockTime(end));
                   syncFromTimes(startText, e.target.value);
                 }} />
               <span className="text-ink-tertiary">=</span>

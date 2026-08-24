@@ -13,7 +13,13 @@
  * into a handful of times a year.
  */
 
-/** The country codes worth a menu. Everything else goes through "Other". */
+/**
+ * The country codes worth a menu.
+ *
+ * There is no "Other" option, and an earlier version of this comment said there
+ * was. A number carrying a code that is not listed keeps it inside the number
+ * and shows "No country code", which is honest about what is known.
+ */
 export const DIAL_CODES = [
   { code: "+1", label: "US / Canada (+1)" },
   { code: "+44", label: "United Kingdom (+44)" },
@@ -62,17 +68,44 @@ export const phoneDigits = (input: string): string => input.replace(/[^0-9]/g, "
  */
 export function formatNationalNumber(input: string, dialCode: string | null): string {
   if (dialCode !== "+1") return input;
-  const d = phoneDigits(input);
+  let d = phoneDigits(input);
   if (d.length < 10) return input;
+
+  /*
+    Eleven digits starting with 1 is the country code typed twice.
+
+    This is how a +1 number sits on most people's clipboard, and the version
+    that shipped treated the leading 1 as part of the area code: "1 312 555
+    0100" became "+1 (131) 255-5010 x0". A reviewer put that in a table, and it
+    is the worst kind of defect this file could have, because the whole point of
+    the file is that the number gets printed on an invoice and dialled by hand.
+    A wrong number that looks right is worse than no number.
+  */
+  if (d.length === 11 && d.startsWith("1")) d = d.slice(1);
+
   const ten = d.slice(0, 10);
   const extra = d.slice(10);
   const shaped = `(${ten.slice(0, 3)}) ${ten.slice(3, 6)}-${ten.slice(6)}`;
   return extra ? `${shaped} x${extra}` : shaped;
 }
 
-/** The single string that gets stored. Empty in, empty out. */
+/**
+ * The single string that gets stored. Empty in, empty out.
+ *
+ * **This does not format.** It used to, and since the input's `onChange` calls
+ * it on every keystroke, the "shaped on blur rather than on every keystroke"
+ * promise in `PhoneInput` was false: the value jumped and the caret went to the
+ * end the moment a tenth digit arrived, which is exactly the fight that comment
+ * claimed to prevent. Both reviewers found it. Formatting is now something a
+ * caller asks for, which means `onBlur` and nothing else.
+ *
+ * A national part that already carries its own `+` prefix keeps it and gets no
+ * dial code bolted in front, so switching the country select on a number stored
+ * as `+353 1 234 5678` cannot produce `+44 +353 1 234 5678`.
+ */
 export function joinPhone(dialCode: string | null, rest: string): string {
   const national = rest.trim();
   if (!national) return "";
-  return dialCode ? `${dialCode} ${formatNationalNumber(national, dialCode)}` : national;
+  if (national.startsWith("+")) return national;
+  return dialCode ? `${dialCode} ${national}` : national;
 }

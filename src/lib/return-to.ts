@@ -29,9 +29,24 @@ export function safeReturnPath(next: string | null | undefined): string | null {
 
 /** Add or replace one query parameter on a path produced by `safeReturnPath`. */
 export function withParam(path: string, key: string, value: string): string {
-  const [base, hash] = path.split("#");
-  const [pathname, query = ""] = base!.split("?");
+  /*
+    Split at the FIRST separator and keep the whole remainder.
+
+    `path.split("#")` destructured as `[base, hash]` silently dropped everything
+    after a second `#`, and the same for `?`. Both characters are inside the
+    class `safeReturnPath` accepts, so `/projects/new#a#b` passed the guard and
+    came back as `/projects/new?client=x#a`. Two reviewers found it; neither
+    could defeat `safeReturnPath` itself.
+  */
+  const hashAt = path.indexOf("#");
+  const hash = hashAt === -1 ? "" : path.slice(hashAt);
+  const base = hashAt === -1 ? path : path.slice(0, hashAt);
+
+  const queryAt = base.indexOf("?");
+  const pathname = queryAt === -1 ? base : base.slice(0, queryAt);
+  const query = queryAt === -1 ? "" : base.slice(queryAt + 1);
+
   const params = new URLSearchParams(query);
   params.set(key, value);
-  return `${pathname}?${params.toString()}${hash ? `#${hash}` : ""}`;
+  return `${pathname}?${params.toString()}${hash}`;
 }

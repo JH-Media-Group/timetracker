@@ -25,6 +25,36 @@ describe("phone formatting", () => {
     expect(formatNationalNumber("31255501004242", "+1")).toBe("(312) 555-0100 x4242");
   });
 
+  it("does not treat a leading country digit as part of the area code", () => {
+    /*
+      The way a +1 number sits on most people's clipboard. The first version
+      took `slice(0, 10)` unconditionally, so "1 312 555 0100" came back as
+      "(131) 255-5010 x0": a different area code and a one digit extension. A
+      wrong number that looks right is worse than no number, and this file
+      exists so the number can be dialled off an invoice.
+    */
+    expect(formatNationalNumber("1 312 555 0100", "+1")).toBe("(312) 555-0100");
+    expect(formatNationalNumber("13125550100", "+1")).toBe("(312) 555-0100");
+    // Eleven digits not starting with 1 is not that, so it keeps its extension.
+    expect(formatNationalNumber("31255501009", "+1")).toBe("(312) 555-0100 x9");
+  });
+
+  it("does not format when a value is merely stored", () => {
+    /*
+      `joinPhone` runs on every keystroke from the input's `onChange`. While it
+      formatted, the value jumped and the caret went to the end the moment a
+      tenth digit arrived, under a comment promising that shaping waited for
+      blur. Formatting is now something a caller asks for.
+    */
+    expect(joinPhone("+1", "3125550100")).toBe("+1 3125550100");
+    expect(joinPhone("+1", "312555")).toBe("+1 312555");
+  });
+
+  it("does not stack a second country code onto a number that has one", () => {
+    // Switching the select on a legacy "+353 ..." used to store "+44 +353 ...".
+    expect(joinPhone("+44", "+353 1 234 5678")).toBe("+353 1 234 5678");
+  });
+
   it("imposes no shape on a country whose numbers have several", () => {
     // UK numbers group four different ways by area code. One shape would be
     // wrong for three of them, and wrong is worse than plain.
@@ -34,7 +64,7 @@ describe("phone formatting", () => {
 
   it("round-trips through storage", () => {
     for (const { code } of DIAL_CODES) {
-      const stored = joinPhone(code, "5551234567");
+      const stored = joinPhone(code, formatNationalNumber("5551234567", code));
       const back = splitPhone(stored);
       expect(back.dialCode, stored).toBe(code);
       expect(phoneDigits(back.rest), stored).toBe("5551234567");
@@ -90,6 +120,13 @@ describe("safeReturnPath", () => {
 });
 
 describe("withParam", () => {
+  it("keeps everything after a second separator", () => {
+    // `split("?")` and `split("#")` destructured into two names dropped the
+    // rest. Both characters are inside the class `safeReturnPath` accepts.
+    expect(withParam("/p/new#a#b", "client", "x")).toBe("/p/new?client=x#a#b");
+    expect(withParam("/p/new?note=a?b", "client", "x")).toBe("/p/new?note=a%3Fb&client=x");
+  });
+
   it("adds, replaces, and keeps what was already there", () => {
     expect(withParam("/projects/new", "client", "abc")).toBe("/projects/new?client=abc");
     expect(withParam("/projects/new?client=old", "client", "abc")).toBe("/projects/new?client=abc");

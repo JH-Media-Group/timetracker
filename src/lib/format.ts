@@ -174,8 +174,17 @@ export function resolveClockTime(
   const other = (literal + 12 * 60) % (24 * 60);
   const { after, before } = opts;
 
-  // A shift of zero means "the same clock time", which as a span is a whole
-  // day rather than nothing, so it sorts last rather than first.
+  /*
+    A shift of zero sorts last rather than first.
+
+    This is not the same claim `elapsedMinutes` makes, and a reviewer caught the
+    two comments contradicting each other. `elapsedMinutes` answers "how long is
+    an entry from 9:00 to 9:00", and the answer is nothing, because somebody who
+    types one time twice means an empty entry. This answers "which reading of a
+    bare hour should win", and there a candidate landing exactly on the other end
+    is the worst of the two rather than the best: nobody types a start and an end
+    meaning a zero-length entry, so the other reading is what they meant.
+  */
   const shift = (n: number) => (n === 0 ? 24 * 60 : n);
 
   if (after != null) {
@@ -233,6 +242,9 @@ export function implausibleSpanWarning(startMinutes: number, endMinutes: number)
 export function nextIsoDay(spentOn: string): string {
   const [y, m, d] = spentOn.split("-").map(Number) as [number, number, number];
   const next = new Date(Date.UTC(y, m - 1, d + 1));
+  // `Date.UTC` maps years 0 to 99 onto 1900 + y, so "0099-01-01" would come back
+  // as 1999. Unreachable from a date input, and one line to close.
+  if (y >= 0 && y <= 99) next.setUTCFullYear(y, m - 1, d + 1);
   return next.toISOString().slice(0, 10);
 }
 
