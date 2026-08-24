@@ -1,6 +1,6 @@
 # MCP connector
 
-**Status: implemented locally, awaiting the watched staging deployment.** Written
+**Status: implemented locally, with TALLY-68 adversarial-review remediation complete and awaiting independent re-review plus the watched staging deployment.** Written
 and reviewed on 2026-08-23, then implemented against TALLY-61 through TALLY-67.
 The deployment adds the MCP process, OAuth endpoints, migrations, Tally-only
 timers, and a verified nightly dump; none is active until the deployment runs.

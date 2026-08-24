@@ -80,7 +80,7 @@ export function createMcpServer() {
   server.tool("tally_week_submit", "Submit a week for approval. Submitting for somebody else requires confirmation.", { week_start: date, user_id: id.optional(), idempotency_key: z.string().max(200).optional(), confirmation_token: z.string().optional() }, async ({ week_start, user_id, idempotency_key, confirmation_token }) => safe(async () => requestContext().api.post("/mcp/week-submit", { periodStart: week_start, userId: user_id, confirmationToken: confirmation_token }, idempotency_key)));
 
   server.tool("tally_approvals_list", "List submissions within your review reach.", { state: z.enum(["submitted", "approved", "changes_requested", "all"]).optional(), ...page }, async ({ state, limit: requested }) => safe(async () => requestContext().api.get("/approvals", { state, limit: limit(requested) })));
-  server.tool("tally_approvals_decide", "Approve or request changes. Always requires a person-visible confirmation token.", { submission_id: id, decision: z.enum(["approve", "request_changes"]), note: z.string().max(2000).optional(), idempotency_key: z.string().max(200).optional(), confirmation_token: z.string().optional() }, async (input) => safe(async () => requestContext().api.post("/mcp/approval-decision", input, input.idempotency_key)));
+  server.tool("tally_approvals_decide", "Approve or request changes. Always requires a person-visible confirmation token.", { submission_id: id, decision: z.enum(["approve", "request_changes"]), note: z.string().max(2000).optional(), idempotency_key: z.string().max(200).optional(), confirmation_token: z.string().optional() }, async ({ submission_id, decision, note, idempotency_key, confirmation_token }) => safe(async () => requestContext().api.post("/mcp/approval-decision", { submission_id, decision, note, confirmationToken: confirmation_token }, idempotency_key)));
 
   registerAdminTools(server);
   return server;
@@ -89,8 +89,8 @@ export function createMcpServer() {
 function registerAdminTools(server: McpServer) {
   const mutation = { idempotency_key: z.string().max(200).optional(), confirmation_token: z.string().optional() };
   const admin = (name: string, description: string, schema: Record<string, z.ZodTypeAny>, path: string, method: "post" | "patch" = "post") => server.tool(name, description, { ...schema, ...mutation }, async (input: any) => safe(async () => {
-    const { idempotency_key, ...body } = input;
-    return requestContext().api[method](path.replace(":id", body.id ?? ""), body, idempotency_key);
+    const { idempotency_key, confirmation_token, id: recordId, ...body } = input;
+    return requestContext().api[method](path.replace(":id", recordId ?? ""), { ...body, confirmationToken: confirmation_token }, idempotency_key);
   }));
   admin("tally_client_create", "Plan or create a client. Confirmation is mandatory.", { name: z.string(), currency: z.string().optional() }, "/mcp/admin/clients");
   admin("tally_client_update", "Plan or update a client. Confirmation is mandatory.", { id, name: z.string().optional(), currency: z.string().optional(), archived: z.boolean().optional() }, "/mcp/admin/clients/:id", "patch");

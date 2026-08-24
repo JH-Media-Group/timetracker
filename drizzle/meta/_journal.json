@@ -57,6 +57,20 @@
       "when": 1787536037253,
       "tag": "0007_blushing_lyja",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1787538528077,
+      "tag": "0008_fantastic_jubilee",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1787538545640,
+      "tag": "0009_perpetual_doctor_octopus",
+      "breakpoints": true
     }
   ]
 }

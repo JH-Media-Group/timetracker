@@ -1,13 +1,15 @@
 import { createHash, randomBytes } from "node:crypto";
-import { and, eq, gt, isNull } from "drizzle-orm";
+import { and, eq, gt, isNull, lt, or, sql } from "drizzle-orm";
 import type { Ctx } from "@/server/ctx";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
 import { TOKEN_SCOPES } from "./api-keys";
 import { validationFailed } from "@/server/errors";
+import { db } from "@/server/db/client";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const challenge = (value: string) => createHash("sha256").update(value).digest("base64url");
+const MAX_OAUTH_CLIENTS = 5000;
 function redirectUri(value: string) {
   const url = new URL(value);
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
@@ -21,6 +23,8 @@ function scopes(value: string | string[]) {
 }
 
 export async function registerOAuthClient(ctx: Ctx, input: { client_name?: string; redirect_uris: string[] }) {
+  const [usage] = await ctx.db.select({ count: sql<number>`count(*)::int` }).from(s.oauthClients);
+  if ((usage?.count ?? 0) >= MAX_OAUTH_CLIENTS) throw validationFailed({ client_name: ["Dynamic client registration is temporarily at capacity."] });
   const clientId = randomBytes(24).toString("base64url"), uris = input.redirect_uris.map(redirectUri);
   if (!uris.length) throw validationFailed({ redirect_uris: ["At least one redirect URI is required."] });
   await ctx.db.insert(s.oauthClients).values({ id: newId(), clientId, clientName: input.client_name?.trim() || "MCP client", redirectUris: uris });
@@ -52,5 +56,14 @@ export async function exchangeOAuthCode(ctx: Ctx, input: { code: string; clientI
   if (!claimed) throw validationFailed({ code: ["The authorization code has already been used."] });
   const prefix = randomBytes(4).toString("hex"), secret = randomBytes(32).toString("base64url"), token = `tally_${prefix}_${secret}`, expiresAt = new Date(now.getTime() + 90 * 86_400_000);
   await ctx.db.insert(s.apiTokens).values({ id: newId(), userId: code.userId, label: "OAuth MCP client", tokenHash: hash(token), prefix, scopes: code.scopes, expiresAt });
+  await ctx.db.update(s.oauthClients).set({ lastTokenIssuedAt: now }).where(eq(s.oauthClients.clientId, code.clientId));
   return { access_token: token, token_type: "Bearer", expires_in: 90 * 86_400, scope: code.scopes.join(" ") };
+}
+
+export async function purgeOAuthStorage() {
+  const now = new Date(), abandoned = new Date(now.getTime() - 30 * 86_400_000);
+  const confirmations = await db.delete(s.mcpConfirmationClaims).where(lt(s.mcpConfirmationClaims.claimedAt, new Date(now.getTime() - 86_400_000))).returning({ id: s.mcpConfirmationClaims.id });
+  const codes = await db.delete(s.oauthAuthorizationCodes).where(or(lt(s.oauthAuthorizationCodes.expiresAt, now), lt(s.oauthAuthorizationCodes.consumedAt, abandoned))).returning({ id: s.oauthAuthorizationCodes.id });
+  const clients = await db.delete(s.oauthClients).where(and(isNull(s.oauthClients.lastTokenIssuedAt), lt(s.oauthClients.createdAt, abandoned))).returning({ id: s.oauthClients.id });
+  return { codes: codes.length, clients: clients.length, confirmations: confirmations.length };
 }

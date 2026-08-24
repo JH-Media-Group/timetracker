@@ -15,7 +15,7 @@
  *   - secret: 32 random bytes, base64url-encoded
  *
  * Scopes intersect with the owner's capabilities; they never widen them. An
- * empty scopes array means "everything the owner can do".
+ * empty scopes array means no capabilities.
  */
 
 import { createHash, randomBytes } from "node:crypto";
@@ -45,11 +45,12 @@ const digest = (token: string) =>
  * owner's capabilities and the capabilities named by those scopes. An empty
  * scopes array means "everything the owner can do".
  */
-export const TOKEN_SCOPES = ["tally.read", "tally.time.write", "tally.expenses", "tally.approvals", "tally.admin"] as const;
+export const TOKEN_SCOPES = ["tally.read", "tally.financial.read", "tally.time.write", "tally.expenses", "tally.approvals", "tally.admin"] as const;
 export type TokenScope = (typeof TOKEN_SCOPES)[number];
 
 export const SCOPE_LABELS: Record<TokenScope, { title: string; description: string }> = {
   "tally.read": { title: "Read only", description: "View the Tally records you can already see." },
+  "tally.financial.read": { title: "Sensitive financial data", description: "View invoices, financial reports, billable and payroll cost rates, and audit history allowed by your Tally permissions." },
   "tally.time.write": { title: "Log time", description: "Start timers and create, edit, or remove time within your reach." },
   "tally.expenses": { title: "Manage expenses", description: "Create and update expenses within your reach." },
   "tally.approvals": { title: "Review time", description: "Submit and review timesheets within your reach." },
@@ -59,9 +60,9 @@ export const SCOPE_LABELS: Record<TokenScope, { title: string; description: stri
 export const SCOPE_GROUPS: Record<TokenScope, readonly Capability[]> = {
   "tally.read": [
     "time:view_others", "expense:view_others", "project:view", "client:view", "people:view",
-    "invoice:view", "report:view_own", "report:view_team", "report:view_all", "report:view_financial",
-    "rates:view_billable", "rates:view_cost", "audit:view",
+    "report:view_own", "report:view_team", "report:view_all",
   ],
+  "tally.financial.read": ["invoice:view", "report:view_financial", "rates:view_billable", "rates:view_cost", "audit:view"],
   "tally.time.write": [
     "time:create_own",
     "time:edit_own",

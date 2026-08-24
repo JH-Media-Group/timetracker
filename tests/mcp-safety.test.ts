@@ -11,14 +11,15 @@ afterAll(closeDb);
 
 describe("MCP confirmation", () => {
   const plan = { action: "project.update", records: [{ type: "project", id: "01900000-0000-7000-8000-000000000001", label: "Untrusted project text" }], changes: { archived: true } };
-  it("requires a signed second phase and binds it to the exact plan", () => {
-    const first = confirmation(ctx(), "project.update", { archived: true }, plan);
+  it("requires a signed second phase and binds it to the exact plan", async () => {
+    const first = await confirmation(ctx(), "project.update", { archived: true }, plan);
     expect(first.confirmed).toBe(false);
     if (first.confirmed) throw new Error("expected a plan");
-    expect(confirmation(ctx(), "project.update", { archived: true }, plan, first.confirmationToken)).toEqual({ confirmed: true });
-    expect(() => confirmation(ctx(), "project.update", { archived: false }, plan, first.confirmationToken)).toThrow();
+    await expect(confirmation(ctx(), "project.update", { archived: true }, plan, first.confirmationToken)).resolves.toEqual({ confirmed: true });
+    await expect(confirmation(ctx(), "project.update", { archived: true }, plan, first.confirmationToken)).rejects.toThrow();
+    await expect(confirmation(ctx(), "project.update", { archived: false }, plan, first.confirmationToken)).rejects.toThrow();
   });
-  it("refuses a forged token", () => expect(() => confirmation(ctx(), "project.update", { archived: true }, plan, "forged.token")).toThrow());
+  it("refuses a forged token", async () => await expect(confirmation(ctx(), "project.update", { archived: true }, plan, "forged.token")).rejects.toThrow());
 });
 
 describe("API audit attribution", () => {

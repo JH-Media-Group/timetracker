@@ -2,8 +2,10 @@
 Description=Remove expired Tally sessions and idempotency claims
 After=docker.service
 Requires=docker.service
+OnFailure=tally-job-failure@%n.service
 
 [Service]
 Type=oneshot
+TimeoutStartSec=15min
 WorkingDirectory=/opt/tally
 ExecStart=/usr/bin/docker compose run --rm web node ops/sweep.mjs

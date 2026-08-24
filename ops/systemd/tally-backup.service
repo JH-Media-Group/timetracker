@@ -2,7 +2,9 @@
 Description=Create and verify a Tally PostgreSQL dump
 After=docker.service
 Requires=docker.service
+OnFailure=tally-job-failure@%n.service
 
 [Service]
 Type=oneshot
+TimeoutStartSec=45min
 ExecStart=/opt/tally/ops/backup-postgres.sh

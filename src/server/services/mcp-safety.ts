@@ -4,6 +4,7 @@ import type { Ctx } from "@/server/ctx";
 import { env } from "@/server/env";
 import { validationFailed } from "@/server/errors";
 import * as s from "@/server/db/schema";
+import { newId } from "@/server/db/ids";
 
 const CONFIRM_MINUTES = 10;
 const UNDO_HOURS = 24;
@@ -29,13 +30,15 @@ function verify<T extends { exp: number }>(token: string): T | null {
 }
 
 export interface ConfirmationPlan { action: string; records: Array<{ type: string; id?: string; label: string }>; changes: Record<string, unknown>; }
-export function confirmation(ctx: Ctx, action: string, input: unknown, plan: ConfirmationPlan, token?: string): { confirmed: true } | { confirmed: false; plan: ConfirmationPlan; confirmationToken: string } {
+export async function confirmation(ctx: Ctx, action: string, input: unknown, plan: ConfirmationPlan, token?: string): Promise<{ confirmed: true } | { confirmed: false; plan: ConfirmationPlan; confirmationToken: string }> {
   const digest = createHmac("sha256", env.SESSION_SECRET).update(canonical(input)).digest("base64url");
-  if (!token) return { confirmed: false, plan, confirmationToken: sign({ kind: "confirm", actor: ctx.actor.userId, action, digest, exp: Date.now() + CONFIRM_MINUTES * 60_000 }) };
-  const value = verify<{ kind: string; actor: string; action: string; digest: string; exp: number }>(token);
+  if (!token) return { confirmed: false, plan, confirmationToken: sign({ kind: "confirm", jti: newId(), actor: ctx.actor.userId, action, digest, exp: Date.now() + CONFIRM_MINUTES * 60_000 }) };
+  const value = verify<{ kind: string; jti: string; actor: string; action: string; digest: string; exp: number }>(token);
   if (!value || value.kind !== "confirm" || value.actor !== ctx.actor.userId || value.action !== action || value.digest !== digest) {
     throw validationFailed({ confirmationToken: ["The confirmation is invalid, expired, or belongs to a different plan."] });
   }
+  const [claimed] = await ctx.db.insert(s.mcpConfirmationClaims).values({ id: value.jti, actorId: ctx.actor.userId }).onConflictDoNothing().returning({ id: s.mcpConfirmationClaims.id });
+  if (!claimed) throw validationFailed({ confirmationToken: ["That confirmation has already been used."] });
   return { confirmed: true };
 }
 
@@ -46,7 +49,9 @@ export function undoToken(ctx: Ctx) {
 export async function auditForUndo(ctx: Ctx, token: string) {
   const value = verify<{ kind: string; actor: string; requestId: string; exp: number }>(token);
   if (!value || value.kind !== "undo" || value.actor !== ctx.actor.userId) throw validationFailed({ undoToken: ["That undo token is invalid or expired."] });
-  const [row] = await ctx.db.select().from(s.auditLog).where(and(eq(s.auditLog.actorId, ctx.actor.userId), eq(s.auditLog.actorKind, "api"), eq(s.auditLog.requestId, value.requestId), gte(s.auditLog.createdAt, new Date(Date.now() - UNDO_HOURS * 3_600_000)))).orderBy(desc(s.auditLog.id)).limit(1);
+  const rows = await ctx.db.select().from(s.auditLog).where(and(eq(s.auditLog.actorId, ctx.actor.userId), eq(s.auditLog.actorKind, "api"), eq(s.auditLog.requestId, value.requestId), gte(s.auditLog.createdAt, new Date(Date.now() - UNDO_HOURS * 3_600_000)))).orderBy(desc(s.auditLog.id)).limit(2);
+  if (rows.length > 1) throw validationFailed({ undoToken: ["That request changed multiple records and cannot be safely undone automatically."] });
+  const [row] = rows;
   if (!row) throw validationFailed({ undoToken: ["That change is no longer eligible for undo."] });
   if (row.entityId) {
     const tables: Record<string, { id: any; updatedAt: any }> = {

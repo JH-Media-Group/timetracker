@@ -2,8 +2,10 @@
 Description=Drain Tally outbound mail
 After=docker.service
 Requires=docker.service
+OnFailure=tally-job-failure@%n.service
 
 [Service]
 Type=oneshot
+TimeoutStartSec=5min
 WorkingDirectory=/opt/tally
 ExecStart=/usr/bin/docker compose run --rm web node ops/mail.mjs

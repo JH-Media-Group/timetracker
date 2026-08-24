@@ -907,6 +907,7 @@ export const oauthClients = pgTable("oauth_clients", {
   clientId: text().notNull().unique(),
   clientName: text().notNull(),
   redirectUris: jsonb().$type<string[]>().notNull(),
+  lastTokenIssuedAt: ts(),
   createdAt: createdAt(),
 });
 
@@ -921,6 +922,12 @@ export const oauthAuthorizationCodes = pgTable("oauth_authorization_codes", {
   expiresAt: ts().notNull(),
   consumedAt: ts(),
   createdAt: createdAt(),
+});
+
+export const mcpConfirmationClaims = pgTable("mcp_confirmation_claims", {
+  id: uuid().primaryKey(),
+  actorId: uuid().notNull().references(() => users.id, { onDelete: "cascade" }),
+  claimedAt: createdAt(),
 });
 
 export const integrationConnections = pgTable(

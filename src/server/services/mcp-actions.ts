@@ -18,7 +18,7 @@ const plan = (action: string, type: string, input: Input, id?: string): Confirma
 function confirmed(ctx: Ctx, action: string, type: string, input: Input, id?: string) { return confirmation(ctx, action, { ...input, confirmationToken: undefined }, plan(action, type, input, id), input.confirmationToken); }
 
 export async function mcpTimeLog(ctx: Ctx, input: Input) {
-  if (input.userId && input.userId !== ctx.actor.userId) { const check = confirmed(ctx, "time.log.other", "time_entry", input, input.userId); if (!check.confirmed) return check; }
+  if (input.userId && input.userId !== ctx.actor.userId) { const check = await confirmed(ctx, "time.log.other", "time_entry", input, input.userId); if (!check.confirmed) return check; }
   const targetId = input.userId ?? ctx.actor.userId;
   let startedAt: string | undefined, endedAt: string | undefined;
   if (input.startedAt || input.endedAt) {
@@ -37,7 +37,7 @@ export async function mcpTimeLog(ctx: Ctx, input: Input) {
 
 export async function mcpTimeEdit(ctx: Ctx, id: string, input: Input) {
   const before = await getTimeEntry(ctx, id);
-  if (before.userId !== ctx.actor.userId) { const check = confirmed(ctx, "time.edit.other", "time_entry", input, id); if (!check.confirmed) return check; }
+  if (before.userId !== ctx.actor.userId) { const check = await confirmed(ctx, "time.edit.other", "time_entry", input, id); if (!check.confirmed) return check; }
   let startedAt: string | null | undefined, endedAt: string | null | undefined;
   if (input.startedAt !== undefined || input.endedAt !== undefined) {
     if (!input.startedAt || !input.endedAt) throw validationFailed({ startedAt: ["Start and end are required together."] });
@@ -54,16 +54,16 @@ export async function mcpTimeEdit(ctx: Ctx, id: string, input: Input) {
 }
 export async function mcpTimeDelete(ctx: Ctx, id: string, input: Input = {}) {
   const before = await getTimeEntry(ctx, id);
-  if (before.userId !== ctx.actor.userId) { const check = confirmed(ctx, "time.delete.other", "time_entry", input, id); if (!check.confirmed) return check; }
+  if (before.userId !== ctx.actor.userId) { const check = await confirmed(ctx, "time.delete.other", "time_entry", input, id); if (!check.confirmed) return check; }
   await deleteTimeEntry(ctx, id);
   return { data: { deleted: true }, undoToken: undoToken(ctx) };
 }
 export async function mcpTimerStop(ctx: Ctx) { return { data: await stopTimer(ctx) }; }
-export async function mcpWeekSubmit(ctx: Ctx, input: Input) { if (input.userId && input.userId !== ctx.actor.userId) { const check = confirmed(ctx, "week.submit.other", "timesheet_submission", input, input.userId); if (!check.confirmed) return check; } return { data: await submitTimesheet(ctx, { periodStart: input.periodStart, userId: input.userId }) }; }
-export async function mcpApprovalDecision(ctx: Ctx, input: Input) { const check = confirmed(ctx, "approval.decide", "timesheet_submission", input, input.submission_id); if (!check.confirmed) return check; const data = input.decision === "approve" ? await approveSubmission(ctx, input.submission_id, input.note) : await requestChanges(ctx, input.submission_id, input.note ?? "Changes requested through Tally MCP."); return { data }; }
+export async function mcpWeekSubmit(ctx: Ctx, input: Input) { if (input.userId && input.userId !== ctx.actor.userId) { const check = await confirmed(ctx, "week.submit.other", "timesheet_submission", input, input.userId); if (!check.confirmed) return check; } return { data: await submitTimesheet(ctx, { periodStart: input.periodStart, userId: input.userId }) }; }
+export async function mcpApprovalDecision(ctx: Ctx, input: Input) { const check = await confirmed(ctx, "approval.decide", "timesheet_submission", input, input.submission_id); if (!check.confirmed) return check; const data = input.decision === "approve" ? await approveSubmission(ctx, input.submission_id, input.note) : await requestChanges(ctx, input.submission_id, input.note ?? "Changes requested through Tally MCP."); return { data }; }
 
 export async function mcpAdminAction(ctx: Ctx, entity: string, operation: "create" | "update" | "members", id: string | undefined, input: Input) {
-  const action = `${entity}.${operation}`; const check = confirmed(ctx, action, entity, input, id); if (!check.confirmed) return check;
+  const action = `${entity}.${operation}`; const check = await confirmed(ctx, action, entity, input, id); if (!check.confirmed) return check;
   let data: unknown;
   const archiveOnly = operation === "update" && input.archived !== undefined;
   if (archiveOnly && Object.keys(input).some((key) => !["archived", "confirmationToken"].includes(key))) throw validationFailed({ archived: ["Archive or restore must be confirmed as its own operation."] });

@@ -2,8 +2,10 @@
 Description=Issue due Tally recurring invoices
 After=docker.service
 Requires=docker.service
+OnFailure=tally-job-failure@%n.service
 
 [Service]
 Type=oneshot
+TimeoutStartSec=30min
 WorkingDirectory=/opt/tally
 ExecStart=/usr/bin/docker compose run --rm web node ops/recurring.mjs

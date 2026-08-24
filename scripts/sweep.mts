@@ -15,13 +15,15 @@
  */
 
 import { purgeDeadSessions, purgeIdempotencyKeys } from "../src/server/auth/session";
+import { purgeOAuthStorage } from "../src/server/services/oauth";
 
 const startedAt = Date.now();
 
 const sessions = await purgeDeadSessions();
 const idempotency = await purgeIdempotencyKeys();
+const oauth = await purgeOAuthStorage();
 
 console.log(
-  `swept in ${Date.now() - startedAt}ms: ${sessions} dead sessions, ${idempotency} idempotency claims`
+  `swept in ${Date.now() - startedAt}ms: ${sessions} dead sessions, ${idempotency} idempotency claims, ${oauth.confirmations} confirmation claims, ${oauth.codes} OAuth codes, ${oauth.clients} abandoned OAuth clients`
 );
 process.exit(0);

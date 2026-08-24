@@ -130,6 +130,9 @@ const EXEMPT: Record<string, string> = {
   "oauth/authorize": "everyone with a session: consent always acts as the signed-in person",
   "mcp/time/[id]": "service: ownership and manager reach decide whether edit or delete is allowed",
   "mcp/time/[id]/delete": "service: ownership and manager reach decide whether confirmation is required",
+  "mcp/admin/[entity]": "service: the entity-specific service applies the exact administrative capability",
+  "mcp/admin/[entity]/[id]": "service: the entity-specific service applies the exact administrative capability",
+  "mcp/admin/[entity]/[id]/members": "service: project membership changes require project management capability",
   "mcp/undo": "service: the signed token binds the change to the calling API actor",
 
   "app/.well-known/oauth-protected-resource": "public OAuth discovery metadata",

@@ -92,6 +92,7 @@ export interface RouteOptions {
   clearSessionCookie?: boolean;
   /** Return the handler's value without the Tally envelope for standard protocol endpoints such as OAuth. */
   rawResponse?: boolean;
+  oauthErrors?: boolean;
 }
 
 const MUTATING = new Set(["POST", "PATCH", "PUT", "DELETE"]);
@@ -109,7 +110,8 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
     try {
       const ctx = options.public ? publicCtx(req, requestId) : await authenticatedCtx(req, requestId);
 
-      const tokenReadOnly = ctx.actor.tokenScopes?.length === 1 && ctx.actor.tokenScopes[0] === "tally.read";
+      const writeScopes = new Set(["tally.time.write", "tally.expenses", "tally.approvals", "tally.admin"]);
+      const tokenReadOnly = ctx.actor.tokenScopes !== undefined && !ctx.actor.tokenScopes.some((scope) => writeScopes.has(scope));
       if (mutating && tokenReadOnly) throw forbidden("This token is read only.");
 
       // Cross-site write protection.
@@ -230,6 +232,11 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
         await releaseIdempotencyClaim(claim).catch((e) =>
           console.error(`[${requestId}] could not release the idempotency claim`, e)
         );
+      }
+      if (options.oauthErrors) {
+        const detail = error instanceof Error ? error.message : "The OAuth request is invalid.";
+        const code = /authorization code|PKCE|already been used/i.test(detail) ? "invalid_grant" : /scope/i.test(detail) ? "invalid_scope" : "invalid_request";
+        return NextResponse.json({ error: code, error_description: detail }, { status: code === "invalid_grant" ? 400 : 400, headers: { "Cache-Control": "no-store", "X-Request-Id": requestId } });
       }
       return problemResponse(error, requestId);
     }

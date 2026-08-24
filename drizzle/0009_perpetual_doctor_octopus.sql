@@ -1,0 +1,1 @@
+ALTER TABLE "oauth_clients" ADD COLUMN "last_token_issued_at" timestamp with time zone;
