@@ -63,9 +63,9 @@
       "pageId": "2978611202",
       "title": "Tally deployment and shared-server hardening",
       "mode": "summary",
-      "localHash": "f86c76dd3828092fe26a4cc3388d55211ff63a64a777b4ca8d6f33848640bfa5",
-      "remoteVersion": 1,
-      "lastSyncedAt": "2026-08-24T04:08:00Z",
+      "localHash": "31e9c7dd644ce4a86c01901767f0580c033f51a1236ba5109fc7c8c96b465494",
+      "remoteVersion": 2,
+      "lastSyncedAt": "2026-08-24T05:52:00Z",
       "$note": "Published as a concise deployment record with Git authoritative; the full runbook contains operational command text that may be rejected by the connector edge filter."
     },
     "docs/migration/reconciliation-2026-08-14.md": {
@@ -317,7 +317,7 @@
   },
   "session": {
     "handoffPageId": "2969501697",
-    "handoffRemoteVersion": 5,
-    "lastEntryAt": "2026-08-24T05:30:00Z"
+    "handoffRemoteVersion": 6,
+    "lastEntryAt": "2026-08-24T05:53:00Z"
   }
 }
