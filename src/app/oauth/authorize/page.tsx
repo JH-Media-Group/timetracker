@@ -2,8 +2,9 @@
 import * as React from "react";
 import { useSearchParams } from "next/navigation";
 import { Button, Card, Spinner } from "@/components/ui/primitives";
+import { SCOPE_LABELS } from "@/lib/api-token-scopes";
 
-const labels: Record<string, string> = { "tally.read": "View non-financial Tally records", "tally.financial.read": "View invoices, financial reports, billable rates, payroll cost rates, and audit history allowed by your permissions", "tally.time.write": "Start timers and manage time within your reach", "tally.expenses": "Manage expenses within your reach", "tally.approvals": "Submit and review timesheets within your reach", "tally.admin": "Change account setup with confirmation; financial reading requires separate consent" };
+const labels = Object.fromEntries(Object.entries(SCOPE_LABELS).map(([scope, value]) => [scope, value.description])) as Record<string, string>;
 export default function OAuthAuthorizePage() {
   const params = useSearchParams(); const [request, setRequest] = React.useState<{ clientName: string; scopes: string[] } | null>(null); const [error, setError] = React.useState<string | null>(null); const [busy, setBusy] = React.useState(false);
   const q = { client_id: params.get("client_id") ?? "", redirect_uri: params.get("redirect_uri") ?? "", scope: params.get("scope") ?? "", code_challenge: params.get("code_challenge") ?? "", code_challenge_method: params.get("code_challenge_method") ?? "", state: params.get("state") ?? undefined };

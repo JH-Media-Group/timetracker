@@ -18,7 +18,12 @@ describe("Tally systemd schedule", () => {
   });
   it("sends scheduled failures to a configured external destination", () => {
     expect(read("ops/systemd/tally-job-failure@.service")).toContain("notify-job-failure.sh");
+    expect(read("ops/systemd/tally-job-failure@.service")).toContain("ops/alert.env");
+    expect(read("ops/systemd/tally-job-failure@.service")).not.toContain("/opt/tally/.env");
     expect(read("ops/notify-job-failure.sh")).toContain("TALLY_FAILURE_WEBHOOK_URL");
+    expect(read("ops/notify-job-failure.sh")).toContain("--priority=err");
+    expect(read("ops/notify-job-failure.sh")).not.toContain("--priority=emerg");
+    expect(read("ops/notify-job-failure.sh")).toContain("must use HTTPS");
   });
   it("runs MCP without application database credentials", () => {
     const compose = read("docker/compose.production.yml"), mcp = compose.slice(compose.indexOf("  mcp:"));

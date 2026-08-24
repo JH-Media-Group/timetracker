@@ -17,6 +17,7 @@ import {
 import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { formatMoney } from "@/lib/format";
+import { SCOPE_LABELS, TOKEN_SCOPES } from "@/lib/api-token-scopes";
 import type { Settings } from "@/lib/types";
 import {
   Badge, Banner, Button, Card, Checkbox, Dropzone, Field, Input, Segmented, Select,
@@ -661,13 +662,9 @@ function ApiTokensCard() {
           <Button variant="ghost" onClick={() => setShowCreate(false)}>Cancel</Button>
           </div>
           <div className="grid gap-2 md:grid-cols-2">
-            {[
-              ["tally.read", "Read non-financial records"], ["tally.financial.read", "Sensitive financial data"], ["tally.time.write", "Log time"],
-              ["tally.expenses", "Manage expenses"], ["tally.approvals", "Review time"],
-              ["tally.admin", "Administer Tally"],
-            ].map(([scope, title]) => <label key={scope} className="flex items-center gap-2 text-sm text-ink-secondary">
+            {TOKEN_SCOPES.map((scope) => <label key={scope} className="flex items-center gap-2 text-sm text-ink-secondary">
               <input type="checkbox" checked={scopes.includes(scope)} onChange={(event) => setScopes((current) => event.target.checked ? [...current, scope] : current.filter((value) => value !== scope))} />
-              {title}
+              {SCOPE_LABELS[scope].title}
             </label>)}
           </div>
         </div>

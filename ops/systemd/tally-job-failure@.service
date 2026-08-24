@@ -3,7 +3,7 @@ Description=Surface failure of Tally job %i
 
 [Service]
 Type=oneshot
-EnvironmentFile=-/opt/tally/.env
+EnvironmentFile=-/opt/tally/ops/alert.env
 ExecStart=/bin/bash /opt/tally/ops/notify-job-failure.sh %i
 StandardOutput=journal+console
 StandardError=journal+console

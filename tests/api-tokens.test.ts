@@ -4,6 +4,7 @@ import { BASE_PROFILES } from "@/server/auth/capabilities";
 import { createCtx, type Actor } from "@/server/ctx";
 import { createApiToken, resolveApiToken, revokeApiToken, SCOPE_GROUPS } from "@/server/services/api-keys";
 import { approveOAuth, exchangeOAuthCode, registerOAuthClient } from "@/server/services/oauth";
+import { SCOPE_LABELS, TOKEN_SCOPES } from "@/lib/api-token-scopes";
 import { closeDb, db, makeUser, resetDb, seedProfiles, s } from "./helpers";
 
 let profiles: Record<string, string>; let userId: string;
@@ -17,6 +18,10 @@ describe("personal API tokens", () => {
     expect(SCOPE_GROUPS["tally.read"]).not.toEqual(expect.arrayContaining(sensitive));
     expect(SCOPE_GROUPS["tally.admin"]).not.toEqual(expect.arrayContaining(sensitive));
     expect(SCOPE_GROUPS["tally.financial.read"]).toEqual(expect.arrayContaining(sensitive));
+  });
+  it("has one shared, explicit label for every scope", () => {
+    expect(Object.keys(SCOPE_LABELS).sort()).toEqual([...TOKEN_SCOPES].sort());
+    expect(SCOPE_LABELS["tally.financial.read"].description).toMatch(/payroll cost rates.*audit history/i);
   });
   it("is shown once, stored as a digest, and resolves to a narrowed API actor", async () => {
     const made = await createApiToken(ctx(), { label: "Test", scopes: ["tally.read"] });

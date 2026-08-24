@@ -26,6 +26,8 @@ import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
 import { AppError, notFound } from "@/server/errors";
 import type { Capability } from "@/server/auth/capabilities";
+export { TOKEN_SCOPES, SCOPE_LABELS, type TokenScope } from "@/lib/api-token-scopes";
+import { TOKEN_SCOPES, type TokenScope } from "@/lib/api-token-scopes";
 
 /* ---------------------------------------------------------------- constants */
 
@@ -43,19 +45,8 @@ const digest = (token: string) =>
  *
  * When a token carries scopes, its Actor gets only the intersection of the
  * owner's capabilities and the capabilities named by those scopes. An empty
- * scopes array means "everything the owner can do".
+ * scopes array means no capabilities.
  */
-export const TOKEN_SCOPES = ["tally.read", "tally.financial.read", "tally.time.write", "tally.expenses", "tally.approvals", "tally.admin"] as const;
-export type TokenScope = (typeof TOKEN_SCOPES)[number];
-
-export const SCOPE_LABELS: Record<TokenScope, { title: string; description: string }> = {
-  "tally.read": { title: "Read only", description: "View the Tally records you can already see." },
-  "tally.financial.read": { title: "Sensitive financial data", description: "View invoices, financial reports, billable and payroll cost rates, and audit history allowed by your Tally permissions." },
-  "tally.time.write": { title: "Log time", description: "Start timers and create, edit, or remove time within your reach." },
-  "tally.expenses": { title: "Manage expenses", description: "Create and update expenses within your reach." },
-  "tally.approvals": { title: "Review time", description: "Submit and review timesheets within your reach." },
-  "tally.admin": { title: "Administer Tally", description: "Change account setup, limited by your Tally permissions and confirmation." },
-};
 
 export const SCOPE_GROUPS: Record<TokenScope, readonly Capability[]> = {
   "tally.read": [
@@ -112,7 +103,7 @@ const VALID_SCOPES = new Set<string>(TOKEN_SCOPES);
 /**
  * Intersects the owner's capabilities with the scope groups named by the token.
  *
- * Empty scopes = no restriction (the full set is returned unchanged).
+ * Empty scopes = no capabilities.
  * Non-empty scopes = only capabilities covered by those groups, and only if
  * the owner already holds them.
  */

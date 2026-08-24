@@ -71,7 +71,10 @@ export async function mcpAdminAction(ctx: Ctx, entity: string, operation: "creat
   else if (entity === "project") data = operation === "create" ? await createProject(ctx, input as any) : archiveOnly ? await archiveProject(ctx, id!, input.archived) : await updateProject(ctx, id!, input);
   else if (entity === "task") data = operation === "create" ? await createTask(ctx, input as any) : await updateTask(ctx, id!, input);
   else if (entity === "person") data = operation === "create" ? await createUser(ctx, input as any) : archiveOnly ? await archiveUser(ctx, id!, input.archived) : await updateUser(ctx, id!, input);
-  else if (entity === "expense_category") data = await createExpenseCategory(ctx, input as any);
+  else if (entity === "expense_category") {
+    if (operation !== "create") throw validationFailed({ operation: ["Expense category updates are not supported through MCP."] });
+    data = await createExpenseCategory(ctx, input as any);
+  }
   else if (entity === "invoice_config") data = await updateInvoiceConfig(ctx, { section: input.section, value: input.values } as any);
   else throw validationFailed({ entity: ["Unsupported MCP administrative entity."] });
   return { data, undoToken: undoToken(ctx) };

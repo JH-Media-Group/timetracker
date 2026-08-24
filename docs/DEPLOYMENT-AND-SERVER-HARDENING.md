@@ -174,6 +174,12 @@ custom-format Tally-only dump, verifies its catalog before publishing it, and
 retains 14 daily files under `/var/backups/tally`. DigitalOcean server backups
 then retain those files outside the live droplet disk.
 
+Create `/opt/tally/ops/alert.env` from `ops/alert.env.example`, set only
+`TALLY_FAILURE_WEBHOOK_URL`, and protect it with mode `0600`. The notifier
+refuses non-HTTPS, loopback, link-local, and private-network destinations. If
+no webhook is configured, it records the original failure locally without
+creating a second failed unit.
+
 ## Deployment procedure
 
 1. Confirm the DNS A record resolves `tally.jhmediagroup.com` to
