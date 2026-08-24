@@ -59,6 +59,15 @@
       "remoteVersion": 3,
       "lastSyncedAt": "2026-08-15T01:40:00Z"
     },
+    "docs/DEPLOYMENT-AND-SERVER-HARDENING.md": {
+      "pageId": "2978611202",
+      "title": "Tally deployment and shared-server hardening",
+      "mode": "summary",
+      "localHash": "f86c76dd3828092fe26a4cc3388d55211ff63a64a777b4ca8d6f33848640bfa5",
+      "remoteVersion": 1,
+      "lastSyncedAt": "2026-08-24T04:08:00Z",
+      "$note": "Published as a concise deployment record with Git authoritative; the full runbook contains operational command text that may be rejected by the connector edge filter."
+    },
     "docs/migration/reconciliation-2026-08-14.md": {
       "pageId": "2969370812",
       "title": "Harvest import reconciliation, 2026-08-14",
@@ -215,7 +224,7 @@
       "key": "TALLY-22",
       "type": "Task",
       "title": "The droplet: size it, then deploy behind Caddy with backups",
-      "lastState": "To Do",
+      "lastState": "Done",
       "parent": "TALLY-4"
     },
     "harvest-import": {
@@ -236,11 +245,24 @@
       "type": "Epic",
       "title": "Notifications and email",
       "lastState": "To Do"
+    },
+    "mcp-oauth-epic": {
+      "key": "TALLY-60",
+      "type": "Epic",
+      "title": "MCP connector: start timers, log time, and set the account up from a model",
+      "lastState": "Done"
+    },
+    "mcp-ops-prerequisite": {
+      "key": "TALLY-67",
+      "type": "Task",
+      "title": "Prerequisite: the droplet has no scheduled anything, so add timers and a nightly pg_dump",
+      "lastState": "Done",
+      "parent": "TALLY-60"
     }
   },
   "session": {
     "handoffPageId": "2969501697",
-    "handoffRemoteVersion": 3,
-    "lastEntryAt": "2026-08-15T01:40:00Z"
+    "handoffRemoteVersion": 4,
+    "lastEntryAt": "2026-08-24T04:08:36Z"
   }
 }
