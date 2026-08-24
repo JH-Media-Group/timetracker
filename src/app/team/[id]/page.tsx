@@ -12,7 +12,7 @@ import * as React from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { CalendarClock, CircleDollarSign, Clock, FolderOpen, Gauge, Mail, Pencil, PieChart } from "lucide-react";
+import { CalendarClock, Mail, Pencil } from "lucide-react";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { ValueAccumulator } from "@/lib/derive";
@@ -216,11 +216,11 @@ export default function PersonDetailPage() {
         }
         actions={
           <>
-            <Button variant="info" onClick={() => router.push(`/timesheet?user=${person.id}`)}>
+            <Button variant="secondary" onClick={() => router.push(`/timesheet?user=${person.id}`)}>
               <CalendarClock className="size-3.5" />View timesheet
             </Button>
             {can("people:manage") && !person.archivedAt && !person.email.endsWith("@imported.invalid") && (
-              <Button variant="success" loading={invite.isPending} onClick={() => invite.mutate()}>
+              <Button variant="secondary" loading={invite.isPending} onClick={() => invite.mutate()}>
                 <Mail className="size-3.5" />Send invite
               </Button>
             )}
@@ -245,14 +245,14 @@ export default function PersonDetailPage() {
         </div>
 
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          <Kpi icon={<Clock className="size-4" />} tone="info" label={`Tracked in ${period.label}`} value={formatDuration(stats.seconds)}>
+          <Kpi label={`Tracked in ${period.label}`} value={formatDuration(stats.seconds)}>
             <div className="mt-2 flex flex-col gap-1">
               <KpiRow label="Billable" value={formatDuration(stats.billableSeconds)} />
               <KpiRow label="Non-billable" value={formatDuration(stats.seconds - stats.billableSeconds)} />
             </div>
           </Kpi>
 
-          <Kpi icon={<Gauge className="size-4" />} tone={stats.util > 1.15 ? "danger" : "success"} label="Utilization" value={formatPercent(stats.util)} danger={stats.util > 1.15}>
+          <Kpi label="Utilization" value={formatPercent(stats.util)} danger={stats.util > 1.15}>
             <div className="mt-2 flex flex-col gap-1">
               <Meter segments={
                 stats.util > 1
@@ -264,8 +264,6 @@ export default function PersonDetailPage() {
           </Kpi>
 
           <Kpi
-            icon={<PieChart className="size-4" />}
-            tone="billable"
             label={<KpiHelpLabel label="Billable share" help="The percentage of tracked time in this period that is billable to clients." />}
             value={formatPercent(stats.billablePct)}
           >
@@ -278,14 +276,14 @@ export default function PersonDetailPage() {
           </Kpi>
 
           {can("rates:view_cost") ? (
-            <Kpi icon={<CircleDollarSign className="size-4" />} tone="warning" label="Cost of time" value={formatMoney(stats.cost)}>
+            <Kpi label="Cost of time" value={formatMoney(stats.cost)}>
               <div className="mt-2 flex flex-col gap-1">
                 <KpiRow label="Cost rate" value={`${formatMoney(person.costRateCents)} / h`} />
                 {can("rates:view_billable") && <KpiRow label="Billable rate" value={`${formatMoney(person.billableRateCents)} / h`} />}
               </div>
             </Kpi>
           ) : (
-            <Kpi icon={<FolderOpen className="size-4" />} tone="info" label="Projects" value={String(byProject.length)}>
+            <Kpi label="Projects" value={String(byProject.length)}>
               <div className="mt-2 flex flex-col gap-1">
                 <KpiRow label="Roles" value={person.roles.join(", ") || "None"} />
                 <KpiRow label="Permissions" value={PROFILE_LABEL[person.profile]} />

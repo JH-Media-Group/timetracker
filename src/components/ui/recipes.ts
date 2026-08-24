@@ -28,8 +28,8 @@ import { cva, type VariantProps } from "class-variance-authority";
    BUTTON
 
    One primary action per screen region. `primary` is the near-black/near-white
-   accent, never a brand hue. Semantic variants explain actions whose purpose
-   differs even when they sit together. `live` remains reserved for timers.
+   accent, never a brand hue. `live` remains reserved for timers, while status
+   colour belongs to state and feedback rather than ordinary adjacent actions.
    ========================================================================== */
 
 export const buttonVariants = cva(
@@ -48,10 +48,6 @@ export const buttonVariants = cva(
           "bg-accent text-accent-ink hover:bg-accent-hover active:bg-accent-active",
         secondary:
           "bg-surface text-ink border-border hover:bg-surface-hover hover:border-border-strong active:bg-surface-active",
-        info:
-          "border-info-border bg-info-bg text-info hover:brightness-95 active:brightness-90",
-        success:
-          "border-success-border bg-success-bg text-success hover:brightness-95 active:brightness-90",
         ghost:
           "text-ink-secondary hover:bg-surface-hover hover:text-ink active:bg-surface-active",
         danger:

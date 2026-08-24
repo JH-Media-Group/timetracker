@@ -51,19 +51,20 @@ describe("live color and person-page hierarchy", () => {
     expect(liveLines(tokens)).toEqual(liveLines(canonicalTokens));
   });
 
-  it("provides distinct semantic action variants", () => {
-    expect(recipes).toContain('info:\n          "border-info-border bg-info-bg text-info');
-    expect(recipes).toContain('success:\n          "border-success-border bg-success-bg text-success');
+  it("keeps adjacent person actions in the standard button hierarchy", () => {
+    const buttonRecipe = recipes.slice(
+      recipes.indexOf("export const buttonVariants"),
+      recipes.indexOf("export type ButtonVariants")
+    );
+    expect(buttonRecipe).not.toMatch(/\n\s+(info|success):/);
     expect(recipes.replace(/\r\n/g, "\n")).toBe(canonicalRecipes.replace(/\r\n/g, "\n"));
-    expect(person).toContain('<Button variant="info"');
-    expect(person).toContain('<Button variant="success"');
+    expect(person).toContain('<Button variant="secondary" onClick={() => router.push(`/timesheet?user=${person.id}`)}>');
+    expect(person).toContain('<Button variant="secondary" loading={invite.isPending}');
     expect(person).toContain("<Pencil");
   });
 
-  it("adds metric icons and an accessible billable-share explanation", () => {
-    for (const icon of ["Clock", "Gauge", "PieChart", "CircleDollarSign"]) {
-      expect(person).toContain(`icon={<${icon}`);
-    }
+  it("keeps person metrics neutral while explaining billable share", () => {
+    expect(person).not.toContain("icon={<");
     expect(kpi).toContain('aria-label={`What does ${label.toLowerCase()} mean?`}');
     expect(person).toContain('<KpiHelpLabel label="Billable share"');
     expect(timeReport).toContain('<KpiHelpLabel label="Billable share"');
