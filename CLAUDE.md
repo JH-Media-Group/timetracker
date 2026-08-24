@@ -8,13 +8,14 @@ Auto-loaded into every Claude Code session in this repo. Read it before doing an
 2. This file.
 3. docs/PRD-OVERVIEW\.md for what and why, then the PRD covering the area you are touching.
 4. docs/IMPLEMENTATION_PLAN.md for what to build next, in order.
+5. docs/DEPLOYMENT-RUNBOOK.md before any staging or production server change.
 
 ---
 
 ## TL;DR
 
 - **Product:** Tally (working codename). An in-house replacement for JH Media Group's Harvest account: time tracking, project profitability, and invoicing. Internal only, never sold, served from a single DigitalOcean droplet.
-- **Status (2026-08-24):** staging is live at `https://tally.jhmediagroup.com` on `tally:46ae1b4`. TALLY-78, the MCP and OAuth epic, and all four Tally timers are deployed. The final suite passed 53 files and 796 tests, and both pre-update and post-update backups passed owner-preserving scratch restores. Remaining optional integrations are Google SSO and object storage for receipts and logos. See docs/DEPLOYMENT-AND-SERVER-HARDENING.md and docs/PERMISSIONS-AND-CREDENTIALS.md.
+- **Status (2026-08-24):** staging is live at `https://tally.jhmediagroup.com` on `tally:4d2d928`. The Toado timer fix and the first staging usability batch are deployed. The final suite passed 54 files and 803 tests, and both pre-update and post-update backups passed owner-preserving scratch restores. Remaining optional integrations are Google SSO and object storage for receipts and logos. Read docs/DEPLOYMENT-RUNBOOK.md before the next server change.
 - **Replaces:** the private Harvest account. Migration must reconcile to the cent; see BACKEND_PRD section 16.3.
 - **User:** Jason. PowerShell on Windows. No em dashes in any generated user-facing text, docs included.
 
@@ -48,6 +49,7 @@ Almost everything else is arithmetic over that pair of numbers:
 | docs/FRONTEND_PRD.md                        | Design tokens, every page layout and interaction, component inventory, performance budgets. Section headers carry `Phase:` tags.                                                                                                                       |
 | docs/BACKEND_PRD.md                         | Schema DDL, domain formulas (§4 is the specification for all money math), API surface, jobs, integrations, migration, deployment                                                                                                                       |
 | docs/IMPLEMENTATION_PLAN.md                 | Build order. Treat as authoritative for "what's next".                                                                                                                                                                                                 |
+| docs/DEPLOYMENT-RUNBOOK.md                  | Exact shared-server deployment, verification, and rollback sequence. Read before touching the droplet.                                                                                                                                                 |
 | [design system/](design%20system/README.md) | **Canonical for anything visual.** Tokens, Tailwind bridge, base layer, cva recipes. Five files ship verbatim into the app. Open `preview/index.html` in a browser to see the whole system rendered. Supersedes FRONTEND_PRD §2 as the implementation. |
 
 Don't re-derive what is documented; cite back to it. If code and PRD disagree, the PRD wins until it is deliberately amended in the same commit.
@@ -119,7 +121,7 @@ Work is tracked in Jira project **TALLY** and documented in Confluence space **T
   - **The export files disagree about scope**, and that is the whole design problem: the lists are current-only, the time report is all history. Entities absent from a current list are created archived.
   - **The Uninvoiced screen reads $[private total removed]** because Harvest's `Invoiced?` is only true for work invoiced through Harvest. `--billed-before YYYY-MM-DD` fixes it and is off by default; the cutoff is Jason's to name.
   - Real data immediately found two defects the seed data could not: a pinned-totals row asserting `$0.00` spent, and hours rendered bare in a column shared with money. **Load real data earlier next time.**
-- **Staging deployment updated 2026-08-24:** `tally-staging-web` and `tally-staging-mcp` run `tally:46ae1b4` on the shared droplet. Ten migrations are applied, Tally container limits and log rotation are active, four systemd timers are enabled, and both update dumps passed scratch restores. Staging mail uses a systemd override with `--no-reminders`; invitation and password-reset mail still drains. Root SSH remains enabled. See docs/DEPLOYMENT-AND-SERVER-HARDENING.md.
+- **Staging deployment updated 2026-08-24:** `tally-staging-web` and `tally-staging-mcp` run `tally:4d2d928` on the shared droplet. Ten Drizzle and five manual migrations are applied, Tally container limits and log rotation are active, four systemd timers are enabled, and both update dumps passed scratch restores. Staging mail uses a systemd override with `--no-reminders`; invitation and password-reset mail still drains. Root SSH remains enabled. Read docs/DEPLOYMENT-RUNBOOK.md before changing this deployment.
 - **Waiting on optional credentials rather than deployment access:** Google SSO (TALLY-20) and object storage for receipts, logos and stored PDFs (TALLY-21). See docs/PERMISSIONS-AND-CREDENTIALS.md.
 - **Production droplet:** `165.245.130.130`. It is shared with the other JH Media Group projects; Confluence documents one `/opt/docker-compose.yml` with Caddy, PostgreSQL 16, and Redis, so inspect that topology before adding Tally and do not create competing public proxy or database services.
 - Deliberately disabled rather than faked: the full account export, CSV import, and the integration connect buttons. Per-grid CSV export does work.

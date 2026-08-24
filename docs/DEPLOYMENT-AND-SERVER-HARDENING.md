@@ -4,7 +4,7 @@
 
 **Staging deployed:** 2026-08-24
 
-**Staging last updated:** 2026-08-24 05:46 UTC
+**Staging last updated:** 2026-08-24 21:48 UTC
 
 **Production droplet:** `165.245.130.130`
 
@@ -15,6 +15,64 @@ DigitalOcean droplet. Tally is joining a sensitive server that already runs
 Caddy, PostgreSQL, Redis, Twenty CRM, Lead Orchestrator, Process Server,
 Twenty MCP, and IdeaFlow. Changes must be narrow, reversible, and must not
 restart unrelated services.
+
+The repeatable operating procedure now lives in
+`docs/DEPLOYMENT-RUNBOOK.md`. This file retains the deployment evidence and
+the broader shared-server maintenance plan.
+
+## Staging update: timer and usability batch, 2026-08-24
+
+Tally staging now runs `tally:4d2d928` (image ID
+`sha256:9f39dbffc6ee26af146e51666ef7411c0569b385fa0d7e7ec9ca859a090c5301`).
+The image contains the running-timer correction in `cf100f9` and the first
+staging usability batch in `4d2d928`.
+
+Update evidence:
+
+- The source passed 54 test files and 803 tests, TypeScript, palette
+  validation, focused repository hygiene checks, a complete Linux production
+  Docker build, and a constrained local image liveness test.
+- The transferred 101,586,944-byte image tar has SHA-256
+  `da49c53650cda6f308740764ae919b79525bdb630358dc8448130de19245246e`.
+  The server verified both values before loading it.
+- An isolated, unproxied candidate container reached healthy state and returned
+  200 from both liveness and database readiness before the live image tag was
+  changed.
+- There were no schema or infrastructure changes. The migration runner found
+  all 10 Drizzle migrations and all five manual migrations already applied,
+  with permission profiles up to date.
+- The immediate pre-update dump is
+  `/var/backups/tally/tally-20260824T214247Z.dump`, SHA-256
+  `0095ff7f58cdeb08c6c10ad95dde889e9fd837f4b4e89d1d0795b740f80a9cb0`.
+- The post-update dump is
+  `/var/backups/tally/tally-20260824T214807Z.dump`, SHA-256
+  `29a981ddbbc72a8409ec7fe0fb6d4cb8bbae7370abd70235ef2b3683db9316f7`.
+- Both 2,971,064-byte dumps passed catalog verification and full
+  owner-preserving scratch restores. Each restored copy matched 57 users, 364
+  projects, [private record count] active time entries, zero running timers, 10 Drizzle
+  migrations, and five manual migrations. Each scratch database was removed.
+- Web and MCP were replaced separately. Each became healthy before the next
+  container moved. Both report zero restarts, zero OOM events, a read-only root
+  filesystem, no host ports, the existing resource limits, and the new image.
+- External liveness, readiness, and both OAuth discovery documents return 200.
+  MCP GET returns 405, and an unauthenticated MCP request returns 401 with the
+  expected protected-resource challenge.
+- A signed-in, read-only browser smoke test verified the populated timesheet's
+  separated New Entry and date controls, start and stop indicators, the report
+  metric icons and Billable Share help control, and the differentiated person
+  actions. No form was submitted and no data was changed.
+- `/opt/tally/compose.yml` and both host and container Caddyfiles retained their
+  pre-deploy hashes. Caddy was not reloaded. PostgreSQL, Redis, Caddy, and every
+  unrelated application retained the same image, restart count, and OOM state.
+- All four Tally timers remain active and staging mail retains the
+  `--no-reminders` override. The 21:50 UTC scheduled mail run completed against
+  the new image with zero queued or in-flight messages. Root SSH remains
+  enabled with effective `permitrootlogin yes`.
+
+Rollback material is under `/opt/tally/artifacts/deploy-4d2d928`, the image tar
+is `/opt/tally/artifacts/tally-4d2d928.tar`, and the previous
+`tally:46ae1b4` image remains loaded. This application-only update requires no
+database restore for rollback.
 
 ## Staging update: TALLY-78, 2026-08-24
 
