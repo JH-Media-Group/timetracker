@@ -284,6 +284,23 @@ describe("timers", () => {
     expect(stopped?.timerStartedAt).toBeNull();
   });
 
+  it("rebases a running timer when its visible start time is corrected", async () => {
+    const ctx = ctxFor(alice, "administrator");
+    const { entry } = await createTimeEntry(ctx, {
+      projectId, taskId: designTaskId, start: true,
+    });
+
+    const correctedStart = `${TODAY}T14:47:00Z`;
+    const updated = await updateTimeEntry(ctx, entry.id, { startedAt: correctedStart });
+
+    expect(updated.startedAt).toBe(`${TODAY}T14:47:00.000Z`);
+    expect(updated.durationSeconds).toBe(13 * 60);
+    expect(updated.timerStartedAt).toBe(`${TODAY}T15:00:00.000Z`);
+
+    const stopped = await stopTimer(ctx);
+    expect(stopped?.durationSeconds).toBe(13 * 60);
+  });
+
   it("returns null when there is nothing to stop", async () => {
     const ctx = ctxFor(alice, "administrator");
     await expect(stopTimer(ctx)).resolves.toBeNull();

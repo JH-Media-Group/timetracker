@@ -418,7 +418,8 @@ export async function updateTimeEntry(ctx: Ctx, id: string, input: UpdateTimeEnt
   return withTransaction(ctx, async (tx) => {
     const { entry: before, requiresOverride } = await loadEditable(tx, id);
 
-    const patch: Record<string, unknown> = { updatedAt: tx.now(), updatedBy: tx.actor.userId };
+    const updatedAt = tx.now();
+    const patch: Record<string, unknown> = { updatedAt, updatedBy: tx.actor.userId };
 
     const projectId = input.projectId ?? before.projectId;
     const spentOn = input.spentOn ?? before.spentOn;
@@ -435,7 +436,30 @@ export async function updateTimeEntry(ctx: Ctx, id: string, input: UpdateTimeEnt
     if (input.durationSeconds !== undefined) {
       patch.durationSeconds = Math.max(0, Math.round(input.durationSeconds));
     }
-    if (input.startedAt !== undefined) patch.startedAt = input.startedAt ? new Date(input.startedAt) : null;
+    if (input.startedAt !== undefined) {
+      const startedAt = input.startedAt ? new Date(input.startedAt) : null;
+      patch.startedAt = startedAt;
+
+      /*
+        A running timer has two clocks: `durationSeconds` is time already
+        banked, and `timerStartedAt` is the point from which its live segment
+        accrues. Merely changing the visible `startedAt` left both untouched,
+        so correcting a 2:51 start to 2:38 still displayed and eventually
+        saved the duration from 2:51.
+
+        Rebase the live segment against the server's clock. The duration shown
+        immediately after the edit is the time from the corrected start to
+        this write, and future ticks continue from this write. This also handles
+        moving a start later without needing a negative banked duration.
+      */
+      if (before.timerStartedAt && startedAt) {
+        patch.durationSeconds = Math.max(
+          0,
+          Math.round((updatedAt.getTime() - startedAt.getTime()) / 1000)
+        );
+        patch.timerStartedAt = updatedAt;
+      }
+    }
     if (input.endedAt !== undefined) patch.endedAt = input.endedAt ? new Date(input.endedAt) : null;
     if (input.notes !== undefined) patch.notes = input.notes?.trim() || null;
     if (input.isBillable !== undefined) patch.isBillable = input.isBillable;
