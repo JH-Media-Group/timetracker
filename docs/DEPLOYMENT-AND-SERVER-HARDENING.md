@@ -4,7 +4,7 @@
 
 **Staging deployed:** 2026-08-24
 
-**Staging last updated:** 2026-08-24 21:48 UTC
+**Staging last updated:** 2026-08-24 22:22 UTC
 
 **Production droplet:** `165.245.130.130`
 
@@ -19,6 +19,65 @@ restart unrelated services.
 The repeatable operating procedure now lives in
 `docs/DEPLOYMENT-RUNBOOK.md`. This file retains the deployment evidence and
 the broader shared-server maintenance plan.
+
+## Staging update: neutral person-page hierarchy, 2026-08-24
+
+Tally staging now runs `tally:0d5aa95` (image ID
+`sha256:09aca09ac87906ef95237a1563b618803c2f5a36d3ab9fff88e2257e646cf565`).
+This release restores the neutral styling for View Timesheet and Send Invite,
+keeps the person-page actions in one coherent hierarchy, and removes the
+one-off colored icon chips from the person-page KPI area.
+
+Update evidence:
+
+- The source passed 54 test files and 803 tests, TypeScript, palette
+  validation, a complete Linux production Docker build, and a constrained
+  local image liveness test.
+- The transferred 101,585,920-byte image tar has SHA-256
+  `d1751fb591ced03fb4c11ad0fd2a30c4584adf28733151ecc211e1dfea98db56`.
+  The server verified both values before loading it.
+- An isolated, unproxied candidate container reached healthy state and
+  returned 200 from liveness and database readiness before live configuration
+  changed.
+- There were no schema or infrastructure changes. The migration runner found
+  all 10 Drizzle and five manual migrations already applied, with permission
+  profiles up to date.
+- The immediate pre-update dump is
+  `/var/backups/tally/tally-20260824T221418Z.dump`, SHA-256
+  `9df2e589d3081b76365abb07531d32b29b89c127ac04f7824ddca64814827af2`.
+- The post-update dump is
+  `/var/backups/tally/tally-20260824T221915Z.dump`, SHA-256
+  `193119fec18d2266dde997e31651c92177304af496dea195d455222a4548bc63`.
+- Both 2,971,067-byte dumps passed catalog verification and full
+  owner-preserving scratch restores. Each restored copy matched 57 users, 364
+  projects, [private record count] active time entries, zero running timers, 10 Drizzle
+  migrations, five manual migrations, and the `tally_staging` owner. Both
+  scratch databases were removed.
+- Web and MCP were replaced separately. Each became healthy before the next
+  service moved. Both report zero restarts, zero OOM events, a read-only root
+  filesystem, no host ports, the existing resource limits, and the new image.
+- External liveness, readiness, and both OAuth discovery documents return 200.
+  MCP GET returns 405, and an unauthenticated MCP request returns 401 with its
+  authentication challenge. Security headers remain present.
+- A signed-in, read-only browser smoke verified Sample colleague's deployed person
+  page. View Timesheet, Send Invite, and Edit Person share the restored neutral
+  action style, and the KPI area no longer has the colored icon chips. No form
+  was submitted and no data changed.
+- `/opt/tally/compose.yml` and the host and container Caddyfiles retained their
+  pre-deploy hashes. Caddy was not reloaded. PostgreSQL, Redis, Caddy, and all
+  15 unrelated containers retained the same image, restart count, OOM state,
+  and health state. Public listeners remain limited to ports 22, 80, and 443.
+- All four Tally timers remain active and staging mail retains the
+  `--no-reminders` override. The 22:20 UTC scheduled mail run completed against
+  the new release with zero queued or in-flight messages. The two previously
+  exhausted mail records remain failed and are not retried. Root SSH remains
+  enabled with effective `permitrootlogin yes`.
+
+Rollback and evidence material is under
+`/opt/tally/artifacts/deploy-0d5aa95`, the image tar is
+`/opt/tally/artifacts/tally-0d5aa95.tar`, and the previous `tally:4d2d928`
+image remains loaded. This application-only update requires no database
+restore for rollback.
 
 ## Staging update: timer and usability batch, 2026-08-24
 

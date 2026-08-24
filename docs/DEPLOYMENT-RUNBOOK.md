@@ -48,8 +48,9 @@ The current deployed release and its evidence are recorded at the top of
 11. Use `--no-deps` on live Compose updates so shared or adjacent services are
     never pulled into the operation.
 12. When a remote script is sent through standard input, use `docker compose
-    run -T`. Without `-T`, the one-off container may consume the remaining
-    deployment script from standard input.
+    run -T ... < /dev/null`. `-T` disables the pseudo-terminal but does not
+    detach standard input, so omitting the redirection can still let the
+    one-off container consume the remaining deployment script.
 
 ## 1. Establish the release
 
@@ -185,7 +186,7 @@ Compose configuration before changing `/opt/tally/.env`:
 export TALLY_IMAGE=tally:<sha>
 docker compose --env-file /opt/tally/.env -f /opt/tally/compose.yml config --quiet
 docker compose --env-file /opt/tally/.env -f /opt/tally/compose.yml config --images
-docker compose --env-file /opt/tally/.env -f /opt/tally/compose.yml run -T --rm --no-deps web node ops/migrate.mjs
+docker compose --env-file /opt/tally/.env -f /opt/tally/compose.yml run -T --rm --no-deps web node ops/migrate.mjs < /dev/null
 ```
 
 Record migration counts before and after. For a schema-neutral release they
