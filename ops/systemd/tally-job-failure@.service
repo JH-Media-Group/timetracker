@@ -3,6 +3,7 @@ Description=Surface failure of Tally job %i
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/systemd-cat --identifier=tally-alert --priority=emerg /bin/echo "Tally scheduled job %i failed. Inspect journalctl -u %i immediately."
+EnvironmentFile=-/opt/tally/.env
+ExecStart=/bin/bash /opt/tally/ops/notify-job-failure.sh %i
 StandardOutput=journal+console
 StandardError=journal+console

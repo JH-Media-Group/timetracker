@@ -234,9 +234,11 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
         );
       }
       if (options.oauthErrors) {
-        const detail = error instanceof Error ? error.message : "The OAuth request is invalid.";
-        const code = /authorization code|PKCE|already been used/i.test(detail) ? "invalid_grant" : /scope/i.test(detail) ? "invalid_scope" : "invalid_request";
-        return NextResponse.json({ error: code, error_description: detail }, { status: code === "invalid_grant" ? 400 : 400, headers: { "Cache-Control": "no-store", "X-Request-Id": requestId } });
+        const oauth = error as { name?: string; oauthCode?: string; message?: string };
+        if (oauth.name === "OAuthError" && oauth.oauthCode) return NextResponse.json({ error: oauth.oauthCode, error_description: oauth.message }, { status: 400, headers: { "Cache-Control": "no-store", "X-Request-Id": requestId } });
+        if (error instanceof z.ZodError || (error instanceof AppError && error.code === "validation_failed")) return NextResponse.json({ error: "invalid_request", error_description: "The OAuth request is invalid." }, { status: 400, headers: { "Cache-Control": "no-store", "X-Request-Id": requestId } });
+        console.error(`[${requestId}] OAuth endpoint failed`);
+        return NextResponse.json({ error: "server_error", error_description: "The authorization server could not complete the request." }, { status: 500, headers: { "Cache-Control": "no-store", "X-Request-Id": requestId } });
       }
       return problemResponse(error, requestId);
     }

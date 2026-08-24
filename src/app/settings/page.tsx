@@ -662,7 +662,7 @@ function ApiTokensCard() {
           </div>
           <div className="grid gap-2 md:grid-cols-2">
             {[
-              ["tally.read", "Read only"], ["tally.time.write", "Log time"],
+              ["tally.read", "Read non-financial records"], ["tally.financial.read", "Sensitive financial data"], ["tally.time.write", "Log time"],
               ["tally.expenses", "Manage expenses"], ["tally.approvals", "Review time"],
               ["tally.admin", "Administer Tally"],
             ].map(([scope, title]) => <label key={scope} className="flex items-center gap-2 text-sm text-ink-secondary">

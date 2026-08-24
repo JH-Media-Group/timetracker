@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { BASE_PROFILES } from "@/server/auth/capabilities";
 import { createCtx, type Actor } from "@/server/ctx";
-import { createApiToken, resolveApiToken, revokeApiToken } from "@/server/services/api-keys";
+import { createApiToken, resolveApiToken, revokeApiToken, SCOPE_GROUPS } from "@/server/services/api-keys";
 import { approveOAuth, exchangeOAuthCode, registerOAuthClient } from "@/server/services/oauth";
 import { closeDb, db, makeUser, resetDb, seedProfiles, s } from "./helpers";
 
@@ -12,6 +12,12 @@ beforeEach(async () => { await resetDb(); profiles = await seedProfiles(); userI
 afterAll(closeDb);
 
 describe("personal API tokens", () => {
+  it("requires separate consent for sensitive financial reads", () => {
+    const sensitive = ["invoice:view", "report:view_financial", "rates:view_billable", "rates:view_cost", "audit:view"];
+    expect(SCOPE_GROUPS["tally.read"]).not.toEqual(expect.arrayContaining(sensitive));
+    expect(SCOPE_GROUPS["tally.admin"]).not.toEqual(expect.arrayContaining(sensitive));
+    expect(SCOPE_GROUPS["tally.financial.read"]).toEqual(expect.arrayContaining(sensitive));
+  });
   it("is shown once, stored as a digest, and resolves to a narrowed API actor", async () => {
     const made = await createApiToken(ctx(), { label: "Test", scopes: ["tally.read"] });
     expect(made.token).toMatch(/^tally_[a-f0-9]{8}_[A-Za-z0-9_-]+$/);
@@ -47,7 +53,7 @@ describe("OAuth authorization code with PKCE", () => {
     const token = await exchangeOAuthCode(ctx(), { code, clientId: client.client_id, redirectUri: client.redirect_uris[0]!, codeVerifier: verifier });
     expect(token.scope).toBe("tally.read tally.time.write");
     expect((await resolveApiToken(token.access_token))!.scopes).toEqual(["tally.read", "tally.time.write"]);
-    await expect(exchangeOAuthCode(ctx(), { code, clientId: client.client_id, redirectUri: client.redirect_uris[0]!, codeVerifier: verifier })).rejects.toMatchObject({ code: "validation_failed" });
+    await expect(exchangeOAuthCode(ctx(), { code, clientId: client.client_id, redirectUri: client.redirect_uris[0]!, codeVerifier: verifier })).rejects.toMatchObject({ oauthCode: "invalid_grant" });
   });
   it("declining creates no authorization code or token", async () => {
     const client = await registerOAuthClient(ctx(), { redirect_uris: ["http://localhost:9876/cb"] });

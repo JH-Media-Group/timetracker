@@ -10,6 +10,9 @@ import { db } from "@/server/db/client";
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 const challenge = (value: string) => createHash("sha256").update(value).digest("base64url");
 const MAX_OAUTH_CLIENTS = 5000;
+export class OAuthError extends Error {
+  constructor(readonly oauthCode: "invalid_request" | "invalid_grant" | "invalid_scope", message: string) { super(message); this.name = "OAuthError"; }
+}
 function redirectUri(value: string) {
   const url = new URL(value);
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
@@ -18,11 +21,12 @@ function redirectUri(value: string) {
 }
 function scopes(value: string | string[]) {
   const list = Array.isArray(value) ? value : value.split(/\s+/).filter(Boolean);
-  if (!list.length || list.some((item) => !(TOKEN_SCOPES as readonly string[]).includes(item))) throw validationFailed({ scope: ["Request one or more documented Tally scopes."] });
+  if (!list.length || list.some((item) => !(TOKEN_SCOPES as readonly string[]).includes(item))) throw new OAuthError("invalid_scope", "Request one or more documented Tally scopes.");
   return [...new Set(list)];
 }
 
 export async function registerOAuthClient(ctx: Ctx, input: { client_name?: string; redirect_uris: string[] }) {
+  await ctx.db.execute(sql`select pg_advisory_xact_lock(74251968)`);
   const [usage] = await ctx.db.select({ count: sql<number>`count(*)::int` }).from(s.oauthClients);
   if ((usage?.count ?? 0) >= MAX_OAUTH_CLIENTS) throw validationFailed({ client_name: ["Dynamic client registration is temporarily at capacity."] });
   const clientId = randomBytes(24).toString("base64url"), uris = input.redirect_uris.map(redirectUri);
@@ -51,9 +55,9 @@ export async function approveOAuth(ctx: Ctx, input: { clientId: string; redirect
 export async function exchangeOAuthCode(ctx: Ctx, input: { code: string; clientId: string; redirectUri: string; codeVerifier: string }) {
   const now = ctx.now();
   const [code] = await ctx.db.select().from(s.oauthAuthorizationCodes).where(and(eq(s.oauthAuthorizationCodes.codeHash, hash(input.code)), eq(s.oauthAuthorizationCodes.clientId, input.clientId), eq(s.oauthAuthorizationCodes.redirectUri, redirectUri(input.redirectUri)), isNull(s.oauthAuthorizationCodes.consumedAt), gt(s.oauthAuthorizationCodes.expiresAt, now))).limit(1);
-  if (!code || challenge(input.codeVerifier) !== code.codeChallenge) throw validationFailed({ code: ["The authorization code is invalid, expired, used, or failed PKCE verification."] });
+  if (!code || challenge(input.codeVerifier) !== code.codeChallenge) throw new OAuthError("invalid_grant", "The authorization code is invalid, expired, used, or failed PKCE verification.");
   const [claimed] = await ctx.db.update(s.oauthAuthorizationCodes).set({ consumedAt: now }).where(and(eq(s.oauthAuthorizationCodes.id, code.id), isNull(s.oauthAuthorizationCodes.consumedAt))).returning({ id: s.oauthAuthorizationCodes.id });
-  if (!claimed) throw validationFailed({ code: ["The authorization code has already been used."] });
+  if (!claimed) throw new OAuthError("invalid_grant", "The authorization code has already been used.");
   const prefix = randomBytes(4).toString("hex"), secret = randomBytes(32).toString("base64url"), token = `tally_${prefix}_${secret}`, expiresAt = new Date(now.getTime() + 90 * 86_400_000);
   await ctx.db.insert(s.apiTokens).values({ id: newId(), userId: code.userId, label: "OAuth MCP client", tokenHash: hash(token), prefix, scopes: code.scopes, expiresAt });
   await ctx.db.update(s.oauthClients).set({ lastTokenIssuedAt: now }).where(eq(s.oauthClients.clientId, code.clientId));
