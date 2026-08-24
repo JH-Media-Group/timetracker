@@ -22,4 +22,12 @@ describe("production deployment artifacts", () => {
     expect(compose).toContain("max-size: 10m");
     expect(compose).toContain("name: opt_default");
   });
+
+  it("gives MCP its own database-independent liveness probe", () => {
+    const compose = read("docker/compose.production.yml");
+    const mcp = compose.slice(compose.indexOf("  mcp:"));
+    expect(mcp).toContain("http://127.0.0.1:3201/mcp");
+    expect(mcp).toContain("r.status===405");
+    expect(mcp).not.toContain("http://127.0.0.1:3000/api/health/live");
+  });
 });
