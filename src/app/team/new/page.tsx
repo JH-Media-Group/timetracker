@@ -6,6 +6,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import * as api from "@/lib/api";
 import type { PermissionProfile, User } from "@/lib/types";
 import { Button, Card, Field, Input, Select } from "@/components/ui/primitives";
+import { TimeZonePicker } from "@/components/app/timezone-picker";
 import { PageBody, PageHeader } from "@/components/app/page-chrome";
 import { useToast } from "@/components/ui/toast";
 
@@ -47,7 +48,17 @@ export default function NewPersonPage() {
       <Field label="Email" required className="md:col-span-2"><Input type="email" value={form.email} onChange={(e) => set("email", e.target.value)} /></Field>
       <Field label="Employment"><Select value={form.employmentType} onChange={(e) => set("employmentType", e.target.value as User["employmentType"])}><option value="employee">Employee</option><option value="contractor">Contractor</option></Select></Field>
       <Field label="Capacity" help="Hours per week"><Input inputMode="decimal" value={form.capacityHours} onChange={(e) => set("capacityHours", e.target.value)} /></Field>
-      <Field label="Timezone"><Input value={form.timezone} onChange={(e) => set("timezone", e.target.value)} /></Field>
+      <Field
+        label="Time zone"
+        htmlFor="person-timezone"
+        help="Uses regional IANA rules, including daylight-saving changes. Cancun currently stays UTC-5 year-round."
+      >
+        <TimeZonePicker
+          id="person-timezone"
+          value={form.timezone}
+          onChange={(timezone) => set("timezone", timezone)}
+        />
+      </Field>
       <Field label="Permission profile"><Select value={form.profile} onChange={(e) => set("profile", e.target.value as PermissionProfile)}>{api.permissionProfiles().map((p) => <option key={p.id} value={p.key}>{p.name}</option>)}</Select></Field>
     </div></Card></PageBody>
   </>;

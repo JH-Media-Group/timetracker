@@ -21,6 +21,7 @@
 
 import * as React from "react";
 import { RatesPanel } from "@/components/app/rates-panel";
+import { TimeZonePicker } from "@/components/app/timezone-picker";
 import { useRouter } from "next/navigation";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle } from "lucide-react";
@@ -261,10 +262,15 @@ function PersonForm({ existing }: { existing: User }) {
                   disabled={ownerLocked}
                 />
               </Field>
-              <Field label="Timezone" help="Their calendar days resolve in this zone, not yours.">
-                <Input
+              <Field
+                label="Time zone"
+                htmlFor="person-timezone"
+                help="Uses regional IANA rules, including daylight-saving changes. Cancun currently stays UTC-5 year-round."
+              >
+                <TimeZonePicker
+                  id="person-timezone"
                   value={form.timezone}
-                  onChange={(e) => set("timezone", e.target.value)}
+                  onChange={(timezone) => set("timezone", timezone)}
                   disabled={ownerLocked}
                 />
               </Field>
