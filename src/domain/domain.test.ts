@@ -300,6 +300,14 @@ describe("calendar", () => {
     expect(dayIn("UTC", late)).toBe("2026-08-14");
   });
 
+  it("lets today advance independently in zones with different midnight", () => {
+    const beforeCancunMidnight = new Date("2026-08-26T04:59:59Z");
+    const afterCancunMidnight = new Date("2026-08-26T05:00:00Z");
+    expect(dayIn("America/Cancun", beforeCancunMidnight)).toBe("2026-08-25");
+    expect(dayIn("America/Cancun", afterCancunMidnight)).toBe("2026-08-26");
+    expect(dayIn("Asia/Tokyo", beforeCancunMidnight)).toBe("2026-08-26");
+  });
+
   it("counts whole months", () => {
     expect(wholeMonthsBetween("2026-01-15", "2026-04-15")).toBe(3);
     expect(wholeMonthsBetween("2026-01-15", "2026-04-14")).toBe(2);

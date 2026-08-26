@@ -19,6 +19,7 @@ import type { TimeEntry } from "@/lib/types";
 import { useToast } from "@/components/ui/toast";
 import { useApp } from "./providers";
 import { formatClock } from "@/lib/format";
+import { dayIn } from "@/domain/calendar";
 
 interface TimerCtx {
   running: TimeEntry | null;
@@ -48,7 +49,7 @@ export function useTimer() {
 export function TimerProvider({ children }: { children: React.ReactNode }) {
   const qc = useQueryClient();
   const toast = useToast();
-  const { projectById, taskById } = useApp();
+  const { projectById, taskById, me } = useApp();
   const [now, setNow] = React.useState(() => Date.now());
 
   // Nothing to reconcile on anonymous auth screens. Polling there gets a 401
@@ -91,7 +92,7 @@ export function TimerProvider({ children }: { children: React.ReactNode }) {
     mutationFn: (input: { projectId: string; taskId: string; notes?: string; spentOn?: string }) =>
       api.createTimeEntry({
         projectId: input.projectId, taskId: input.taskId, notes: input.notes,
-        spentOn: input.spentOn ?? new Date().toISOString().slice(0, 10),
+        spentOn: input.spentOn ?? dayIn(me.timezone),
         startedAt: new Date().toISOString(), start: true,
       }),
     onSuccess: ({ entry, stopped }) => {

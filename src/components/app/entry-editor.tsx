@@ -21,9 +21,11 @@ import { useToast } from "@/components/ui/toast";
 import { ProjectPicker, TaskSelect, defaultTaskFor, pushRecent } from "./project-picker";
 import { useApp } from "./providers";
 import {
-  crossesMidnight, elapsedMinutes, formatClockTime, formatDuration, implausibleSpanWarning,
-  instantAt, isoDate, minutesOfDay, nextIsoDay, parseDuration, resolveClockTime,
+  elapsedMinutes, formatClockTime, formatDuration, implausibleSpanWarning,
+  minutesOfDay, parseDuration, resolveClockTime,
 } from "@/lib/format";
+import { dayIn } from "@/domain/calendar";
+import { timeEntryClockValues } from "@/lib/time-entry-clock";
 
 /* ------------------------------------------------------------------ store */
 
@@ -78,7 +80,7 @@ export function EntryForm({
 
   const [projectId, setProjectId] = React.useState(entry?.projectId ?? defaults?.projectId);
   const [taskId, setTaskId] = React.useState(entry?.taskId ?? defaults?.taskId);
-  const [spentOn, setSpentOn] = React.useState(entry?.spentOn ?? defaults?.spentOn ?? isoDate(new Date()));
+  const [spentOn, setSpentOn] = React.useState(entry?.spentOn ?? defaults?.spentOn ?? dayIn(zone));
   const [notes, setNotes] = React.useState(entry?.notes ?? "");
   const [nonBillable, setNonBillable] = React.useState(entry ? !entry.isBillable : false);
 
@@ -177,58 +179,21 @@ export function EntryForm({
       const base = {
         projectId, taskId, spentOn, notes: notes.trim() || undefined,
         isBillable: !nonBillable,
-        /*
-          A real instant, built in the owner's zone.
-
-          What was here concatenated the date part of the reader's midnight
-          expressed in UTC with the typed clock, and produced a string carrying
-          no zone designator. z.string().datetime() rejects that, so saving any
-          entry with a start time returned 422, verified against a production
-          build. It also took the previous day anywhere east of UTC.
-        */
-        startedAt: startMin != null ? instantAt(spentOn, startMin, zone) : undefined,
-        /*
-          An end before its start belongs to the next day.
-
-          Without this, 8pm to 12am built both instants on `spentOn`, the end
-          landed twenty hours before the start, and the database refused it with
-          `time_entries_clock_ordered` shown raw to whoever was typing. Late
-          finishes are ordinary here, so the fix is to record the day the clock
-          says, not to refuse the entry.
-        */
-        endedAt: endMin != null
-          ? instantAt(
-              startMin != null && crossesMidnight(startMin, endMin) ? nextIsoDay(spentOn) : spentOn,
-              endMin,
-              zone
-            )
-          : undefined,
       };
-
-      /*
-        When both ends are present the instants decide the duration, not the box.
-
-        They can disagree, and twice a year they do. 11pm to 3am on the night the
-        clocks go forward is four hours on the wall and three in the world, so
-        the typed duration said 4:00 while `endedAt - startedAt` said three. Both
-        numbers were stored, money comes off the duration, and nothing reconciled
-        them. A reviewer found it by walking the DST boundary.
-
-        The instants win because they are the truth about how long somebody
-        worked. It also means the two fields on the row can no longer contradict
-        each other, whatever the clocks did that night.
-
-        With only a duration typed and no times, the box is all there is, and it
-        is used as-is.
-      */
-      const seconds =
-        base.startedAt && base.endedAt
-          ? Math.max(0, Math.round((Date.parse(base.endedAt) - Date.parse(base.startedAt)) / 1000))
-          : parseDuration(durationText) ?? 0;
+      const clock = timeEntryClockValues({
+        existing: entry,
+        initialStartMinutes: initialStart,
+        initialEndMinutes: initialEnd,
+        spentOn,
+        startMinutes: startMin,
+        endMinutes: endMin,
+        durationSeconds: parseDuration(durationText) ?? 0,
+        timezone: zone,
+      });
 
       if (entry) {
         /*
-          Send the duration only when it changed.
+          Send only clock fields the person actually changed.
 
           One imported entry runs to 26.46 hours, which Harvest recorded and the
           import preserved faithfully. `timeEntryPatchSchema` caps
@@ -236,16 +201,23 @@ export function EntryForm({
           made that entry uneditable: correcting so much as a note came back
           422 for a field nobody had touched.
 
-          Omitting an unchanged field is what PATCH means anyway. The cap still
-          applies to anybody actually typing a duration, which is what it is for.
+          More importantly, a running timer's timestamps are live state. Rewriting
+          an unchanged start from a stale calendar day inflated a 38 minute timer
+          to 24.64 hours. The helper omits those timestamps unless the date or a
+          clock field changed. Omitting an unchanged field is what PATCH means.
         */
-        const durationChanged = seconds !== entry.durationSeconds;
         return api.updateTimeEntry(entry.id, {
           ...base,
-          ...(durationChanged ? { durationSeconds: seconds } : {}),
+          ...clock,
         });
       }
-      return api.createTimeEntry({ ...base, userId: defaults?.userId, durationSeconds: seconds, start: opts.start });
+      return api.createTimeEntry({
+        ...base,
+        ...clock,
+        userId: defaults?.userId,
+        durationSeconds: clock.durationSeconds ?? 0,
+        start: opts.start,
+      });
     },
     onSuccess: () => {
       if (projectId && taskId) pushRecent(projectId, taskId);

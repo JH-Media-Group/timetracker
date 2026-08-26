@@ -20,6 +20,7 @@ import { WeekView } from "./week-view";
 import { CalendarView } from "./calendar-view";
 import { TeammateSwitcher } from "./teammate-switcher";
 import { SubmitWeek } from "./submit-week";
+import { useZonedToday } from "@/lib/use-zoned-today";
 
 type View = "day" | "week" | "calendar";
 
@@ -30,11 +31,14 @@ export default function TimesheetPage() {
 
   const view = (params.get("view") as View) || "day";
   const userId = params.get("user") || me.id;
-  const dateStr = params.get("date") || isoDate(api.TODAY);
+  const person = userById.get(userId);
+  const timezone = (person ?? me).timezone || settings.timezone;
+  const todayStr = useZonedToday(timezone);
+  const today = toDate(todayStr);
+  const dateStr = params.get("date") || todayStr;
   const date = toDate(dateStr);
   const weekStart = startOfWeek(date, settings.weekStartsOn ?? 1);
   const isOther = userId !== me.id;
-  const person = userById.get(userId);
 
   const { data: allEntries = [], isLoading } = useQuery({
     queryKey: ["time", userId, isoDate(weekStart)],
@@ -164,15 +168,15 @@ export default function TimesheetPage() {
                 ))}
               </Select>
             )}
-            {isoDate(date) !== isoDate(api.TODAY) && (
-              <button className="text-base text-link underline" onClick={() => setDate(api.TODAY)}>Return to today</button>
+            {dateStr !== todayStr && (
+              <button className="text-base text-link underline" onClick={() => setDate(today)}>Return to today</button>
             )}
             <div className="flex items-center gap-1">
               <Button variant="secondary" size="icon-sm" aria-label="Previous" onClick={() => step(-1)}><ChevronLeft className="size-4" /></Button>
               <span className="flex h-8 items-center gap-2 rounded-md border border-border bg-surface px-3 text-base">
                 <CalIcon className="size-3.5 text-ink-tertiary" aria-hidden />
                 {view === "day"
-                  ? <>{isoDate(date) === isoDate(api.TODAY) && <span className="font-medium">Today</span>}<span className={isoDate(date) === isoDate(api.TODAY) ? "text-ink-secondary" : "font-medium"}>{formatDayLong(date)}</span></>
+                  ? <>{dateStr === todayStr && <span className="font-medium">Today</span>}<span className={dateStr === todayStr ? "text-ink-secondary" : "font-medium"}>{formatDayLong(date)}</span></>
                   : <span className="font-medium">{formatWeekRange(weekStart)}</span>}
               </span>
               <Button variant="secondary" size="icon-sm" aria-label="Next" onClick={() => step(1)}><ChevronRight className="size-4" /></Button>
@@ -186,10 +190,10 @@ export default function TimesheetPage() {
             const d = addDays(weekStart, i);
             const key = isoDate(d);
             const isSel = key === dateStr;
-            const isToday = key === isoDate(api.TODAY);
+            const isToday = key === todayStr;
             const total = dayTotals[key] ?? 0;
             const isWeekday = d.getDay() !== 0 && d.getDay() !== 6;
-            const missing = isWeekday && total === 0 && d < api.TODAY;
+            const missing = isWeekday && total === 0 && d < today;
             const day = (
               <button key={key} onClick={() => setDate(d)}
                 className={cn("flex flex-col items-start gap-0.5 bg-surface px-3 py-2.5 text-left transition-colors hover:bg-surface-hover",
@@ -230,7 +234,16 @@ export default function TimesheetPage() {
 
         {view === "day" && <DayView date={dateStr} userId={userId} entries={entries} loading={isLoading} />}
         {view === "week" && <WeekView weekStart={weekStart} userId={userId} entries={entries} loading={isLoading} selectedDay={dateStr} />}
-        {view === "calendar" && <CalendarView weekStart={weekStart} userId={userId} entries={entries} loading={isLoading} />}
+        {view === "calendar" && (
+          <CalendarView
+            weekStart={weekStart}
+            userId={userId}
+            entries={entries}
+            loading={isLoading}
+            today={todayStr}
+            timezone={timezone}
+          />
+        )}
       </PageBody>
     </>
   );

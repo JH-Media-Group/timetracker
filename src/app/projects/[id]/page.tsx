@@ -22,6 +22,7 @@ import { BarChart, LineChart, Legend } from "@/components/app/charts";
 import { useToast } from "@/components/ui/toast";
 import { useApp, useCan } from "@/components/app/providers";
 import { InvoiceBadge, Kpi, KpiRow, SectionTitle } from "@/components/app/kpi";
+import { useZonedToday } from "@/lib/use-zoned-today";
 
 export default function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -36,6 +37,7 @@ export default function ProjectDetailPage() {
   const [chart, setChart] = React.useState<"progress" | "hours">("progress");
   const [tab, setTab] = React.useState<"tasks" | "team" | "invoices">("tasks");
   const [expanded, setExpanded] = React.useState<string | null>(null);
+  const today = useZonedToday(settings.timezone);
 
   const project = projectById.get(id);
 
@@ -93,7 +95,7 @@ export default function ProjectDetailPage() {
     if (!entries.length) return [];
     const sorted = [...entries].sort((a, b) => a.spentOn.localeCompare(b.spentOn));
     const first = startOfWeek(toDate(sorted[0]!.spentOn));
-    const last = startOfWeek(api.TODAY);
+    const last = startOfWeek(toDate(today));
     // Cent-seconds while accumulating, cents at the end. The chart is a
     // cumulative line, so a cent of drift per week compounds all the way along
     // it and the last point disagrees with the KPI card above it.
@@ -110,7 +112,7 @@ export default function ProjectDetailPage() {
       }
     }
     return buckets;
-  }, [entries]);
+  }, [entries, today]);
 
   const cumulative = React.useMemo(() => {
     let acc = 0;

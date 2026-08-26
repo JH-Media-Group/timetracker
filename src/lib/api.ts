@@ -623,14 +623,6 @@ const fromSettings = (s: SettingsWire): Settings => ({
   modules: s.modules ?? {},
 });
 
-/* =============================================================== reference */
-
-/** Local midnight today. Every calendar comparison in the UI is against this. */
-export const TODAY = (() => {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
-})();
-
 interface BootstrapWire {
   me: UserWire;
   users: UserWire[];

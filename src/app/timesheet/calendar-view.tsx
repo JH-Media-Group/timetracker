@@ -3,21 +3,25 @@
 /** Calendar view: a time grid week. Drag on empty space to create, click a block to edit. */
 
 import * as React from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
-import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { Card, Popover, PopoverAnchor, PopoverContent, Segmented, Skeleton } from "@/components/ui/primitives";
 import { useApp } from "@/components/app/providers";
 import { EntryForm } from "@/components/app/entry-editor";
 import type { TimeEntry } from "@/lib/types";
 import { addDays, formatClockTime, formatDuration, isoDate, minutesOfDay } from "@/lib/format";
+import { minutesIn } from "@/domain/calendar";
 
 const HOUR_H = 44;
 const START_HOUR = 7;
 const END_HOUR = 21;
 
-export function CalendarView({ weekStart, userId, entries, loading }: {
-  weekStart: Date; userId: string; entries: TimeEntry[]; loading: boolean;
+export function CalendarView({ weekStart, userId, entries, loading, today, timezone }: {
+  weekStart: Date;
+  userId: string;
+  entries: TimeEntry[];
+  loading: boolean;
+  today: string;
+  timezone: string;
 }) {
   const { projectById, taskById, clientById, settings, userById } = useApp();
   const [span, setSpan] = React.useState<"5" | "7">("5");
@@ -60,7 +64,7 @@ export function CalendarView({ weekStart, userId, entries, loading }: {
           {days.map((d) => {
             const key = isoDate(d);
             const total = (byDay.get(key) ?? []).reduce((a, e) => a + e.durationSeconds, 0);
-            const isToday = key === isoDate(api.TODAY);
+            const isToday = key === today;
             return (
               <div key={key} className={cn("flex-1 border-l border-border px-3 py-2", isToday && "bg-bg-subtle")}>
                 <div className={cn("text-base", isToday ? "font-semibold text-ink" : "text-ink-secondary")}>
@@ -141,7 +145,7 @@ export function CalendarView({ weekStart, userId, entries, loading }: {
                     );
                   })}
 
-                  {key === isoDate(api.TODAY) && <NowLine />}
+                  {key === today && <NowLine timezone={timezone} />}
                 </div>
               );
             })}
@@ -165,12 +169,14 @@ export function CalendarView({ weekStart, userId, entries, loading }: {
   );
 }
 
-function NowLine() {
-  const [minutes, setMinutes] = React.useState(() => new Date().getHours() * 60 + new Date().getMinutes());
+function NowLine({ timezone }: { timezone: string }) {
+  const [minutes, setMinutes] = React.useState(() => minutesIn(timezone, new Date()));
   React.useEffect(() => {
-    const id = window.setInterval(() => setMinutes(new Date().getHours() * 60 + new Date().getMinutes()), 60000);
+    const refresh = () => setMinutes(minutesIn(timezone, new Date()));
+    refresh();
+    const id = window.setInterval(refresh, 60000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [timezone]);
   const top = ((minutes - START_HOUR * 60) / 60) * HOUR_H;
   if (top < 0 || top > (END_HOUR - START_HOUR) * HOUR_H) return null;
   return (
