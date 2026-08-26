@@ -4,7 +4,7 @@
 
 **Staging deployed:** 2026-08-24
 
-**Staging last updated:** 2026-08-26 00:40 UTC
+**Staging last updated:** 2026-08-26 14:52 UTC
 
 **Production droplet:** `165.245.130.130`
 
@@ -19,6 +19,68 @@ restart unrelated services.
 The repeatable operating procedure now lives in
 `docs/DEPLOYMENT-RUNBOOK.md`. This file retains the deployment evidence and
 the broader shared-server maintenance plan.
+
+## Staging update: timesheet duration correction, 2026-08-26
+
+Tally staging now runs source commit `833f65f` as `tally:833f65f` (image ID
+`sha256:ca9f6de07ba99dbb973ccb50b1d94c982efb385cc78af541ae87f33adeab9564`).
+This release fixes Toado ticket `t-nUUknJ`. A long-lived timesheet tab now
+refreshes "today" in the selected person's IANA timezone, and an unrelated
+entry edit no longer rewrites unchanged start and end timestamps from a stale
+calendar day. Timer fallback dates and the calendar's current-time marker use
+the same owner timezone.
+
+Update evidence:
+
+- The exact pushed source passed 56 test files and 813 tests, TypeScript,
+  repository hygiene, palette validation, and a complete Linux production
+  Docker build. Regression coverage includes the reported 8:37am to 9:15am
+  span, notes-only edits to a running entry, Cancun midnight, and a New York
+  daylight-saving transition.
+- The transferred 101,596,160-byte image tar has SHA-256
+  `2b09690af53e38c42c35ebc4cd719450b21559549b2da519facddadda1526cca`.
+  The server verified its exact size and hash before loading it.
+- An isolated, unproxied candidate container reached healthy state and
+  returned 200 from liveness and database readiness. It retained the live
+  security and resource controls, published no host port, had no production
+  network alias, and was removed before the live update.
+- There were no schema or infrastructure changes. The isolated migration run
+  left all 10 Drizzle and five manual migrations unchanged.
+- The immediate pre-update dump is
+  `/var/backups/tally/tally-20260826T144706Z.dump`, SHA-256
+  `f99325549314a781c04aebdadab26f128a6f72c0fc012f62b52a2b5f91935ba7`.
+- The post-update dump is
+  `/var/backups/tally/tally-20260826T145134Z.dump`, SHA-256
+  `a998a958b6eddf2fb14deef6579b388726969dad904775ba92626e68ef3e96e3`.
+- Both 2,977,270-byte dumps passed 329-line catalog checks and complete
+  owner-preserving scratch restores. Each restored copy matched 57 users, 364
+  projects, [private record count] active time entries, zero running timers, 10 Drizzle
+  migrations, five manual migrations, and the `tally_staging` owner. Both
+  exact scratch databases were removed.
+- Web and MCP were replaced separately with `--no-deps`. Both run the exact
+  local image, are healthy, and retain a read-only root filesystem, no host
+  ports, their existing limits, zero restarts, and zero OOM events.
+- External liveness, readiness, and both OAuth discovery documents return
+  200. MCP GET returns 405, and an unauthenticated MCP request returns 401 with
+  its protected-resource challenge. Security headers remain present.
+- A fresh signed-in browser load identified Wednesday, August 26 as Today in
+  the account timezone. The affected August 25 entry renders 8:37am to 9:15am
+  as 0.63 hours, neither inflated value appears, and the application console
+  is clean. The user's existing tab and open editor were not changed.
+- `/opt/tally/compose.yml` and the host and container Caddyfiles retained their
+  pre-deploy hashes. Caddy was not reloaded. PostgreSQL, Redis, Caddy, and all
+  15 unrelated containers retained the same image, image ID, restart count,
+  OOM state, health state, and host-port exposure. Public listeners remain
+  limited to ports 22, 80, and 443.
+- All four Tally timers remain active. The naturally scheduled 14:50 UTC mail
+  run succeeded with `--no-reminders`; queued and in-flight mail remain at
+  zero. Root SSH remains enabled with effective `permitrootlogin yes`.
+
+Rollback and evidence material is under
+`/opt/tally/artifacts/deploy-833f65f`, the image tar is
+`/opt/tally/artifacts/tally-833f65f.tar`, and the previous `tally:f46d506`
+image remains loaded. This application-only update requires no database
+restore for rollback.
 
 ## Staging update: worldwide timezone picker, 2026-08-26
 
