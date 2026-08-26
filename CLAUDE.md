@@ -15,7 +15,7 @@ Auto-loaded into every Claude Code session in this repo. Read it before doing an
 ## TL;DR
 
 - **Product:** Tally (working codename). An in-house replacement for JH Media Group's Harvest account: time tracking, project profitability, and invoicing. Internal only, never sold, served from a single DigitalOcean droplet.
-- **Status (2026-08-24):** staging is live at `https://tally.jhmediagroup.com` on `tally:0d5aa95`. The person-page actions are back to a neutral hierarchy and the one-off KPI icon chips are removed. The final suite passed 54 files and 803 tests, and both pre-update and post-update backups passed owner-preserving scratch restores. Remaining optional integrations are Google SSO and object storage for receipts and logos. Read docs/DEPLOYMENT-RUNBOOK.md before the next server change.
+- **Status (2026-08-26):** staging is live at `https://tally.jhmediagroup.com` on `tally:f46d506`. Person editors now use a searchable worldwide IANA timezone picker that displays current offsets and annual offset-change behavior. The final suite passed 55 files and 807 tests, and both pre-update and post-update backups passed owner-preserving scratch restores. Remaining optional integrations are Google SSO and object storage for receipts and logos. Read docs/DEPLOYMENT-RUNBOOK.md before the next server change.
 - **Replaces:** the private Harvest account. Migration must reconcile to the cent; see BACKEND_PRD section 16.3.
 - **User:** Jason. PowerShell on Windows. No em dashes in any generated user-facing text, docs included.
 
@@ -100,7 +100,7 @@ Work is tracked in Jira project **TALLY** and documented in Confluence space **T
 
 ## Current focus snapshot
 
-**Last updated:** 2026-08-24. Maintain this section manually.
+**Last updated:** 2026-08-26. Maintain this section manually.
 
 - Backend and wiring complete. E0 through E13 in docs/BUILD_EPICS.md are ticked. **672 tests, 14 data invariants.**
 - **Email is built (TALLY-48, 49, 50):** invites and password resets, an `outbound_messages` queue drained by `pnpm jobs:mail` with claim/lease and backoff, and overdue invoice reminders on a three-step escalation. Nothing sends until `SMTP_URL` and `MAIL_FROM` are both set; `MAIL_TO_DISK=1` writes to `.mail/` instead. **`MAIL_FROM` is now required whenever `SMTP_URL` is set**, because the old fallback earned a 5xx and 5xx means permanent, so every message failed on its first attempt.
@@ -121,7 +121,7 @@ Work is tracked in Jira project **TALLY** and documented in Confluence space **T
   - **The export files disagree about scope**, and that is the whole design problem: the lists are current-only, the time report is all history. Entities absent from a current list are created archived.
   - **The Uninvoiced screen reads $[private total removed]** because Harvest's `Invoiced?` is only true for work invoiced through Harvest. `--billed-before YYYY-MM-DD` fixes it and is off by default; the cutoff is Jason's to name.
   - Real data immediately found two defects the seed data could not: a pinned-totals row asserting `$0.00` spent, and hours rendered bare in a column shared with money. **Load real data earlier next time.**
-- **Staging deployment updated 2026-08-24:** `tally-staging-web` and `tally-staging-mcp` run `tally:0d5aa95` on the shared droplet. Ten Drizzle and five manual migrations are applied, Tally container limits and log rotation are active, four systemd timers are enabled, and both update dumps passed scratch restores. Staging mail uses a systemd override with `--no-reminders`; invitation and password-reset mail still drains. The prior `tally:4d2d928` image remains loaded for rollback. Root SSH remains enabled. Read docs/DEPLOYMENT-RUNBOOK.md before changing this deployment.
+- **Staging deployment updated 2026-08-26:** `tally-staging-web` and `tally-staging-mcp` run `tally:f46d506` on the shared droplet. Ten Drizzle and five manual migrations are applied, Tally container limits and log rotation are active, four systemd timers are enabled, and both update dumps passed scratch restores. Staging mail uses a systemd override with `--no-reminders`; invitation and password-reset mail still drains. The prior `tally:0d5aa95` image remains loaded for rollback. Root SSH remains enabled. Read docs/DEPLOYMENT-RUNBOOK.md before changing this deployment.
 - **Waiting on optional credentials rather than deployment access:** Google SSO (TALLY-20) and object storage for receipts, logos and stored PDFs (TALLY-21). See docs/PERMISSIONS-AND-CREDENTIALS.md.
 - **Production droplet:** `165.245.130.130`. It is shared with the other JH Media Group projects; Confluence documents one `/opt/docker-compose.yml` with Caddy, PostgreSQL 16, and Redis, so inspect that topology before adding Tally and do not create competing public proxy or database services.
 - Deliberately disabled rather than faked: the full account export, CSV import, and the integration connect buttons. Per-grid CSV export does work.
