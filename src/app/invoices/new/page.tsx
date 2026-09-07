@@ -17,7 +17,8 @@ import { cn } from "@/lib/cn";
 import { addDays, formatMoney, isoDate, parseMoney } from "@/lib/format";
 import { TERM_DAYS } from "@/lib/labels";
 import {
-  Affix, Button, Card, Checkbox, EmptyState, Field, Input, Segmented, Select, Spinner, Textarea,
+  Affix, Badge, Banner, Button, Card, Checkbox, EmptyState, Field, Input, Segmented, Select,
+  Spinner, Textarea,
 } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { PageBody, PageHeader } from "@/components/app/page-chrome";
@@ -185,6 +186,24 @@ export default function NewInvoicePage() {
                 </div>
               ) : (
                 <>
+                  {lines.some((l: UninvoicedLine) => l.rateMissing) && (
+                    /*
+                      Say why the total is zero, at the point the total is zero.
+
+                      An invoice reading $0.00 with real hours on it is the
+                      symptom of a project with no billable rate. The system
+                      already knew: `resolveRates` returns `rateMissing` when it
+                      cannot find one, and nothing had ever read it, so the
+                      first anybody heard was a client-facing document valued
+                      at nothing (t-Fg-4v7).
+                    */
+                    <Banner variant="warning" title="Some of these hours have no billable rate">
+                      The lines marked below value at $0.00 because their project has no
+                      rate to bill at. Set an hourly rate on the project, or a rate for the
+                      people on it, then reload this page. Hours already logged keep the rate
+                      they were written with, so they will need re-rating.
+                    </Banner>
+                  )}
                   <div className="flex items-center border-y border-border bg-bg-muted px-4 py-2 text-xs font-semibold uppercase tracking-[0.04em] text-ink-tertiary">
                     <span className="w-8" />
                     <span className="flex-1">Line</span>
@@ -212,6 +231,7 @@ export default function NewInvoicePage() {
                               : ` · ${l.expenseIds.length} ${l.expenseIds.length === 1 ? "expense" : "expenses"}`}
                           </span>
                         </span>
+                        {l.rateMissing && <Badge variant="warning" className="mr-2">No rate</Badge>}
                         <span className="w-24 text-right tabular-nums text-ink-secondary">{l.quantity}</span>
                         <span className="w-32 text-right tabular-nums text-ink-secondary">{formatMoney(Math.round(l.unitPriceCents))}</span>
                         <span className="w-32 text-right font-medium tabular-nums">{formatMoney(l.amountCents)}</span>

@@ -1442,6 +1442,8 @@ export interface UninvoicedLine {
   amountCents: number;
   entryIds: ID[];
   expenseIds: ID[];
+  /** Hours with no billable rate behind them, so this line values at nothing. */
+  rateMissing: boolean;
 }
 
 interface UninvoicedWire {
@@ -1449,6 +1451,7 @@ interface UninvoicedWire {
   label: string; sublabel: string; quantity: number;
   unitPriceCents: number; amountCents: number;
   timeEntryIds: string[]; expenseIds: string[];
+  rateMissing: boolean;
 }
 
 export async function getUninvoiced(
@@ -1472,6 +1475,7 @@ export async function getUninvoiced(
     amountCents: l.amountCents,
     entryIds: l.timeEntryIds,
     expenseIds: l.expenseIds,
+    rateMissing: l.rateMissing,
   }));
 }
 

@@ -257,6 +257,22 @@ export interface UninvoicedLine {
   amountCents: number;
   timeEntryIds: string[];
   expenseIds: string[];
+  /**
+   * Hours that carry no billable rate, so this line values at nothing.
+   *
+   * `resolveRates` already decides this when an entry is written, and returns
+   * `rateMissing` saying so, and nothing in the application has ever read it.
+   * The consequence reached a client: every active project is billed by
+   * project rate and not one of them has a rate set, so entries logged through
+   * the UI snapshot zero, and the first anybody heard of it was an invoice
+   * reading $0.00 with no explanation (t-Fg-4v7).
+   *
+   * Inferred here rather than read off the entry, because the entry stores the
+   * resolved number and not the fact that resolution failed. Hours on a
+   * billable line priced at zero is that fact: a genuinely free line is
+   * non-billable or fixed-fee and never reaches this list.
+   */
+  rateMissing: boolean;
 }
 
 /**
@@ -345,6 +361,8 @@ export async function previewLines(
       amountCents: 0,
       timeEntryIds: [],
       expenseIds: [],
+      // Decided in the final pass, once the group's hours are summed.
+      rateMissing: false,
     };
 
     bucketSeconds.set(key, [...(bucketSeconds.get(key) ?? []), e.seconds]);
@@ -390,6 +408,8 @@ export async function previewLines(
       amountCents: 0,
       timeEntryIds: [],
       expenseIds: [],
+      // Decided in the final pass, once the group's hours are summed.
+      rateMissing: false,
     };
     bucket.quantity += 1;
     bucket.amountCents += x.totalCents;
@@ -417,7 +437,11 @@ export async function previewLines(
   }
 
   return [...buckets.values()]
-    .map((l) => ({ ...l, quantity: Math.round(l.quantity * 100) / 100 }))
+    .map((l) => ({
+      ...l,
+      quantity: Math.round(l.quantity * 100) / 100,
+      rateMissing: l.kind === "time" && l.quantity > 0 && l.unitPriceCents === 0,
+    }))
     .sort((a, b) => a.label.localeCompare(b.label) || a.sublabel.localeCompare(b.sublabel));
 }
 

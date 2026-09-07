@@ -112,6 +112,48 @@ describe("listUninvoiced", () => {
     expect(await listUninvoiced(ctx)).toEqual([]);
   });
 
+  it("flags hours that have no billable rate behind them", async () => {
+    /*
+      An invoice reading $0.00 with real hours on it was the first anybody
+      heard that no project had a rate (t-Fg-4v7). Every active project was
+      billed by project rate and not one had a rate set, so entries snapshotted
+      zero, `resolveRates` returned `rateMissing: true` every time, and nothing
+      in the application read it.
+
+      The flag is inferred from the line rather than read off the entry,
+      because the entry stores the resolved number and not the fact that
+      resolution failed. This asserts the inference is right in both
+      directions, which is the part that could rot.
+    */
+    const ctx = await ctxFor("administrator");
+    const clientId = await makeClient("No Rates Co");
+    const projectId = await makeProject(clientId, { name: "Unpriced" });
+    const taskId = await makeProjectTask(projectId, await makeTask());
+
+    await logTime({ projectId, projectTaskId: taskId, seconds: 7200, rateCents: 0, spentOn: "2026-07-02" });
+
+    const [line] = await previewLines(ctx, { clientId });
+
+    expect(line!.quantity, "the hours are there").toBe(2);
+    expect(line!.amountCents, "and they value at nothing").toBe(0);
+    expect(line!.rateMissing, "which is the thing that has to be said out loud").toBe(true);
+  });
+
+  it("does not call a priced line rate-missing", async () => {
+    // The other direction. A line with a rate must never carry the warning, or
+    // the banner cries wolf on every invoice and stops being read.
+    const ctx = await ctxFor("administrator");
+    const clientId = await makeClient("Priced Co");
+    const projectId = await makeProject(clientId, { name: "Priced" });
+    const taskId = await makeProjectTask(projectId, await makeTask());
+
+    await logTime({ projectId, projectTaskId: taskId, seconds: 3600, rateCents: 15_000, spentOn: "2026-07-02" });
+
+    const [line] = await previewLines(ctx, { clientId });
+    expect(line!.amountCents).toBe(15_000);
+    expect(line!.rateMissing).toBe(false);
+  });
+
   it("shows a client with unbilled time, and the period it covers", async () => {
     const ctx = await ctxFor("administrator");
     const clientId = await makeClient("Example Client 43");
