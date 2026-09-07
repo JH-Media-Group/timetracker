@@ -36,10 +36,17 @@ function routeFiles(dir: string, out: string[] = []): string[] {
   return out;
 }
 
-/** Routes that refuse a request without an Idempotency-Key, as path segments. */
+/**
+ * Routes that refuse a request without an Idempotency-Key, as path segments.
+ *
+ * Matches the option being SET, not the word appearing. The first version
+ * matched anywhere in the file and immediately caught a route whose comment
+ * explained why it deliberately does not use the option, which would have made
+ * the guard demand a key that the server never asks for.
+ */
 function requiredRoutes(): string[] {
   return routeFiles(API_ROOT)
-    .filter((file) => readFileSync(file, "utf8").includes("requireIdempotencyKey"))
+    .filter((file) => /requireIdempotencyKey\s*:\s*true/.test(readFileSync(file, "utf8")))
     .map((file) =>
       relative(API_ROOT, file).split(sep).slice(0, -1).join("/")
     );

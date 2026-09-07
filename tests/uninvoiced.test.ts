@@ -27,7 +27,9 @@ import { newId } from "@/server/db/ids";
 import { syncBaseProfiles } from "@/server/auth/profiles";
 import { createCtx, type Actor, type Ctx } from "@/server/ctx";
 import { BASE_PROFILES, type BaseProfileKey, type Capability } from "@/server/auth/capabilities";
-import { listUninvoiced, previewLines, createInvoice } from "@/server/services/invoices";
+import {
+  listUninvoiced, previewLines, createInvoice, markBilledExternally,
+} from "@/server/services/invoices";
 
 let profiles: Record<string, string>;
 const people: Record<string, string> = {};
@@ -110,6 +112,77 @@ describe("listUninvoiced", () => {
   it("shows nothing when everything has been billed", async () => {
     const ctx = await ctxFor("administrator");
     expect(await listUninvoiced(ctx)).toEqual([]);
+  });
+
+  it("takes work off the list when it was billed in QuickBooks, and puts it back", async () => {
+    /*
+      JH Media Group bills through QuickBooks and logs the time here. Without
+      this, every hour they bill stays uninvoiced for ever and reads as a
+      receivable nobody is going to collect through Tally.
+
+      `billedExternally` already existed for the Harvest migration and was
+      honoured by every read that matters. Nothing in the product could set it,
+      so it was import-only. This asserts the round trip, because the undo is
+      the part somebody will reach for in a hurry.
+    */
+    const ctx = await ctxFor("administrator");
+    const clientId = await makeClient("QuickBooks Co");
+    const projectId = await makeProject(clientId, { name: "Billed elsewhere" });
+    const taskId = await makeProjectTask(projectId, await makeTask());
+
+    const entryId = await logTime({
+      projectId, projectTaskId: taskId, seconds: 3600, rateCents: 20_000, spentOn: "2026-07-02",
+    });
+
+    expect((await previewLines(ctx, { clientId })).length, "available before").toBe(1);
+
+    const marked = await markBilledExternally(ctx, {
+      clientId, timeEntryIds: [entryId], billed: true,
+    });
+    expect(marked.timeEntries).toBe(1);
+    expect(await previewLines(ctx, { clientId }), "gone from uninvoiced").toEqual([]);
+
+    // And back again, which is what the toast's undo calls.
+    const undone = await markBilledExternally(ctx, {
+      clientId, timeEntryIds: [entryId], billed: false,
+    });
+    expect(undone.timeEntries).toBe(1);
+    expect((await previewLines(ctx, { clientId })).length, "available again").toBe(1);
+  });
+
+  it("claims nothing on a repeat, so a retry is harmless", async () => {
+    // The route carries no idempotency key, on the grounds that setting a
+    // boolean to a value it already holds claims no rows. That is the claim,
+    // so it is asserted rather than assumed.
+    const ctx = await ctxFor("administrator");
+    const clientId = await makeClient("Retry Co");
+    const projectId = await makeProject(clientId, { name: "Retry" });
+    const taskId = await makeProjectTask(projectId, await makeTask());
+    const entryId = await logTime({
+      projectId, projectTaskId: taskId, seconds: 3600, rateCents: 20_000, spentOn: "2026-07-02",
+    });
+
+    expect((await markBilledExternally(ctx, { clientId, timeEntryIds: [entryId], billed: true })).timeEntries).toBe(1);
+    expect(
+      (await markBilledExternally(ctx, { clientId, timeEntryIds: [entryId], billed: true })).timeEntries,
+      "second call claims nothing"
+    ).toBe(0);
+  });
+
+  it("refuses to mark work belonging to another client", async () => {
+    // Same guard `attachRecords` applies. Without it, an id from one client
+    // could take another client's hours off the list.
+    const ctx = await ctxFor("administrator");
+    const mine = await makeClient("Mine");
+    const theirs = await makeClient("Theirs");
+    const projectId = await makeProject(theirs, { name: "Not mine" });
+    const taskId = await makeProjectTask(projectId, await makeTask());
+    const entryId = await logTime({
+      projectId, projectTaskId: taskId, seconds: 3600, rateCents: 20_000, spentOn: "2026-07-02",
+    });
+
+    const result = await markBilledExternally(ctx, { clientId: mine, timeEntryIds: [entryId], billed: true });
+    expect(result.timeEntries, "claimed nothing from the other client").toBe(0);
   });
 
   it("flags hours that have no billable rate behind them", async () => {

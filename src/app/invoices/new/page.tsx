@@ -102,7 +102,52 @@ export default function NewInvoicePage() {
     },
   });
 
+  /*
+    Billed in QuickBooks, rather than billed here.
+
+    JH Media Group invoices through QuickBooks and logs the time in Tally.
+    Without a way to say so, every hour they bill sits on the Uninvoiced screen
+    for ever and reads as a receivable nobody is going to collect through this
+    system.
+
+    It shares this screen's selection deliberately. Choosing what to bill is the
+    same act whichever system produces the document, so the difference is the
+    button at the end and not a second screen to learn.
+
+    No invoice is created: there is no number and no total, because the document
+    lives in QuickBooks. Undo puts the work straight back on the list.
+  */
+  const external = useMutation({
+    mutationFn: () =>
+      api.markBilledExternally({
+        clientId,
+        timeEntryIds: selected.flatMap((l) => l.entryIds),
+        expenseIds: selected.flatMap((l) => l.expenseIds),
+      }),
+    onSuccess: (result) => {
+      const timeEntryIds = selected.flatMap((l) => l.entryIds);
+      const expenseIds = selected.flatMap((l) => l.expenseIds);
+      qc.invalidateQueries({ queryKey: ["uninvoiced"] });
+      qc.invalidateQueries({ queryKey: ["time"] });
+      qc.invalidateQueries({ queryKey: ["expenses"] });
+      toast.push({
+        tone: "success",
+        title: `Marked as invoiced in QuickBooks: ${result.timeEntries} ${result.timeEntries === 1 ? "entry" : "entries"}${result.expenses ? ` and ${result.expenses} ${result.expenses === 1 ? "expense" : "expenses"}` : ""}.`,
+        undo: async () => {
+          await api.markBilledExternally({ clientId, timeEntryIds, expenseIds, billed: false });
+          qc.invalidateQueries({ queryKey: ["uninvoiced"] });
+          qc.invalidateQueries({ queryKey: ["time"] });
+          qc.invalidateQueries({ queryKey: ["expenses"] });
+        },
+      });
+      router.push("/invoices?tab=uninvoiced");
+    },
+    onError: (e: unknown) =>
+      toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not mark that work." }),
+  });
+
   const canCreate = !!clientId && selected.length > 0 && !!issueDate && !!dueDate;
+  const canMarkExternal = !!clientId && selected.length > 0;
 
   const toggle = (key: string) => setChosen((s) => {
     const next = new Set(s);
@@ -118,6 +163,14 @@ export default function NewInvoicePage() {
         actions={
           <>
             <Button variant="ghost" onClick={() => router.back()}>Cancel</Button>
+            <Button
+              variant="secondary"
+              disabled={!canMarkExternal}
+              loading={external.isPending}
+              onClick={() => external.mutate()}
+            >
+              Invoiced in QuickBooks
+            </Button>
             <Button variant="primary" disabled={!canCreate} loading={create.isPending} onClick={() => create.mutate()}>
               Create draft
             </Button>

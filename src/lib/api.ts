@@ -1454,6 +1454,29 @@ interface UninvoicedWire {
   rateMissing: boolean;
 }
 
+/**
+ * Record that work was billed in QuickBooks rather than here.
+ *
+ * Creates no invoice. It takes the hours and expenses off the uninvoiced list
+ * so they stop reading as money this system is going to collect.
+ *
+ * Pass `billed: false` to put them back, which is what the undo on the toast
+ * does.
+ */
+export async function markBilledExternally(input: {
+  clientId: ID;
+  timeEntryIds?: ID[];
+  expenseIds?: ID[];
+  billed?: boolean;
+}): Promise<{ timeEntries: number; expenses: number }> {
+  return post<{ timeEntries: number; expenses: number }>("/invoices/billed-externally", {
+    clientId: input.clientId,
+    timeEntryIds: input.timeEntryIds,
+    expenseIds: input.expenseIds,
+    billed: input.billed ?? true,
+  });
+}
+
 export async function getUninvoiced(
   clientId: ID,
   opts: { from?: string; to?: string; groupBy?: "project" | "task" | "person" } = {}

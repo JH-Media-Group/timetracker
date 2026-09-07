@@ -896,6 +896,107 @@ async function attachRecords(
 }
 
 /**
+ * Record that work was billed somewhere other than Tally.
+ *
+ * JH Media Group invoices through QuickBooks and logs the time here. Without
+ * this, every hour they bill stays on the Uninvoiced screen forever and counts
+ * as a receivable that nobody is ever going to collect through this system.
+ *
+ * `billedExternally` is the flag the Harvest migration introduced for exactly
+ * this idea: work that was billed before Tally existed, which must not be
+ * offered for invoicing again. Every read that matters already honours it, the
+ * uninvoiced list and the profitability reports included. Nothing in the
+ * product could set it, so it was import-only. This is the missing half.
+ *
+ * It does not create an invoice and does not pretend to. There is no document,
+ * no number, and no total, because the document lives in QuickBooks. What it
+ * records is that these hours and expenses are somebody else's problem now.
+ *
+ * The claim conditions are deliberately identical to `attachRecords`, so the
+ * two ways of taking work off the uninvoiced list agree about what may be
+ * taken. A running timer, a deleted row, a non-billable row, or anything
+ * already on an invoice is refused by both.
+ *
+ * Reversible on purpose (`billed: false`), because "archive over delete, and
+ * every destructive action gets an undo" applies to a flag that hides revenue
+ * just as much as it applies to a row.
+ */
+export async function markBilledExternally(
+  ctx: Ctx,
+  input: { clientId: string; timeEntryIds?: string[]; expenseIds?: string[]; billed: boolean }
+): Promise<{ timeEntries: number; expenses: number }> {
+  assertCan(ctx, "invoice:manage");
+
+  const timeEntryIds = input.timeEntryIds ?? [];
+  const expenseIds = input.expenseIds ?? [];
+  if (!timeEntryIds.length && !expenseIds.length) {
+    throw validationFailed({ _: ["Choose some time or expenses to mark."] });
+  }
+
+  return withTransaction(ctx, async (tx) => {
+    let timeEntries = 0;
+    let expenses = 0;
+
+    if (timeEntryIds.length) {
+      const claimable = tx.db
+        .select({ id: s.projects.id })
+        .from(s.projects)
+        .where(and(eq(s.projects.id, s.timeEntries.projectId), eq(s.projects.clientId, input.clientId)));
+
+      const claimed = await tx.db
+        .update(s.timeEntries)
+        .set({ billedExternally: input.billed })
+        .where(
+          and(
+            inArray(s.timeEntries.id, timeEntryIds),
+            isNull(s.timeEntries.invoiceId),
+            eq(s.timeEntries.isBillable, true),
+            eq(s.timeEntries.billedExternally, !input.billed),
+            isNull(s.timeEntries.deletedAt),
+            isNull(s.timeEntries.timerStartedAt),
+            exists(claimable)
+          )
+        )
+        .returning({ id: s.timeEntries.id });
+      timeEntries = claimed.length;
+    }
+
+    if (expenseIds.length) {
+      const claimable = tx.db
+        .select({ id: s.projects.id })
+        .from(s.projects)
+        .where(and(eq(s.projects.id, s.expenses.projectId), eq(s.projects.clientId, input.clientId)));
+
+      const claimed = await tx.db
+        .update(s.expenses)
+        .set({ billedExternally: input.billed })
+        .where(
+          and(
+            inArray(s.expenses.id, expenseIds),
+            isNull(s.expenses.invoiceId),
+            eq(s.expenses.isBillable, true),
+            eq(s.expenses.billedExternally, !input.billed),
+            isNull(s.expenses.deletedAt),
+            exists(claimable)
+          )
+        )
+        .returning({ id: s.expenses.id });
+      expenses = claimed.length;
+    }
+
+    tx.audit({
+      action: input.billed ? "invoice.billed_externally" : "invoice.billed_externally.undo",
+      entityType: "client",
+      entityId: input.clientId,
+      entityLabel: input.billed ? "Billed in QuickBooks" : "Returned to uninvoiced",
+      after: { timeEntries, expenses, requested: timeEntryIds.length + expenseIds.length },
+    });
+
+    return { timeEntries, expenses };
+  });
+}
+
+/**
  * Gives back everything an invoice was holding, so it can be billed again.
  *
  * The rate lock goes with it. A record released from a sent invoice that keeps
