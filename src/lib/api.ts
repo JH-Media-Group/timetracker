@@ -1276,7 +1276,9 @@ export interface RecurringInput {
 }
 
 export const createRecurringInvoice = async (input: RecurringInput): Promise<RecurringInvoice> =>
-  fromRecurring(await post<RecurringWire>("/recurring-invoices", input));
+  fromRecurring(
+    await post<RecurringWire>("/recurring-invoices", input, idempotencyKey("recurring-create", input))
+  );
 
 export const updateRecurringInvoice = async (id: ID, input: RecurringInput): Promise<RecurringInvoice> =>
   fromRecurring(await patch<RecurringWire>(`/recurring-invoices/${id}`, input));
@@ -1287,9 +1289,22 @@ export const setRecurringInvoiceState = async (
 ): Promise<RecurringInvoice> =>
   fromRecurring(await post<RecurringWire>(`/recurring-invoices/${id}/state`, { state }));
 
-/** Raises the next invoice now and moves the schedule on one period. */
+/**
+ * Raises the next invoice now and moves the schedule on one period.
+ *
+ * Keyed on the schedule and the calendar day, so a double-click or a retry
+ * after a timeout raises one invoice rather than two. Claims are purged after
+ * 24 hours (`purgeIdempotencyKeys`), so issuing the same schedule again
+ * tomorrow is a new request. Erring towards a collision is deliberate here:
+ * the route's own note says a retry that bills a client twice is the worst
+ * outcome this area has.
+ */
 export const issueRecurringInvoice = async (id: ID): Promise<{ invoiceId: ID }> =>
-  post<{ invoiceId: string }>(`/recurring-invoices/${id}/issue`);
+  post<{ invoiceId: string }>(
+    `/recurring-invoices/${id}/issue`,
+    undefined,
+    idempotencyKey(`recurring-issue-${id}`, { on: new Date().toISOString().slice(0, 10) })
+  );
 
 export const deleteRecurringInvoice = async (id: ID): Promise<void> => {
   await del(`/recurring-invoices/${id}`);
