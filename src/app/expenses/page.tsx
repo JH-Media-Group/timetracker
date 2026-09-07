@@ -17,6 +17,7 @@ import { Paperclip, Plus, Trash2 } from "lucide-react";
 import * as api from "@/lib/api";
 import { formatDateUS, formatMoney, isoDate, parseMoney } from "@/lib/format";
 import type { Expense } from "@/lib/types";
+import { mayDeleteExpense, mayEditExpense } from "@/lib/expense-permissions";
 import {
   Avatar, Badge, Button, Card, Checkbox, Dialog, DialogContent, Dropzone, EmptyState,
   Field, Input, Segmented, Select, Textarea, Affix, Tray,
@@ -285,7 +286,7 @@ export default function ExpensesPage() {
  * behind the indicator yet. It says so, rather than offering a link to nothing.
  */
 function ExpenseTray({ expense, onClose }: { expense: Expense | null; onClose: () => void }) {
-  const { projectById, clientById, categoryById, userById } = useApp();
+  const { projectById, clientById, categoryById, userById, me } = useApp();
   const can = useCan();
   const qc = useQueryClient();
   const toast = useToast();
@@ -300,7 +301,20 @@ function ExpenseTray({ expense, onClose }: { expense: Expense | null; onClose: (
    * client has the document, so the number behind it cannot move.
    */
   const locked = !!expense?.invoiceId;
-  const editable = can("expense:manage") && !locked;
+
+  /*
+    The same rule the server applies, not a stricter one.
+
+    This was `can("expense:manage") && !locked`, which every profile but four
+    fails. So somebody would add an expense and find they could not edit the
+    thing they had just added, while the API would have accepted the change:
+    `loadEditable` asks for `expense:edit_own` on your own row. The UI was
+    refusing what the server allows, on the single most common action this
+    screen has (t-ZbqtuF).
+  */
+  const own = !!expense && expense.userId === me?.id;
+  const editable = mayEditExpense({ own, locked, can });
+  const deletable = mayDeleteExpense({ own, locked, can });
 
   const patch = useMutation({
     mutationFn: (p: Parameters<typeof api.updateExpense>[1]) => api.updateExpense(expense!.id, p),
@@ -340,7 +354,7 @@ function ExpenseTray({ expense, onClose }: { expense: Expense | null; onClose: (
       title={formatMoney(expense.totalCents)}
       subtitle={`${project?.name ?? "Unknown project"} · ${formatDateUS(expense.spentOn)}`}
       footer={
-        editable ? (
+        deletable ? (
           <Button variant="ghost" loading={remove.isPending} onClick={() => remove.mutate()}>
             <Trash2 className="size-4" />Delete
           </Button>
