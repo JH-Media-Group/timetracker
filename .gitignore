@@ -57,3 +57,7 @@ scripts/.probe-*
 
 # Local deployment transfer artifacts.
 /.deploy-*.tar
+
+# Scratch space for ticket work: downloaded captures, probe scripts, query files.
+# Swept into a commit once by a `git add -A` during a Toado sweep.
+.tmp/
