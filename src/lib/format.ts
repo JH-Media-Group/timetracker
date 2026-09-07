@@ -252,10 +252,41 @@ export const crossesMidnight = (startMinutes: number, endMinutes: number) => end
  */
 export const IMPLAUSIBLE_SPAN_MINUTES = 12 * 60;
 
-/** The sentence shown under a span that looks like a mistake, or null. */
+/**
+ * The sentence shown under a span that looks like a mistake, or null.
+ *
+ * **Twelve hours exactly warns.** The boundary used to be exclusive, and that
+ * excluded the single most likely way to get a wrong span: a bare hour at the
+ * end resolving half a day out. Any "H" to "H" pair lands on exactly 720
+ * minutes, so the one case the check most needed to catch was the one case it
+ * let through.
+ *
+ * Person02 logged 10:00am to 10:00pm meaning ten past ten, and Tally saved 12.00
+ * hours in silence (t-iqTVyw). Nothing was calculated wrongly: the app was
+ * asked for 10 to 10 and answered correctly. It just never said that twelve
+ * hours was a strange thing to have been asked for.
+ */
 export function implausibleSpanWarning(startMinutes: number, endMinutes: number): string | null {
   const minutes = elapsedMinutes(startMinutes, endMinutes);
-  if (minutes <= IMPLAUSIBLE_SPAN_MINUTES) return null;
+  if (minutes < IMPLAUSIBLE_SPAN_MINUTES) return null;
+
+  /*
+    Exactly twelve hours is the same clock time twice, always.
+
+    Not a heuristic: an end twelve hours after a start reads identically on the
+    clock face, so this branch is the "10 to 10" case by construction. It is
+    also how a bare hour resolves when the minutes fall off, which is what
+    makes it worth its own sentence. The generic warning invites "yes, I worked
+    a long day"; this one names the actual mistake.
+
+    A first version of this guarded on `startMinutes % 720 === endMinutes % 720`
+    as well. That condition can never be false here, so it was removed rather
+    than left looking like it discriminated between two cases.
+  */
+  if (minutes === IMPLAUSIBLE_SPAN_MINUTES) {
+    return `${formatClockTime(startMinutes)} to ${formatClockTime(endMinutes)} is exactly twelve hours. If you meant minutes past the hour, type them: 10:10 rather than 10.`;
+  }
+
   const hours = Math.round((minutes / 60) * 10) / 10;
   return `That is ${hours} hours. Check the start and end are the right way round.`;
 }

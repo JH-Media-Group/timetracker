@@ -117,9 +117,35 @@ describe("implausibleSpanWarning", () => {
     expect(typeof implausibleSpanWarning(at(8), at(3))).toBe("string");
   });
 
-  it("does not warn at exactly the threshold", () => {
-    expect(implausibleSpanWarning(at(8), at(20))).toBeNull(); // twelve hours
+  it("warns at exactly twelve hours, which is where the real mistake lands", () => {
+    /*
+      This used to assert the opposite, and the opposite was the bug.
+
+      The boundary was exclusive, so exactly 720 minutes said nothing. Every
+      "H" to "H" pair resolves to exactly 720 minutes, because a bare hour at
+      the end takes the soonest reading after the start and the same hour is
+      twelve hours later. So the one span the check most needed to catch was
+      the one span it was written to ignore. Person02 saved 10:00am to 10:00pm
+      meaning ten past ten and got 12.00 hours in silence (t-iqTVyw).
+    */
+    expect(implausibleSpanWarning(at(8), at(20))).not.toBeNull();
     expect(implausibleSpanWarning(at(8), at(20, 1))).not.toBeNull();
+    expect(implausibleSpanWarning(at(8), at(19, 59))).toBeNull();
+  });
+
+  it("names the typo when the same clock time is entered twice", () => {
+    // The generic sentence invites "yes, I worked a long day". This one says
+    // what actually went wrong, which is the minutes falling off the second
+    // time. Both readings of the reported case are covered.
+    const same = implausibleSpanWarning(at(10), at(22));
+    expect(same).toContain("exactly twelve hours");
+    expect(same).toContain("10:10");
+
+    // There is no such thing as a twelve-hour span between different clock
+    // readings: twelve hours later is the same face. So every exactly-720
+    // span gets this sentence, and anything longer gets the generic one.
+    expect(implausibleSpanWarning(at(8), at(20))).toContain("exactly twelve hours");
+    expect(implausibleSpanWarning(at(8), at(21))).toContain("13 hours");
   });
 });
 
