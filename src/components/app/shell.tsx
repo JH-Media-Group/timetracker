@@ -6,7 +6,9 @@ import { usePathname, useRouter } from "next/navigation";
 import {
   Bell, Building2, Clock, FileText, FolderOpen, ListChecks, Plus, Receipt,
   Search, Settings as SettingsIcon, Square, Users, BarChart3, Check, Play, PanelLeftClose, PanelLeft,
+  LogOut,
 } from "lucide-react";
+import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { ANONYMOUS_PAGES } from "@/lib/anonymous-pages";
 import { navItemClass, navSectionLabelClass, timerPillVariants, timerReadoutClass } from "@/components/ui/recipes";
@@ -183,6 +185,35 @@ function TopBar() {
   const { theme, setTheme } = useTheme();
   const router = useRouter();
 
+  /*
+    Ending your own session.
+
+    There was no way to do this at all. Settings has "sign out everywhere",
+    which revokes every session on every device, and that is a different act:
+    somebody finishing their shift on a shared machine wants this one, and
+    reaching for the only control that existed would have logged out their
+    phone as well.
+
+    `window.location` rather than `router.push`, deliberately. A client-side
+    navigation keeps the React Query cache alive, so the next person at the
+    keyboard would be looking at the previous person's bootstrap, their roster,
+    and whatever money their profile could see, until something happened to
+    refetch it. A full document load is what actually discards it.
+
+    The signOut call is awaited but its failure is ignored: the cookie is
+    cleared server-side, and if that request did not land we still want the
+    person off this screen. Staying signed in because a fetch failed is the
+    worse outcome.
+  */
+  const signOut = async () => {
+    try {
+      await api.signOut();
+    } catch {
+      // Falls through to the redirect below on purpose. See above.
+    }
+    window.location.assign("/signin");
+  };
+
   return (
     <header data-print="hide" className="sticky top-0 z-(--z-sticky) flex h-(--topbar-h) items-center justify-between gap-3 border-b border-border bg-bg/85 px-4 backdrop-blur-md backdrop-saturate-150">
       <div className="flex min-w-0 items-center gap-2">
@@ -238,6 +269,11 @@ function TopBar() {
           ))}
           <MenuSeparator />
           <MenuItem onSelect={() => palette.openShortcuts()} shortcut="?">Keyboard shortcuts</MenuItem>
+          <MenuSeparator />
+          <MenuItem onSelect={signOut}>
+            <LogOut className="size-4" aria-hidden />
+            Sign out
+          </MenuItem>
         </Menu>
       </div>
     </header>
