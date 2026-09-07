@@ -282,9 +282,17 @@ export function implausibleSpanWarning(startMinutes: number, endMinutes: number)
     A first version of this guarded on `startMinutes % 720 === endMinutes % 720`
     as well. That condition can never be false here, so it was removed rather
     than left looking like it discriminated between two cases.
+
+    The example is built from the hour they typed, not from the hour in the bug
+    report. A fixed "10:10 rather than 10" under a 7 to 7 entry is advice about
+    somebody else's mistake, and it reads as though the app has not looked at
+    what is on the screen. It stays conditional too: twelve hours is a real
+    shift for some people, and the sentence states the span and offers a
+    reading rather than asserting an error.
   */
   if (minutes === IMPLAUSIBLE_SPAN_MINUTES) {
-    return `${formatClockTime(startMinutes)} to ${formatClockTime(endMinutes)} is exactly twelve hours. If you meant minutes past the hour, type them: 10:10 rather than 10.`;
+    const hour = Math.floor(startMinutes / 60) % 12 || 12;
+    return `${formatClockTime(startMinutes)} to ${formatClockTime(endMinutes)} is exactly twelve hours. If you meant minutes past the hour, type them: ${hour}:15 rather than ${hour}.`;
   }
 
   const hours = Math.round((minutes / 60) * 10) / 10;

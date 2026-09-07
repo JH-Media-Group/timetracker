@@ -20,8 +20,24 @@ import type { Capability } from "@/server/auth/capabilities";
  * The UI was stricter than the server, in the direction that blocks the most
  * common action there is on this screen (t-ZbqtuF).
  *
- * Keep this in step with `loadEditable`. It is deliberately the same shape so
- * the two read as obviously equivalent.
+ * **This mirrors only the capability half, and that is deliberate.** The lock
+ * half is not recomputed here: the server sends `locked` and `lockReasons` on
+ * every expense, decided by the same `canEdit` the mutation runs, and the tray
+ * uses that. A first version of this file recomputed the lock as
+ * `!!invoiceId`, which disagreed with the server about draft invoices and
+ * reintroduced the very bug it was written to fix.
+ *
+ * The capability half legitimately lives on the client, because a button must
+ * not appear for an action the request would refuse, and `useCan()` reads the
+ * set the server computed. What keeps it honest is that the tests below build
+ * their inputs from BASE_PROFILES rather than from a hand-written list, so a
+ * change to what a Member holds fails here.
+ *
+ * What is still only prose: that these verbs match `loadEditable`'s verbs. If
+ * the server ever stops accepting `expense:edit_others`, nothing here fails.
+ * That is a known, accepted gap; the safe direction is that the server refuses
+ * anyway and the UI merely offers something that then errors, rather than the
+ * reverse.
  */
 export function mayEditExpense(input: {
   /** Whether the expense belongs to the person looking at it. */

@@ -11,6 +11,8 @@ import {
 import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { ANONYMOUS_PAGES } from "@/lib/anonymous-pages";
+import { endSession } from "@/lib/sign-out";
+import { useToast } from "@/components/ui/toast";
 import { navItemClass, navSectionLabelClass, timerPillVariants, timerReadoutClass } from "@/components/ui/recipes";
 import {
   Avatar, Button, Kbd, Menu, MenuItem, MenuLabel, MenuSeparator, Popover,
@@ -184,6 +186,7 @@ function TopBar() {
   const { me } = useApp();
   const { theme, setTheme } = useTheme();
   const router = useRouter();
+  const toast = useToast();
 
   /*
     Ending your own session.
@@ -200,18 +203,17 @@ function TopBar() {
     and whatever money their profile could see, until something happened to
     refetch it. A full document load is what actually discards it.
 
-    The signOut call is awaited but its failure is ignored: the cookie is
-    cleared server-side, and if that request did not land we still want the
-    person off this screen. Staying signed in because a fetch failed is the
-    worse outcome.
+    The rule about what happens when the request fails lives in
+    `src/lib/sign-out.ts`, with the reasoning and a test: the session is only
+    over if the server said so, so a failure is reported here rather than
+    redirected past.
   */
   const signOut = async () => {
-    try {
-      await api.signOut();
-    } catch {
-      // Falls through to the redirect below on purpose. See above.
-    }
-    window.location.assign("/signin");
+    const failure = await endSession({
+      signOut: api.signOut,
+      leave: () => window.location.assign("/signin"),
+    });
+    if (failure) toast.push({ tone: "danger", title: failure });
   };
 
   return (

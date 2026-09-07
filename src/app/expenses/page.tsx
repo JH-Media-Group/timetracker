@@ -17,6 +17,7 @@ import { Paperclip, Plus, Trash2 } from "lucide-react";
 import * as api from "@/lib/api";
 import { formatDateUS, formatMoney, isoDate, parseMoney } from "@/lib/format";
 import type { Expense } from "@/lib/types";
+import type { ExpenseView } from "@/lib/api";
 import { mayDeleteExpense, mayEditExpense } from "@/lib/expense-permissions";
 import {
   Avatar, Badge, Button, Card, Checkbox, Dialog, DialogContent, Dropzone, EmptyState,
@@ -267,7 +268,7 @@ export default function ExpensesPage() {
 
       <ExpenseDialog open={creating} onOpenChange={setCreating} />
       <ExpenseTray
-        expense={(expenses as Expense[] | undefined)?.find((e) => e.id === openId) ?? null}
+        expense={(expenses as ExpenseView[] | undefined)?.find((e) => e.id === openId) ?? null}
         onClose={() => setOpenId(null)}
       />
     </>
@@ -285,7 +286,22 @@ export default function ExpensesPage() {
  * not**, because receipts need object storage (TALLY-21) and there is nothing
  * behind the indicator yet. It says so, rather than offering a link to nothing.
  */
-function ExpenseTray({ expense, onClose }: { expense: Expense | null; onClose: () => void }) {
+/**
+ * Why an expense cannot be changed, in the words of whoever is reading it.
+ *
+ * The reasons come from `canEdit` in the domain layer, so this covers all four
+ * rather than the one the tray used to assume. Saying "on a sent invoice" for a
+ * period lock sends somebody to the wrong screen.
+ */
+function lockReasonText(reasons: string[]): string {
+  if (reasons.includes("invoiced")) return "On an invoice that has been sent, so it cannot be changed.";
+  if (reasons.includes("billed_externally")) return "Already billed outside Tally, so it cannot be changed.";
+  if (reasons.includes("period_approved")) return "That week has been approved, so it cannot be changed.";
+  if (reasons.includes("period_locked")) return "That period is closed, so it cannot be changed.";
+  return "This expense cannot be changed.";
+}
+
+function ExpenseTray({ expense, onClose }: { expense: ExpenseView | null; onClose: () => void }) {
   const { projectById, clientById, categoryById, userById, me } = useApp();
   const can = useCan();
   const qc = useQueryClient();
@@ -300,18 +316,25 @@ function ExpenseTray({ expense, onClose }: { expense: Expense | null; onClose: (
    * An expense on a sent invoice is locked, exactly as a time entry is: the
    * client has the document, so the number behind it cannot move.
    */
-  const locked = !!expense?.invoiceId;
-
   /*
-    The same rule the server applies, not a stricter one.
+    The lock is the server's answer, not a second opinion.
 
-    This was `can("expense:manage") && !locked`, which every profile but four
-    fails. So somebody would add an expense and find they could not edit the
-    thing they had just added, while the API would have accepted the change:
-    `loadEditable` asks for `expense:edit_own` on your own row. The UI was
-    refusing what the server allows, on the single most common action this
-    screen has (t-ZbqtuF).
+    This computed `!!expense?.invoiceId`, which locks an expense attached to a
+    DRAFT invoice. The server does not: `canEdit` locks on
+    `invoiceState !== "draft"`, so a draft is still editable, and a draft is
+    exactly when somebody is still assembling the bill and most likely to want
+    a correction. It also missed `billedExternally` and the approved-period
+    lock entirely.
+
+    That was the same defect this ticket was opened for, reintroduced two lines
+    below the fix for it, which is what happens when a client recomputes a rule
+    the server already sent. `ExpenseDto` has carried `locked` and
+    `lockReasons` all along, decided by the same `canEdit` the mutation runs.
+    The tray was typed as the narrower `Expense`, so it could not see them.
+
+    Found by an adversarial review, not by me.
   */
+  const locked = expense?.locked ?? false;
   const own = !!expense && expense.userId === me?.id;
   const editable = mayEditExpense({ own, locked, can });
   const deletable = mayDeleteExpense({ own, locked, can });
@@ -360,7 +383,9 @@ function ExpenseTray({ expense, onClose }: { expense: Expense | null; onClose: (
           </Button>
         ) : (
           <span className="text-base text-ink-tertiary">
-            {locked ? "On a sent invoice, so it cannot be changed." : "You can see this expense but not change it."}
+            {locked
+              ? lockReasonText(expense.lockReasons)
+              : "You can see this expense but not change it."}
           </span>
         )
       }

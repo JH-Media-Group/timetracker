@@ -1292,18 +1292,32 @@ export const setRecurringInvoiceState = async (
 /**
  * Raises the next invoice now and moves the schedule on one period.
  *
- * Keyed on the schedule and the calendar day, so a double-click or a retry
- * after a timeout raises one invoice rather than two. Claims are purged after
- * 24 hours (`purgeIdempotencyKeys`), so issuing the same schedule again
- * tomorrow is a new request. Erring towards a collision is deliberate here:
- * the route's own note says a retry that bills a client twice is the worst
- * outcome this area has.
+ * **Keyed on the period being raised, not on the calendar day.** Issue now
+ * bills whatever `nextIssueOn` says and then advances the schedule, so two
+ * presses are two different periods and both are legitimate. A day-scoped key
+ * made the second press collide with the first: the ledger handed back the
+ * first invoice's id, the screen said "Invoice raised" and opened it, and the
+ * period the operator meant to bill was never billed. Under-billing in silence
+ * is worse than the double-bill the key exists to stop, and the key stopped
+ * nothing the server was not already stopping.
+ *
+ * Passing the period keeps the guard where it belongs. A double-click or a
+ * retry after a timeout still carries the same `nextIssueOn` (the response has
+ * not landed, so nothing has advanced) and still collides. Issuing a genuinely
+ * different period carries a different one and goes through.
+ *
+ * `period` is the schedule's `nextIssueOn`. A schedule without one cannot be
+ * issued at all, and the server refuses it, so the null case only has to be a
+ * key that does not collide with a real period.
  */
-export const issueRecurringInvoice = async (id: ID): Promise<{ invoiceId: ID }> =>
+export const issueRecurringInvoice = async (
+  id: ID,
+  period: string | undefined
+): Promise<{ invoiceId: ID }> =>
   post<{ invoiceId: string }>(
     `/recurring-invoices/${id}/issue`,
     undefined,
-    idempotencyKey(`recurring-issue-${id}`, { on: new Date().toISOString().slice(0, 10) })
+    idempotencyKey(`recurring-issue-${id}`, { period: period ?? null })
   );
 
 export const deleteRecurringInvoice = async (id: ID): Promise<void> => {
@@ -1455,6 +1469,21 @@ interface UninvoicedWire {
 }
 
 /**
+ * What the server actually moved, and what it would not.
+ *
+ * A partial claim is a normal answer, not an error: anything invoiced, already
+ * marked, deleted, running or another client's is refused, and the screen may
+ * be seconds out of date. The caller has to be able to say so, and to scope an
+ * undo to the rows this call moved rather than to whatever is still selected.
+ */
+export interface BilledExternallyResult {
+  timeEntryIds: ID[];
+  expenseIds: ID[];
+  skippedTimeEntryIds: ID[];
+  skippedExpenseIds: ID[];
+}
+
+/**
  * Record that work was billed in QuickBooks rather than here.
  *
  * Creates no invoice. It takes the hours and expenses off the uninvoiced list
@@ -1468,8 +1497,8 @@ export async function markBilledExternally(input: {
   timeEntryIds?: ID[];
   expenseIds?: ID[];
   billed?: boolean;
-}): Promise<{ timeEntries: number; expenses: number }> {
-  return post<{ timeEntries: number; expenses: number }>("/invoices/billed-externally", {
+}): Promise<BilledExternallyResult> {
+  return post<BilledExternallyResult>("/invoices/billed-externally", {
     clientId: input.clientId,
     timeEntryIds: input.timeEntryIds,
     expenseIds: input.expenseIds,

@@ -372,10 +372,16 @@ function RecurringList() {
   /**
    * Raising one by hand, which is what makes the schedule usable before the
    * daily job in TALLY-26 exists. It advances the schedule in the same
-   * transaction, so pressing it twice does not bill the same period twice.
+   * transaction, so pressing it twice raises the next period rather than the
+   * same one again.
+   *
+   * The period goes to the client so the idempotency key can be scoped to it.
+   * Two presses on the same period (a double click, a retry) are one request;
+   * two presses that are genuinely two periods are two.
    */
   const issue = useMutation({
-    mutationFn: (id: string) => api.issueRecurringInvoice(id),
+    mutationFn: ({ id, period }: { id: string; period?: string }) =>
+      api.issueRecurringInvoice(id, period),
     onSuccess: ({ invoiceId }) => {
       toast.push({ tone: "success", title: "Invoice raised from the schedule." });
       refresh();
@@ -439,9 +445,9 @@ function RecurringList() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      loading={issue.isPending && issue.variables === r.id}
+                      loading={issue.isPending && issue.variables?.id === r.id}
                       disabled={r.state === "paused" || !r.nextIssueOn}
-                      onClick={() => issue.mutate(r.id)}
+                      onClick={() => issue.mutate({ id: r.id, period: r.nextIssueOn })}
                     >
                       Issue now
                     </Button>

@@ -268,9 +268,17 @@ export interface UninvoicedLine {
    * reading $0.00 with no explanation (t-Fg-4v7).
    *
    * Inferred here rather than read off the entry, because the entry stores the
-   * resolved number and not the fact that resolution failed. Hours on a
-   * billable line priced at zero is that fact: a genuinely free line is
-   * non-billable or fixed-fee and never reaches this list.
+   * resolved number and not the fact that resolution failed. Billable hours
+   * priced at zero is the visible half of that fact.
+   *
+   * The inference is only sound once fixed-fee projects are taken out of it,
+   * and they are: nothing in this query filters on `billingType`, so a fixed
+   * fee project's billable hours do reach this list, and they legitimately
+   * price at zero because the fee is the invoice, not the hours. Warning about
+   * them would send somebody off to set an hourly rate on a project that is
+   * not billed by the hour. There are none in the account today, which is why
+   * a comment claiming they never get here survived: it was true of the data,
+   * not of the code.
    */
   rateMissing: boolean;
 }
@@ -304,6 +312,7 @@ export async function previewLines(
       rate: s.timeEntries.billableRateCents,
       seconds: s.timeEntries.durationSeconds,
       entryId: s.timeEntries.id,
+      billingType: s.projects.billingType,
     })
     .from(s.timeEntries)
     .innerJoin(s.projects, eq(s.projects.id, s.timeEntries.projectId))
@@ -344,6 +353,11 @@ export async function previewLines(
    * and invoices did not.
    */
   const rounding = await roundingRule(ctx);
+
+  /** Projects whose hours price at zero by design, so a zero is not a missing rate. */
+  const fixedFee = new Set(
+    entries.filter((e) => e.billingType === "fixed_fee").map((e) => e.projectId)
+  );
 
   for (const e of entries) {
     const detail =
@@ -440,7 +454,8 @@ export async function previewLines(
     .map((l) => ({
       ...l,
       quantity: Math.round(l.quantity * 100) / 100,
-      rateMissing: l.kind === "time" && l.quantity > 0 && l.unitPriceCents === 0,
+      rateMissing:
+        l.kind === "time" && l.quantity > 0 && l.unitPriceCents === 0 && !fixedFee.has(l.projectId),
     }))
     .sort((a, b) => a.label.localeCompare(b.label) || a.sublabel.localeCompare(b.sublabel));
 }
@@ -920,11 +935,36 @@ async function attachRecords(
  * Reversible on purpose (`billed: false`), because "archive over delete, and
  * every destructive action gets an undo" applies to a flag that hides revenue
  * just as much as it applies to a row.
+ *
+ * IT ANSWERS WITH IDS, NOT COUNTS
+ *
+ * A partial claim is normal here and not an error: the claim conditions refuse
+ * anything already invoiced, already marked, deleted, running, or belonging to
+ * another client, and the screen the operator selected from may be seconds
+ * stale. So the caller is told exactly which rows moved and which did not.
+ *
+ * Counts alone were not enough for either consumer. The audit row could say
+ * "claimed 40 of 47" and nobody could ever work out which seven were left
+ * behind, on the one operation in this system whose entire purpose is to
+ * decide what the company does and does not still get paid for. And the undo
+ * has to put back what this call took, not what the screen happened to have
+ * selected when the person pressed it.
+ *
+ * The route caps each list at 1000, so the audit payload is bounded.
  */
+export interface BilledExternallyResult {
+  /** Rows that actually changed. What an undo must be scoped to. */
+  timeEntryIds: string[];
+  expenseIds: string[];
+  /** Asked for and refused, for the same reasons `attachRecords` would refuse. */
+  skippedTimeEntryIds: string[];
+  skippedExpenseIds: string[];
+}
+
 export async function markBilledExternally(
   ctx: Ctx,
   input: { clientId: string; timeEntryIds?: string[]; expenseIds?: string[]; billed: boolean }
-): Promise<{ timeEntries: number; expenses: number }> {
+): Promise<BilledExternallyResult> {
   assertCan(ctx, "invoice:manage");
 
   const timeEntryIds = input.timeEntryIds ?? [];
@@ -934,8 +974,8 @@ export async function markBilledExternally(
   }
 
   return withTransaction(ctx, async (tx) => {
-    let timeEntries = 0;
-    let expenses = 0;
+    let claimedTime: string[] = [];
+    let claimedExpenses: string[] = [];
 
     if (timeEntryIds.length) {
       const claimable = tx.db
@@ -958,7 +998,7 @@ export async function markBilledExternally(
           )
         )
         .returning({ id: s.timeEntries.id });
-      timeEntries = claimed.length;
+      claimedTime = claimed.map((r) => r.id);
     }
 
     if (expenseIds.length) {
@@ -981,18 +1021,27 @@ export async function markBilledExternally(
           )
         )
         .returning({ id: s.expenses.id });
-      expenses = claimed.length;
+      claimedExpenses = claimed.map((r) => r.id);
     }
+
+    const claimedTimeSet = new Set(claimedTime);
+    const claimedExpenseSet = new Set(claimedExpenses);
+    const result: BilledExternallyResult = {
+      timeEntryIds: claimedTime,
+      expenseIds: claimedExpenses,
+      skippedTimeEntryIds: timeEntryIds.filter((id) => !claimedTimeSet.has(id)),
+      skippedExpenseIds: expenseIds.filter((id) => !claimedExpenseSet.has(id)),
+    };
 
     tx.audit({
       action: input.billed ? "invoice.billed_externally" : "invoice.billed_externally.undo",
       entityType: "client",
       entityId: input.clientId,
       entityLabel: input.billed ? "Billed in QuickBooks" : "Returned to uninvoiced",
-      after: { timeEntries, expenses, requested: timeEntryIds.length + expenseIds.length },
+      after: result,
     });
 
-    return { timeEntries, expenses };
+    return result;
   });
 }
 

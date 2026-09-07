@@ -86,6 +86,9 @@ export default function NewInvoicePage() {
     return { subtotal, discountCents, taxCents, total: subtotal - discountCents + taxCents };
   }, [selected, tax, discount]);
 
+  /** What the last "Invoiced in QuickBooks" press actually moved, when it moved less than was asked. */
+  const [partial, setPartial] = React.useState<{ moved: number; skipped: number } | null>(null);
+
   const create = useMutation({
     mutationFn: () => api.createInvoice({
       clientId, subject, notes, poNumber, issueDate, dueDate,
@@ -125,28 +128,91 @@ export default function NewInvoicePage() {
         expenseIds: selected.flatMap((l) => l.expenseIds),
       }),
     onSuccess: (result) => {
-      const timeEntryIds = selected.flatMap((l) => l.entryIds);
-      const expenseIds = selected.flatMap((l) => l.expenseIds);
-      qc.invalidateQueries({ queryKey: ["uninvoiced"] });
-      qc.invalidateQueries({ queryKey: ["time"] });
-      qc.invalidateQueries({ queryKey: ["expenses"] });
-      toast.push({
-        tone: "success",
-        title: `Marked as invoiced in QuickBooks: ${result.timeEntries} ${result.timeEntries === 1 ? "entry" : "entries"}${result.expenses ? ` and ${result.expenses} ${result.expenses === 1 ? "expense" : "expenses"}` : ""}.`,
-        undo: async () => {
-          await api.markBilledExternally({ clientId, timeEntryIds, expenseIds, billed: false });
-          qc.invalidateQueries({ queryKey: ["uninvoiced"] });
-          qc.invalidateQueries({ queryKey: ["time"] });
-          qc.invalidateQueries({ queryKey: ["expenses"] });
-        },
-      });
+      const refresh = () => {
+        qc.invalidateQueries({ queryKey: ["uninvoiced"] });
+        qc.invalidateQueries({ queryKey: ["time"] });
+        qc.invalidateQueries({ queryKey: ["expenses"] });
+      };
+      refresh();
+
+      /*
+        Undo what the server moved, not what the screen still has ticked.
+
+        The two are not the same list. A row the server refused was never
+        marked, so putting it "back" would be a lie, and the selection can
+        change between the click and the Undo. `result` is the only account of
+        what actually happened.
+      */
+      const undo = async () => {
+        try {
+          await api.markBilledExternally({
+            clientId,
+            timeEntryIds: result.timeEntryIds,
+            expenseIds: result.expenseIds,
+            billed: false,
+          });
+          refresh();
+        } catch (e) {
+          // An undo that fails silently is worse than no undo: the operator
+          // believes the work is back on the list and it is not.
+          toast.push({
+            tone: "danger",
+            title: e instanceof Error ? e.message : "Could not undo that. The work is still marked as billed in QuickBooks.",
+          });
+        }
+      };
+
+      const moved = result.timeEntryIds.length;
+      const movedExpenses = result.expenseIds.length;
+      const skipped = result.skippedTimeEntryIds.length + result.skippedExpenseIds.length;
+      const what = `${moved} ${moved === 1 ? "entry" : "entries"}${movedExpenses ? ` and ${movedExpenses} ${movedExpenses === 1 ? "expense" : "expenses"}` : ""}`;
+
+      /*
+        A partial claim is reported, and does not leave this screen.
+
+        The server refuses anything already invoiced, already marked, deleted,
+        running, or belonging to another client, and this list can be seconds
+        stale. Announcing success and navigating away made a partial result
+        indistinguishable from a whole one, on the operation that decides what
+        the company still expects to be paid for. Staying put with the count
+        named is what lets somebody check before they raise the QuickBooks
+        invoice.
+      */
+      if (skipped) {
+        setPartial({ moved: moved + movedExpenses, skipped });
+        toast.push({
+          tone: "danger",
+          title: `Only ${what} were marked. ${skipped} of the selected rows were not.`,
+          undo: moved || movedExpenses ? undo : undefined,
+        });
+        return;
+      }
+
+      setPartial(null);
+      toast.push({ tone: "success", title: `Marked as invoiced in QuickBooks: ${what}.`, undo });
       router.push("/invoices?tab=uninvoiced");
     },
     onError: (e: unknown) =>
       toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not mark that work." }),
   });
 
-  const canCreate = !!clientId && selected.length > 0 && !!issueDate && !!dueDate;
+  /*
+    Rate-missing lines gate the draft, rather than only warning about it.
+
+    A banner is advisory, and the thing it warns about is an invoice that bills
+    real hours at nothing. Under-billing is the harm this area is least able to
+    notice after the fact, so the ticked-anyway checkbox exists: it is one click
+    for somebody who means it, and it is a wall for somebody who did not read.
+
+    Read from the selection, not from the whole list: deselecting the $0 lines
+    is a legitimate way to answer the warning, and the warning has to go away
+    when it has been answered.
+  */
+  const selectedRateMissing = React.useMemo(() => selected.some((l) => l.rateMissing), [selected]);
+  const [billZeroAnyway, setBillZeroAnyway] = React.useState(false);
+
+  const canCreate =
+    !!clientId && selected.length > 0 && !!issueDate && !!dueDate && (!selectedRateMissing || billZeroAnyway);
   const canMarkExternal = !!clientId && selected.length > 0;
 
   const toggle = (key: string) => setChosen((s) => {
@@ -239,7 +305,23 @@ export default function NewInvoicePage() {
                 </div>
               ) : (
                 <>
-                  {lines.some((l: UninvoicedLine) => l.rateMissing) && (
+                  {partial && (
+                    /*
+                      What the last QuickBooks press actually did, kept on the
+                      screen rather than in a toast that expires in eight
+                      seconds. Somebody who looked away while it landed still
+                      has to be able to find out.
+                    */
+                    <Banner variant="danger" title="Some of that work was not marked">
+                      {partial.moved} {partial.moved === 1 ? "row was" : "rows were"} marked as
+                      invoiced in QuickBooks and {partial.skipped}{" "}
+                      {partial.skipped === 1 ? "was" : "were"} not. The ones left behind had
+                      already been invoiced or already marked since this list loaded, so nothing
+                      has been billed twice. Check what is still listed here before you raise the
+                      invoice in QuickBooks.
+                    </Banner>
+                  )}
+                  {selectedRateMissing && (
                     /*
                       Say why the total is zero, at the point the total is zero.
 
@@ -255,6 +337,14 @@ export default function NewInvoicePage() {
                       rate to bill at. Set an hourly rate on the project, or a rate for the
                       people on it, then reload this page. Hours already logged keep the rate
                       they were written with, so they will need re-rating.
+                      <label className="mt-2 flex cursor-pointer items-center gap-2 font-medium text-ink">
+                        <Checkbox
+                          checked={billZeroAnyway}
+                          onCheckedChange={(v) => setBillZeroAnyway(v === true)}
+                          aria-label="Create the draft anyway, with those lines at $0.00"
+                        />
+                        Create the draft anyway, with those lines at $0.00
+                      </label>
                     </Banner>
                   )}
                   <div className="flex items-center border-y border-border bg-bg-muted px-4 py-2 text-xs font-semibold uppercase tracking-[0.04em] text-ink-tertiary">

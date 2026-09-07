@@ -139,14 +139,15 @@ describe("listUninvoiced", () => {
     const marked = await markBilledExternally(ctx, {
       clientId, timeEntryIds: [entryId], billed: true,
     });
-    expect(marked.timeEntries).toBe(1);
+    expect(marked.timeEntryIds, "names the row it moved, not just how many").toEqual([entryId]);
+    expect(marked.skippedTimeEntryIds).toEqual([]);
     expect(await previewLines(ctx, { clientId }), "gone from uninvoiced").toEqual([]);
 
     // And back again, which is what the toast's undo calls.
     const undone = await markBilledExternally(ctx, {
       clientId, timeEntryIds: [entryId], billed: false,
     });
-    expect(undone.timeEntries).toBe(1);
+    expect(undone.timeEntryIds).toEqual([entryId]);
     expect((await previewLines(ctx, { clientId })).length, "available again").toBe(1);
   });
 
@@ -162,11 +163,52 @@ describe("listUninvoiced", () => {
       projectId, projectTaskId: taskId, seconds: 3600, rateCents: 20_000, spentOn: "2026-07-02",
     });
 
-    expect((await markBilledExternally(ctx, { clientId, timeEntryIds: [entryId], billed: true })).timeEntries).toBe(1);
-    expect(
-      (await markBilledExternally(ctx, { clientId, timeEntryIds: [entryId], billed: true })).timeEntries,
-      "second call claims nothing"
-    ).toBe(0);
+    expect((await markBilledExternally(ctx, { clientId, timeEntryIds: [entryId], billed: true })).timeEntryIds).toEqual([entryId]);
+
+    const again = await markBilledExternally(ctx, { clientId, timeEntryIds: [entryId], billed: true });
+    expect(again.timeEntryIds, "second call claims nothing").toEqual([]);
+    expect(again.skippedTimeEntryIds, "and says which row it would not claim").toEqual([entryId]);
+  });
+
+  it("audits which rows moved and which did not, not how many", async () => {
+    /*
+      The audit row is the only account of this operation that survives, and
+      the operation decides what the company still expects to be paid for. A
+      row saying "claimed 1 of 2" leaves nobody able to work out which one was
+      left behind, on exactly the question a partial claim raises.
+
+      A partial claim is the normal case, not a rare one: this asks for two
+      entries where one has already been marked.
+    */
+    const ctx = await ctxFor("administrator");
+    const clientId = await makeClient("Audit Co");
+    const projectId = await makeProject(clientId, { name: "Audited" });
+    const taskId = await makeProjectTask(projectId, await makeTask());
+    const already = await logTime({
+      projectId, projectTaskId: taskId, seconds: 3600, rateCents: 20_000, spentOn: "2026-07-02",
+    });
+    const fresh = await logTime({
+      projectId, projectTaskId: taskId, seconds: 3600, rateCents: 20_000, spentOn: "2026-07-03",
+    });
+
+    await markBilledExternally(ctx, { clientId, timeEntryIds: [already], billed: true });
+
+    const result = await markBilledExternally(ctx, {
+      clientId, timeEntryIds: [already, fresh], billed: true,
+    });
+    expect(result.timeEntryIds).toEqual([fresh]);
+    expect(result.skippedTimeEntryIds, "and says so rather than reporting a whole success").toEqual([already]);
+
+    const rows = await db
+      .select()
+      .from(s.auditLog)
+      .where(eq(s.auditLog.action, "invoice.billed_externally"));
+    const after = rows.at(-1)!.after as {
+      timeEntryIds: string[];
+      skippedTimeEntryIds: string[];
+    };
+    expect(after.timeEntryIds, "the audit names the row").toEqual([fresh]);
+    expect(after.skippedTimeEntryIds, "and names the one it would not take").toEqual([already]);
   });
 
   it("refuses to mark work belonging to another client", async () => {
@@ -182,7 +224,8 @@ describe("listUninvoiced", () => {
     });
 
     const result = await markBilledExternally(ctx, { clientId: mine, timeEntryIds: [entryId], billed: true });
-    expect(result.timeEntries, "claimed nothing from the other client").toBe(0);
+    expect(result.timeEntryIds, "claimed nothing from the other client").toEqual([]);
+    expect(result.skippedTimeEntryIds).toEqual([entryId]);
   });
 
   it("flags hours that have no billable rate behind them", async () => {
@@ -225,6 +268,35 @@ describe("listUninvoiced", () => {
     const [line] = await previewLines(ctx, { clientId });
     expect(line!.amountCents).toBe(15_000);
     expect(line!.rateMissing).toBe(false);
+  });
+
+  it("does not call a fixed-fee project's hours rate-missing", async () => {
+    /*
+      Nothing in this query filters on `billingType`, so a fixed-fee project's
+      billable hours do reach this list, and they price at zero on purpose: the
+      fee is the invoice, not the hours. Warning about them sends somebody off
+      to set an hourly rate on a project that is not billed by the hour.
+
+      There are no fixed-fee projects in the account today, which is exactly
+      why this is asserted rather than reasoned about. The comment that used to
+      sit on `rateMissing` claimed such work never got here, and it was true of
+      the data rather than of the code.
+    */
+    const ctx = await ctxFor("administrator");
+    const clientId = await makeClient("Fixed Fee Co");
+    const projectId = await makeProject(clientId, {
+      name: "Retainer build",
+      billingType: "fixed_fee",
+      billBy: "none",
+    });
+    const taskId = await makeProjectTask(projectId, await makeTask());
+
+    await logTime({ projectId, projectTaskId: taskId, seconds: 7200, rateCents: 0, spentOn: "2026-07-02" });
+
+    const [line] = await previewLines(ctx, { clientId });
+    expect(line!.quantity, "the hours are still listed").toBe(2);
+    expect(line!.amountCents).toBe(0);
+    expect(line!.rateMissing, "but nobody is told to go and set a rate").toBe(false);
   });
 
   it("shows a client with unbilled time, and the period it covers", async () => {

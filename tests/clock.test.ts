@@ -139,7 +139,10 @@ describe("implausibleSpanWarning", () => {
     // time. Both readings of the reported case are covered.
     const same = implausibleSpanWarning(at(10), at(22));
     expect(same).toContain("exactly twelve hours");
-    expect(same).toContain("10:10");
+    // The worked example uses the hour they typed. A fixed example from the
+    // original bug report reads as advice about somebody else's entry.
+    expect(same, "echoes their own start hour").toContain("10:15 rather than 10");
+    expect(implausibleSpanWarning(at(7), at(19)), "and somebody else's").toContain("7:15 rather than 7");
 
     // There is no such thing as a twelve-hour span between different clock
     // readings: twelve hours later is the same face. So every exactly-720
