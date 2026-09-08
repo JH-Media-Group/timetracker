@@ -4,7 +4,7 @@
 
 **Staging deployed:** 2026-08-24
 
-**Staging last updated:** 2026-08-26 14:52 UTC
+**Staging last updated:** 2026-09-08 17:09 UTC
 
 **Production droplet:** `165.245.130.130`
 
@@ -19,6 +19,93 @@ restart unrelated services.
 The repeatable operating procedure now lives in
 `docs/DEPLOYMENT-RUNBOOK.md`. This file retains the deployment evidence and
 the broader shared-server maintenance plan.
+
+## Staging update: timer clock authority and the Toado batch, 2026-09-08
+
+Tally staging now runs source commit `e798939` as `tally:e798939` (image ID
+`sha256:f3a56664534cf110b2adcc730c27656d1c86ff2dd918ae5a26bb33f96497fdcb`).
+This release carries every fix made on 7 and 8 September: Toado tickets
+`t-qXAssj`, `t-4Sct76`, `t-E-CsIL`, `t-XqXK3W`, `t-I856MO`, `t-wjV2jO`,
+`t-lCxUn5`, `t-ZbqtuF`, `t-Fg-4v7`, `t-iqTVyw` and `t-ox1U_u`.
+
+The defect worth recording is the timer one. The quick timer sent `started_at`
+from the person's own browser while `stopRunning` writes `ended_at` from the
+server, and the database checks that the end is not before the start. A client
+clock running ahead therefore produced entries that could not be stopped until
+real time caught up with the skew, so short timers failed and long ones
+succeeded. Because starting any timer stops the running one first, a single
+unstoppable entry then made every later play button fail as well, and none of
+it was visible: the timer mutations had no error handler, so a rejected write
+surfaced only as an uncaught promise rejection in the console. The server names
+both ends of the interval now, refuses a start in the future, and ends an entry
+no earlier than it started.
+
+Update evidence:
+
+- The exact pushed source passed 59 test files and 846 tests, TypeScript,
+  palette validation, and a complete Linux production Docker build. Both timer
+  guarantees are mutation-tested: reverting either one fails the test written
+  for it.
+- The transferred 101,621,248-byte image tar has SHA-256
+  `20d0320a3cf3b81d5369336ef064a6b4f7227e5e013c0112c870931b3478c638`. The
+  server verified its exact size and hash before loading it, and the loaded
+  image ID matched the local build exactly.
+- Preflight recorded 17 containers, all with zero restarts and no OOM events,
+  75 GB free disk, 2.5 GB available memory, and a 0.05 load average. Public
+  listeners were limited to 22, 80 and 443, with port 53 on loopback only.
+- An isolated, unproxied candidate container reached healthy state and returned
+  200 from liveness and database readiness. It retained the read-only root
+  filesystem, dropped capabilities, `no-new-privileges`, the 768 MB memory
+  limit and the 128 PID limit, published no host port, carried no production
+  network alias, and was removed before the live update.
+- There were no schema or infrastructure changes. The isolated migration run
+  left all 10 Drizzle and five manual migrations unchanged.
+- The immediate pre-update dump is
+  `/var/backups/tally/tally-20260908T170256Z.dump`, SHA-256
+  `8c9ceaa7b349b842f584e1e92717ad7119bb299f38c67d85cb01f27e1b9b2b7e`.
+- The post-update dump is
+  `/var/backups/tally/tally-20260908T170915Z.dump`, SHA-256
+  `88884145c50fb90f85c1ea540deedcae45ab88a2b40406d30dd7b991c1c76ba2`.
+- Both 2,985,203-byte dumps passed 329-line catalog checks and complete
+  owner-preserving scratch restores. Each restored copy matched 58 users, 364
+  projects, [private record count] active time entries, two running timers, 10 Drizzle
+  migrations, five manual migrations, and the `tally_staging` owner. Both exact
+  scratch databases were removed and confirmed gone.
+- The environment file changed by exactly one line. Normalizing `TALLY_IMAGE=`
+  in the old and candidate files produced identical SHA-256 values
+  (`23f3c489d254d4831fbc68727db0bc8a0879af8e22e04544565a0e980da086e8`), proving
+  no secret or other setting moved. Both files were mode 0600 with seven lines.
+- Web and MCP were replaced separately with `--no-deps`. Web was proven healthy
+  on the new image, internally and externally, while MCP was still running
+  `tally:833f65f`. Both now run the exact local image ID, are healthy, and
+  retain a read-only root filesystem, no host ports, their existing limits,
+  zero restarts and zero OOM events.
+- External liveness, readiness, and both OAuth discovery documents return 200.
+  MCP GET returns 405 internally and externally, and an unauthenticated POST
+  returns 401 with its protected-resource challenge. All five security headers
+  remain present.
+- The release is confirmed to be the code actually serving: strings introduced
+  by this batch appear in both the server and client bundles inside the running
+  container, including the timer failure message, the sign-out wording, the
+  QuickBooks button, and the twelve-hour warning.
+- `/opt/tally/compose.yml` retained hash
+  `6c4898a9407c0bb5c02a2cdbb3d726223ff8261d835591b5805006d0092c1d21` and
+  `/opt/Caddyfile` retained `d897dfdaefb943dba2cce2837f23310f88129ccdba0f8be155f4f784b85824ce`,
+  matching the container's copy. Caddy was not reloaded. A full container diff
+  against the pre-deploy baseline showed the two Tally lines changed and
+  nothing else: all 15 unrelated containers kept the same image, image ID,
+  restart count and OOM state, and no container is unhealthy. Public listeners
+  did not change.
+- All four Tally timers remain active. A manual mail run succeeded with
+  `--no-reminders`, reporting zero sent, zero queued and zero in flight. Two
+  messages remain permanently exhausted from before a transport existed, which
+  predates this release. Recent web and MCP logs contain no error. Root SSH
+  remains enabled with effective `permitrootlogin yes`.
+
+Rollback and evidence material is under `/opt/tally/artifacts/deploy-e798939`,
+the image tar is `/opt/tally/artifacts/tally-e798939.tar`, and the previous
+`tally:833f65f` image remains loaded. This application-only update requires no
+database restore for rollback.
 
 ## Staging update: timesheet duration correction, 2026-08-26
 
