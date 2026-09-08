@@ -21,12 +21,36 @@ import { useApp } from "./providers";
 import { formatClock } from "@/lib/format";
 import { dayIn } from "@/domain/calendar";
 
+/** The server's sentence when it gave one, or a plain fallback. */
+const failureText = (error: unknown, fallback: string): string =>
+  error instanceof Error && error.message.trim() ? error.message : fallback;
+
+/**
+ * Waits for a mutation and reports whether it worked, rather than rejecting.
+ *
+ * The mutation's own `onError` has already told the person what happened. What
+ * is left is the answer for the caller, and an unhandled rejection is not one.
+ */
+const settled = (promise: Promise<unknown>): Promise<boolean> =>
+  promise.then(() => true, () => false);
+
 interface TimerCtx {
   running: TimeEntry | null;
   elapsed: number;
-  start: (input: { projectId: string; taskId: string; notes?: string; spentOn?: string }) => Promise<void>;
-  stop: () => Promise<void>;
-  restart: (entryId: string) => Promise<void>;
+  /*
+    These answer whether it worked, and never reject.
+
+    They used to be `mutateAsync` handed straight out, so a failure rejected
+    into whatever called them. Nothing caught it: pressing Stop produced an
+    uncaught promise rejection in the console and no message on the screen, so a
+    timer that refused to stop was indistinguishable from a button that did
+    nothing (t-qXAssj, t-4Sct76, t-E-CsIL). The mutations below say what went
+    wrong; the boolean is for callers that need to know, like the popover that
+    should stay open when the timer did not start.
+  */
+  start: (input: { projectId: string; taskId: string; notes?: string; spentOn?: string }) => Promise<boolean>;
+  stop: () => Promise<boolean>;
+  restart: (entryId: string) => Promise<boolean>;
   isBusy: boolean;
   /**
    * True when the running-timer query is failing.
@@ -93,7 +117,10 @@ export function TimerProvider({ children }: { children: React.ReactNode }) {
       api.createTimeEntry({
         projectId: input.projectId, taskId: input.taskId, notes: input.notes,
         spentOn: input.spentOn ?? dayIn(me.timezone),
-        startedAt: new Date().toISOString(), start: true,
+        // No `startedAt`. The server names the instant a timer begins, because
+        // the server is what ends it, and a browser clock running fast wrote
+        // entries that could not be stopped. See `timerStartInstant`.
+        start: true,
       }),
     onSuccess: ({ entry, stopped }) => {
       invalidate();
@@ -109,6 +136,7 @@ export function TimerProvider({ children }: { children: React.ReactNode }) {
         toast.push({ tone: "success", title: <>Timer started on <em className="font-medium not-italic">{p?.name}</em>.</> });
       }
     },
+    onError: (e: unknown) => toast.push({ tone: "danger", title: failureText(e, "Could not start the timer.") }),
   });
 
   const stopM = useMutation({
@@ -120,6 +148,8 @@ export function TimerProvider({ children }: { children: React.ReactNode }) {
         toast.push({ tone: "success", title: <>Stopped <em className="font-medium not-italic">{p?.name}</em> at {formatClock(stopped.durationSeconds)}.</> });
       }
     },
+    onError: (e: unknown) =>
+      toast.push({ tone: "danger", title: failureText(e, "Could not stop the timer. It is still running.") }),
   });
 
   const restartM = useMutation({
@@ -129,14 +159,15 @@ export function TimerProvider({ children }: { children: React.ReactNode }) {
       const p = projectById.get(entry.projectId);
       toast.push({ tone: "success", title: <>Timer started on <em className="font-medium not-italic">{p?.name}</em>.</> });
     },
+    onError: (e: unknown) => toast.push({ tone: "danger", title: failureText(e, "Could not start the timer.") }),
   });
 
   const value = React.useMemo<TimerCtx>(() => ({
     running,
     elapsed,
-    start: async (i) => { await startM.mutateAsync(i); },
-    stop: async () => { await stopM.mutateAsync(); },
-    restart: async (id) => { await restartM.mutateAsync(id); },
+    start: async (i) => settled(startM.mutateAsync(i)),
+    stop: async () => settled(stopM.mutateAsync()),
+    restart: async (id) => settled(restartM.mutateAsync(id)),
     isBusy: startM.isPending || stopM.isPending || restartM.isPending,
     unreachable: timerUnreachable,
   }), [running, elapsed, startM, stopM, restartM]);

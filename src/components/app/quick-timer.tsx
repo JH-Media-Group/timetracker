@@ -39,8 +39,9 @@ export function QuickTimer({ onDone }: { onDone?: () => void }) {
     e?.preventDefault();
     if (!projectId || !taskId) return;
     pushRecent(projectId, taskId);
-    await start({ projectId, taskId, notes: notes.trim() || undefined });
-    onDone?.();
+    // Closes only if the timer actually started. Closing regardless hid the
+    // failure behind the popover it was reported in.
+    if (await start({ projectId, taskId, notes: notes.trim() || undefined })) onDone?.();
   };
 
   const project = projectId ? projectById.get(projectId) : undefined;

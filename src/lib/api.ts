@@ -791,6 +791,19 @@ export async function startTimerFrom(entryId: ID) {
   };
 }
 
+/**
+ * Copies an entry, optionally onto another day.
+ *
+ * The route and the service have existed since the entry menu was built. This
+ * function had not, so the menu item assembled its own `createTimeEntry` call
+ * instead, and the two disagreed about what a duplicate is: the hand-rolled one
+ * dropped the billable flag, so a non-billable entry came back billable at the
+ * task's default, and it copied a running timer's duration of zero (t-XqXK3W).
+ */
+export async function duplicateTimeEntry(id: ID, spentOn?: string): Promise<TimeEntryView> {
+  return fromTimeEntry(await post<TimeEntryWire>(`/time-entries/${id}/duplicate`, { spentOn }));
+}
+
 export async function copyDay(
   fromDate: string, toDateStr: string, userId?: ID, withDurations = false
 ): Promise<TimeEntryView[]> {

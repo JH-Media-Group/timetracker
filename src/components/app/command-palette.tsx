@@ -63,7 +63,7 @@ export function CommandPalette() {
 
   const actions = React.useMemo<Row[]>(() => [
     { id: "a-timer", group: "Actions", icon: Play, label: running ? "Stop timer" : "Start timer", shortcut: "T",
-      run: () => { running ? stop() : palette.openTimer(); } },
+      run: () => { if (running) void stop(); else palette.openTimer(); } },
     { id: "a-entry", group: "Actions", icon: Clock, label: "New time entry", shortcut: "N", run: () => entry.open({}) },
     { id: "a-today", group: "Actions", icon: Clock, label: "Go to today", run: () => router.push("/timesheet") },
     { id: "a-proj", group: "Actions", icon: FolderOpen, label: "New project", run: () => router.push("/projects/new") },
@@ -79,7 +79,7 @@ export function CommandPalette() {
         label: p.name, sub: clients.find((c) => c.id === p.clientId)?.name,
         run: () => {
           const t = defaultTaskFor(p.id, p.taskIds, taskById);
-          if (t) { pushRecent(p.id, t); start({ projectId: p.id, taskId: t }); }
+          if (t) { pushRecent(p.id, t); void start({ projectId: p.id, taskId: t }); }
           palette.close();
         },
       }));
@@ -92,7 +92,7 @@ export function CommandPalette() {
         run: () => { router.push(`/projects/${p.id}`); palette.close(); },
         startTimer: () => {
           const t = defaultTaskFor(p.id, p.taskIds, taskById);
-          if (t) { pushRecent(p.id, t); start({ projectId: p.id, taskId: t }); }
+          if (t) { pushRecent(p.id, t); void start({ projectId: p.id, taskId: t }); }
           palette.close();
         },
       }));
@@ -119,7 +119,7 @@ export function CommandPalette() {
       startTimer: h.type === "project" ? () => {
         const p = projectById.get(h.id);
         const t = p ? defaultTaskFor(p.id, p.taskIds, taskById) : undefined;
-        if (p && t) { pushRecent(p.id, t); start({ projectId: p.id, taskId: t }); }
+        if (p && t) { pushRecent(p.id, t); void start({ projectId: p.id, taskId: t }); }
         palette.close();
       } : undefined,
     }));

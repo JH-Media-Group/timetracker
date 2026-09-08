@@ -305,6 +305,61 @@ describe("timers", () => {
     const ctx = ctxFor(alice, "administrator");
     await expect(stopTimer(ctx)).resolves.toBeNull();
   });
+
+  it("refuses a browser clock that starts a timer in the future", async () => {
+    /*
+      The quick timer sent `new Date().toISOString()` from the person's own
+      machine, and `stopRunning` ends the entry from the server's clock against
+      a database check of `ended_at >= started_at`. A laptop five minutes fast
+      therefore wrote entries that could not be stopped for five minutes
+      (t-qXAssj). The server names the instant now.
+    */
+    const ctx = ctxFor(alice, "administrator");
+    const { entry } = await createTimeEntry(ctx, {
+      projectId,
+      taskId: designTaskId,
+      start: true,
+      startedAt: `${TODAY}T15:05:00Z`, // five minutes ahead of the injected clock
+    });
+
+    expect(entry.startedAt, "the server's instant, not the browser's").toBe(`${TODAY}T15:00:00.000Z`);
+
+    const stopped = await stopTimer(ctx);
+    expect(stopped?.timerStartedAt, "and it stops").toBeNull();
+  });
+
+  it("keeps a start that is in the past, which is a legitimate thing to ask for", async () => {
+    // The rule is about the future only. Backdating the beginning of a timer
+    // cannot break the ordering, and people do it.
+    const ctx = ctxFor(alice, "administrator");
+    const { entry } = await createTimeEntry(ctx, {
+      projectId,
+      taskId: designTaskId,
+      start: true,
+      startedAt: `${TODAY}T14:30:00Z`,
+    });
+
+    expect(entry.startedAt).toBe(`${TODAY}T14:30:00.000Z`);
+  });
+
+  it("stops a timer whose start was moved into the future after it began", async () => {
+    /*
+      The second half of the same guarantee, covering what the create path
+      cannot see: an entry edited forward while running, or written before the
+      rule existed. Nothing may leave a person unable to stop their own timer.
+    */
+    const ctx = ctxFor(alice, "administrator");
+    const { entry } = await createTimeEntry(ctx, { projectId, taskId: designTaskId, start: true });
+
+    await db
+      .update(s.timeEntries)
+      .set({ startedAt: at(`${TODAY}T15:30:00Z`) })
+      .where(eq(s.timeEntries.id, entry.id));
+
+    const stopped = await stopTimer(ctx);
+    expect(stopped?.timerStartedAt, "the timer stopped rather than erroring").toBeNull();
+    expect(stopped?.endedAt, "ending no earlier than it started").toBe(`${TODAY}T15:30:00.000Z`);
+  });
 });
 
 /* =============================================================== editing */
@@ -490,7 +545,48 @@ describe("split and duplicate", () => {
     const copy = await duplicateTimeEntry(ctx, entry.id, "2026-08-13");
     expect(copy.spentOn).toBe("2026-08-13");
     expect(copy.notes).toBe("Same work");
+    expect(copy.durationSeconds, "the time comes with it").toBe(3600);
     expect(copy.id).not.toBe(entry.id);
+  });
+
+  it("carries the time a running timer has accrued so far", async () => {
+    /*
+      Duration lands on the row when the timer stops, so a running entry reads
+      zero until then. The duplicate copied that zero and stayed empty for ever
+      while the original filled in later, which is what Person02 saw: a row with
+      the project, the client and the note, and no time (t-XqXK3W).
+    */
+    const ctx = ctxFor(alice, "administrator");
+    const { entry } = await createTimeEntry(ctx, { projectId, taskId: designTaskId, start: true });
+
+    // Twenty minutes before the injected clock, measured against it rather than
+    // the wall clock. See the note on the accrual test above.
+    await db
+      .update(s.timeEntries)
+      .set({ timerStartedAt: new Date(at(`${TODAY}T15:00:00Z`).getTime() - 20 * 60_000) })
+      .where(eq(s.timeEntries.id, entry.id));
+
+    const copy = await duplicateTimeEntry(ctx, entry.id);
+    expect(copy.durationSeconds, "what the source is worth at the moment it is copied").toBe(20 * 60);
+    expect(copy.timerStartedAt, "and the copy is not a second running timer").toBeNull();
+  });
+
+  it("carries the billable flag rather than falling back to the task default", async () => {
+    /*
+      The timesheet's Duplicate menu item used to assemble its own
+      `createTimeEntry` call and left this out. The server then fell back to
+      whether the TASK is billable, so an entry somebody had deliberately marked
+      non-billable came back billable, on a copy they made by pressing
+      Duplicate. Money, changed by a menu item, silently.
+    */
+    const ctx = ctxFor(alice, "administrator");
+    const { entry } = await createTimeEntry(ctx, {
+      projectId, taskId: designTaskId, spentOn: "2026-08-12", durationSeconds: 3600, isBillable: false,
+    });
+    expect(entry.isBillable).toBe(false);
+
+    const copy = await duplicateTimeEntry(ctx, entry.id, "2026-08-13");
+    expect(copy.isBillable).toBe(false);
   });
 
   it("copies a day, optionally without the durations", async () => {

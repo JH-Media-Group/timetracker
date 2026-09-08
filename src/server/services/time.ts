@@ -275,6 +275,34 @@ async function defaultTaskFor(ctx: Ctx, userId: string, projectId: string): Prom
   return first.taskId;
 }
 
+/**
+ * When a timer starts, the clock that ends it has to be the one that started it.
+ *
+ * `stopRunning` writes `ended_at` from `ctx.now()`, the server clock, and the
+ * database checks `ended_at >= started_at`. The browser was allowed to name
+ * `started_at`: the quick timer sent `new Date().toISOString()` from the
+ * person's own machine. A laptop running ninety seconds fast therefore created
+ * entries that could not be stopped for ninety seconds, and short timers failed
+ * while long ones worked, which is why it read as intermittent (t-qXAssj).
+ *
+ * The failure did not stop there. Starting any timer stops the running one
+ * first, so one unstoppable entry made every later play button fail too
+ * (t-4Sct76), and the rejection surfaced only as a console error (t-E-CsIL).
+ *
+ * A start in the future is refused rather than argued with: the server's own
+ * clock is used instead. A start in the past is kept, because backdating the
+ * beginning of a timer is a legitimate thing to ask for and cannot break the
+ * ordering. The comment above `stopRunning` has said for months that both ends
+ * of the interval must come from one clock. It was true of the server's
+ * internal path and untrue of the one the client could reach.
+ */
+function timerStartInstant(requested: string | null | undefined, now: Date): Date {
+  if (!requested) return now;
+  const asked = new Date(requested);
+  if (Number.isNaN(asked.getTime())) return now;
+  return asked > now ? now : asked;
+}
+
 export async function createTimeEntry(ctx: Ctx, input: CreateTimeEntryInput): Promise<CreateResult> {
   const targetUserId = input.userId ?? ctx.actor.userId;
   const own = targetUserId === ctx.actor.userId;
@@ -362,7 +390,7 @@ export async function createTimeEntry(ctx: Ctx, input: CreateTimeEntryInput): Pr
       projectId: input.projectId,
       projectTaskId,
       spentOn,
-      startedAt: input.startedAt ? new Date(input.startedAt) : input.start ? now : null,
+      startedAt: input.start ? timerStartInstant(input.startedAt, now) : input.startedAt ? new Date(input.startedAt) : null,
       endedAt: input.endedAt ? new Date(input.endedAt) : null,
       durationSeconds: input.start ? 0 : Math.max(0, Math.round(input.durationSeconds ?? 0)),
       timerStartedAt: input.start ? now : null,
@@ -593,7 +621,21 @@ async function stopRunning(ctx: Ctx, userId: string): Promise<TimeEntryDto | nul
     .update(s.timeEntries)
     .set({
       durationSeconds: sql`${s.timeEntries.durationSeconds} + GREATEST(0, EXTRACT(EPOCH FROM (${stoppedAt.toISOString()}::timestamptz - ${s.timeEntries.timerStartedAt}))::integer)`,
-      endedAt: stoppedAt,
+      /*
+        A stop is never refused by the ordering constraint.
+
+        `timerStartInstant` keeps a timer from beginning in the future, which is
+        how entries became unstoppable in the first place. This is the second
+        half of the same guarantee, and it covers the states that function
+        cannot see: an entry whose `started_at` was edited forward while the
+        timer ran, or one written before that rule existed. Ending at the later
+        of the two instants leaves a zero-length interval rather than a person
+        who cannot stop their own timer.
+
+        The duration is unaffected. It accrues from `timer_started_at`, which is
+        a different column and is always the server's.
+      */
+      endedAt: sql`GREATEST(${stoppedAt.toISOString()}::timestamptz, COALESCE(${s.timeEntries.startedAt}, ${stoppedAt.toISOString()}::timestamptz))`,
       timerStartedAt: null,
       updatedAt: stoppedAt,
       updatedBy: ctx.actor.userId,
@@ -694,12 +736,31 @@ export async function duplicateTimeEntry(ctx: Ctx, id: string, spentOn?: IsoDate
     .limit(1);
   if (!source) throw notFound("That time entry");
 
+  /*
+    A running timer's time is not in `duration_seconds` yet.
+
+    Duration accrues when the timer stops, so a running entry reads zero until
+    then. Duplicating one copied that zero, and the copy stayed empty for ever
+    while the original filled in later: the person saw a row with their project,
+    their client and their note, and no time (t-XqXK3W). Reading the accrual the
+    same way `stopRunning` does makes the copy say what the source is actually
+    worth at the moment it is copied.
+
+    The clock times are deliberately not carried. A duplicate is a second piece
+    of work, not a second record of the same one, and copying `started_at`
+    would claim the person worked the same wall-clock minutes twice. On a
+    duplicate to another day that claim is not merely doubtful, it is false.
+  */
+  const running = source.entry.timerStartedAt
+    ? Math.max(0, Math.round((ctx.now().getTime() - source.entry.timerStartedAt.getTime()) / 1000))
+    : 0;
+
   const result = await createTimeEntry(ctx, {
     userId: source.entry.userId,
     projectId: source.entry.projectId,
     taskId: source.taskId,
     spentOn: spentOn ?? source.entry.spentOn,
-    durationSeconds: source.entry.durationSeconds,
+    durationSeconds: source.entry.durationSeconds + running,
     notes: source.entry.notes,
     isBillable: source.entry.isBillable,
   });

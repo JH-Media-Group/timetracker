@@ -166,7 +166,7 @@ function TimerWidget() {
 
       <Tooltip content="Stop timer">
         <Button variant="secondary" size="icon-sm" aria-label="Stop timer" disabled={isBusy}
-          onClick={() => stop()} data-testid="timer-stop">
+          onClick={() => void stop()} data-testid="timer-stop">
           <Square className="size-3 fill-current" />
         </Button>
       </Tooltip>
@@ -367,7 +367,7 @@ function AppShellChrome({ children }: { children: React.ReactNode }) {
       }
       if (e.key === "g") { gPending = true; window.setTimeout(() => { gPending = false; }, 1200); return; }
       if (e.key === "?") { e.preventDefault(); palette.openShortcuts(); return; }
-      if (e.key.toLowerCase() === "t") { e.preventDefault(); running ? stop() : palette.openTimer(); return; }
+      if (e.key.toLowerCase() === "t") { e.preventDefault(); if (running) void stop(); else palette.openTimer(); return; }
       if (e.key.toLowerCase() === "n") { e.preventDefault(); entry.open({}); return; }
     };
     window.addEventListener("keydown", onKey);

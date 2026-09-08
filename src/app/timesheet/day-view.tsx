@@ -176,23 +176,40 @@ function EntryRow({ entry, expanded, onToggle }: { entry: TimeEntry; expanded: b
   const locked = !!entry.invoiceId || !!entry.billedExternally;
   const duration = isRunning ? elapsed : entry.durationSeconds;
 
+  const failed = (fallback: string) => (e: unknown) =>
+    toast.push({ tone: "danger", title: e instanceof Error && e.message.trim() ? e.message : fallback });
+
   const remove = useMutation({
     mutationFn: () => api.deleteTimeEntry(entry.id),
     onSuccess: (removed) => {
       qc.invalidateQueries({ queryKey: ["time"] });
       toast.push({
         title: "Entry deleted.",
-        undo: async () => { if (removed) { await api.restoreTimeEntry(removed); qc.invalidateQueries({ queryKey: ["time"] }); } },
+        undo: async () => {
+          try {
+            if (removed) { await api.restoreTimeEntry(removed); qc.invalidateQueries({ queryKey: ["time"] }); }
+          } catch (e) {
+            toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not bring that entry back." });
+          }
+        },
       });
     },
+    onError: failed("Could not delete that entry."),
   });
 
+  /*
+    The endpoint, not a second implementation of it.
+
+    This called `createTimeEntry` with a hand-picked subset of the row, which
+    made it a duplicate that disagreed with the one the API performs: it left
+    out `isBillable`, so a non-billable entry came back billable at the task's
+    default, and it copied `durationSeconds` from a running timer, which is zero
+    until the timer stops (t-XqXK3W).
+  */
   const duplicate = useMutation({
-    mutationFn: (toDay: string) => api.createTimeEntry({
-      userId: entry.userId, projectId: entry.projectId, taskId: entry.taskId,
-      spentOn: toDay, durationSeconds: entry.durationSeconds, notes: entry.notes,
-    }),
+    mutationFn: (toDay: string) => api.duplicateTimeEntry(entry.id, toDay),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["time"] }); toast.push({ tone: "success", title: "Entry duplicated." }); },
+    onError: failed("Could not duplicate that entry."),
   });
 
   return (
@@ -253,12 +270,12 @@ function EntryRow({ entry, expanded, onToggle }: { entry: TimeEntry; expanded: b
           dot uses, so the two live signals move together.
         */}
         {isRunning ? (
-          <Button variant="danger" size="sm" onClick={() => stop()}>
+          <Button variant="danger" size="sm" onClick={() => void stop()}>
             <Clock className="size-3.5 animate-pulse-live" aria-hidden />
             Stop
           </Button>
         ) : (
-          <Button variant="secondary" size="icon-sm" aria-label="Start a timer from this entry" onClick={() => restart(entry.id)}>
+          <Button variant="secondary" size="icon-sm" aria-label="Start a timer from this entry" onClick={() => void restart(entry.id)}>
             <Play className="size-3 fill-current" />
           </Button>
         )}
