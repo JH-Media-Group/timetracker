@@ -4,7 +4,7 @@
 
 **Staging deployed:** 2026-08-24
 
-**Staging last updated:** 2026-09-09 20:53 UTC
+**Staging last updated:** 2026-09-09 22:17 UTC
 
 **Production droplet:** `165.245.130.130`
 
@@ -19,6 +19,71 @@ restart unrelated services.
 The repeatable operating procedure now lives in
 `docs/DEPLOYMENT-RUNBOOK.md`. This file retains the deployment evidence and
 the broader shared-server maintenance plan.
+
+## Staging update: personal time zones, 2026-09-09
+
+Tally staging now runs source commit `da915d2` as `tally:da915d2` (image ID
+`sha256:18a763ecc31a3f2f9ec6769876b6627769680e3e1e37b6f454f48503f2b7bdcd`).
+
+Personal time zones must be confirmed with each person. Keep account-specific locations and corrections in private operational records.
+
+Settings now carries a "Yours alone" card with the theme and a personal time
+zone using the searchable worldwide picker. The company field's help text was
+also corrected: it claimed to decide the calendar day a timer belongs to, which
+stopped being true when day resolution moved to the entry owner's zone.
+
+Update evidence:
+
+- The exact pushed source passed 60 test files and 855 tests, TypeScript,
+  palette validation, and a complete Linux production Docker build.
+- The transferred 101,622,272-byte image tar has SHA-256
+  `d427d1f236841b597710de93811efb78fce1005d361540648a953edfb0eaa536`, verified
+  for exact size and hash on the server before loading, with the loaded image
+  ID matching the local build.
+- Preflight recorded 17 containers, none unhealthy, 74 GB free disk and 2.8 GB
+  available memory, with external liveness and readiness at 200.
+- An isolated, unproxied candidate container reached healthy state, returned
+  200 from liveness and database readiness, kept every live security and
+  resource control, published no host port, carried no production network
+  alias, and was removed before the live update.
+- No schema changes. The isolated migration run left all 10 Drizzle and five
+  manual migrations unchanged.
+- The immediate pre-update dump is
+  `/var/backups/tally/tally-20260909T221354Z.dump`, SHA-256
+  `c068a6914cf227f0a3c367493187b0969a4b9bdb7fab1354161dee42fbdc53f1`.
+- The post-update dump is
+  `/var/backups/tally/tally-20260909T221704Z.dump`, SHA-256
+  `de5460a1a5d2ef3876d4a22ee6fb54d7f6690b3841e8bad71ef3efc6c6e9f11a`.
+- Both dumps passed 329-line catalog checks and complete owner-preserving
+  scratch restores reconciling 58 users, 365 projects, [private record count] active time
+  entries, 10 Drizzle migrations, five manual migrations and the
+  `tally_staging` owner. Both scratch databases were removed and confirmed
+  gone.
+- The environment file changed by exactly one line, proven by identical
+  normalized SHA-256 values
+  (`23f3c489d254d4831fbc68727db0bc8a0879af8e22e04544565a0e980da086e8`) over
+  seven lines each.
+- Web and MCP were replaced separately with `--no-deps`, web proven healthy on
+  the new image while MCP still ran `tally:2b5656a`. Both now run the exact
+  local image ID with zero restarts and no OOM events.
+- External liveness, readiness and both OAuth discovery documents return 200.
+  MCP GET returns 405 and an unauthenticated POST returns 401 with its
+  protected-resource challenge. All five security headers remain present, and
+  the personal time zone control appears in the running container's server and
+  client bundles.
+- `/opt/tally/compose.yml` and `/opt/Caddyfile` retained their pre-deploy
+  hashes, the host and container Caddyfiles match, and Caddy was not reloaded.
+  A container diff against the pre-deploy baseline showed the two Tally lines
+  changed and nothing else across 17 containers, none unhealthy, with public
+  listeners unchanged.
+- All four Tally timers remain active, a manual mail run succeeded, web and MCP
+  logs contain no error line since the deployment, and root SSH remains enabled
+  with effective `permitrootlogin yes`.
+
+Rollback and evidence material is under `/opt/tally/artifacts/deploy-da915d2`,
+the image tar is `/opt/tally/artifacts/tally-da915d2.tar`, and the previous
+`tally:2b5656a` image remains loaded. This application-only update requires no
+database restore for rollback.
 
 ## Staging update: the re-rate action, 2026-09-09
 
