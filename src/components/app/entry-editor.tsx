@@ -240,7 +240,6 @@ export function EntryForm({
     },
   });
 
-  const hasDuration = !!parseDuration(durationText);
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); save.mutate({ start: false }); }
@@ -275,7 +274,16 @@ export function EntryForm({
           {startEndMode && (
             <>
               <Input className="w-[92px]" placeholder="Start" value={startText}
-                onChange={(e) => setStartText(e.target.value)}
+                onChange={(e) => {
+                  setStartText(e.target.value);
+                  // As you type, not when you leave. The total only appeared on
+                  // blur, so somebody who filled both times and looked at the
+                  // row saw it empty and assumed the app had not done the
+                  // arithmetic (t-QANtWe). `syncFromTimes` ignores anything it
+                  // cannot parse, so a half-typed time leaves the last good
+                  // answer alone.
+                  syncFromTimes(e.target.value, endText);
+                }}
                 onBlur={(e) => {
                   // Same direction as `readTimes`: the start settles itself.
                   const { start } = readTimes(e.target.value, endText);
@@ -284,7 +292,10 @@ export function EntryForm({
                 }} />
               <span className="text-ink-tertiary">to</span>
               <Input className="w-[92px]" placeholder="End" value={endText}
-                onChange={(e) => setEndText(e.target.value)}
+                onChange={(e) => {
+                  setEndText(e.target.value);
+                  syncFromTimes(startText, e.target.value);
+                }}
                 onBlur={(e) => {
                   const { end } = readTimes(startText, e.target.value);
                   if (end != null) setEndText(formatClockTime(end));
@@ -313,15 +324,30 @@ export function EntryForm({
         </label>
       )}
 
+      {/*
+        Save is the primary action, always.
+
+        These two used to swap prominence on whether the duration field parsed:
+        with no duration, "Start timer" was the dark button and Save was not.
+        Combined with a total that only filled in on blur, somebody who typed a
+        start and an end saw an empty total, pressed the button that looked like
+        the one to press, and started a timer instead of saving their entry.
+        Then they typed the total by hand, the buttons quietly changed places,
+        and the same gesture saved. That is the whole of "sometimes it works"
+        (t-QANtWe).
+
+        A dialog's primary action is a fact about the dialog, not about how far
+        through the form somebody has got.
+      */}
       <div className="mt-1 flex items-center gap-2">
         {!entry && (
-          <Button type="button" variant={hasDuration ? "secondary" : "primary"}
+          <Button type="button" variant="secondary"
             disabled={!projectId || !taskId} loading={save.isPending}
             onClick={() => save.mutate({ start: true })}>
             <Play className="size-3.5 fill-current" />Start timer
           </Button>
         )}
-        <Button type="submit" variant={hasDuration || entry ? "primary" : "secondary"}
+        <Button type="submit" variant="primary"
           disabled={!projectId || !taskId} loading={save.isPending}>
           Save
         </Button>

@@ -63,7 +63,7 @@ export function CommandPalette() {
 
   const actions = React.useMemo<Row[]>(() => [
     { id: "a-timer", group: "Actions", icon: Play, label: running ? "Stop timer" : "Start timer", shortcut: "T",
-      run: () => { if (running) void stop(); else palette.openTimer(); } },
+      run: () => { if (running) void stop(running.userId); else palette.openTimer(); } },
     { id: "a-entry", group: "Actions", icon: Clock, label: "New time entry", shortcut: "N", run: () => entry.open({}) },
     { id: "a-today", group: "Actions", icon: Clock, label: "Go to today", run: () => router.push("/timesheet") },
     { id: "a-proj", group: "Actions", icon: FolderOpen, label: "New project", run: () => router.push("/projects/new") },

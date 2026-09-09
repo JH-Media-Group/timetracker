@@ -165,7 +165,7 @@ function EntryRow({ entry, expanded, onToggle }: { entry: TimeEntry; expanded: b
   const { projectById, taskById, clientById, settings, userById } = useApp();
   // The zone the work was done in, not the reader's. See minutesOfDay.
   const zone = userById.get(entry.userId)?.timezone ?? settings.timezone;
-  const { running, elapsed, stop, restart } = useTimer();
+  const { stop, restart } = useTimer();
   const qc = useQueryClient();
   const toast = useToast();
 
@@ -174,7 +174,25 @@ function EntryRow({ entry, expanded, onToggle }: { entry: TimeEntry; expanded: b
   const client = project ? clientById.get(project.clientId) : undefined;
   const isRunning = !!entry.timerStartedAt;
   const locked = !!entry.invoiceId || !!entry.billedExternally;
-  const duration = isRunning ? elapsed : entry.durationSeconds;
+
+  /*
+    This row's clock, not the signed-in person's.
+
+    The timer context knows one timer: yours. The timesheet can be pointed at a
+    teammate, and then every running row here belongs to somebody else, so
+    reading `elapsed` from the context printed your elapsed time over their
+    entry and the Stop button stopped your timer rather than theirs. On your own
+    timesheet the two coincide, which is why it looked intermittent (t-DVQ2qW).
+    The week view already derived this per cell; the day view did not.
+  */
+  const [tick, setTick] = React.useState(() => Date.now());
+  React.useEffect(() => {
+    if (!isRunning) return;
+    const id = window.setInterval(() => setTick(Date.now()), 1000);
+    return () => window.clearInterval(id);
+  }, [isRunning]);
+
+  const duration = isRunning ? liveSeconds(entry, tick) : entry.durationSeconds;
 
   const failed = (fallback: string) => (e: unknown) =>
     toast.push({ tone: "danger", title: e instanceof Error && e.message.trim() ? e.message : fallback });
@@ -270,7 +288,7 @@ function EntryRow({ entry, expanded, onToggle }: { entry: TimeEntry; expanded: b
           dot uses, so the two live signals move together.
         */}
         {isRunning ? (
-          <Button variant="danger" size="sm" onClick={() => void stop()}>
+          <Button variant="danger" size="sm" onClick={() => void stop(entry.userId)}>
             <Clock className="size-3.5 animate-pulse-live" aria-hidden />
             Stop
           </Button>

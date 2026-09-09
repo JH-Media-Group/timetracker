@@ -49,7 +49,20 @@ interface TimerCtx {
     should stay open when the timer did not start.
   */
   start: (input: { projectId: string; taskId: string; notes?: string; spentOn?: string }) => Promise<boolean>;
-  stop: () => Promise<boolean>;
+  /**
+   * Stops one person's timer. The id is required on purpose.
+   *
+   * The timesheet can be pointed at a teammate, and its rows then show that
+   * person's running entry with a Stop button beside it. `stopTimer` has always
+   * taken a user id and every caller omitted it, so the button stopped the
+   * signed-in person's timer instead: nothing visible happened on somebody
+   * else's timesheet, and on your own the two coincided. That is the whole of
+   * "sometimes it works" (t-DVQ2qW).
+   *
+   * Optional was the mistake. A control that stops a timer has a timer in hand,
+   * so it can always say which, and now the compiler makes it.
+   */
+  stop: (userId: string) => Promise<boolean>;
   restart: (entryId: string) => Promise<boolean>;
   isBusy: boolean;
   /**
@@ -140,13 +153,17 @@ export function TimerProvider({ children }: { children: React.ReactNode }) {
   });
 
   const stopM = useMutation({
-    mutationFn: () => api.stopTimer(),
+    mutationFn: (userId: string) => api.stopTimer(userId),
     onSuccess: (stopped) => {
       invalidate();
       if (stopped) {
         const p = projectById.get(stopped.projectId);
         toast.push({ tone: "success", title: <>Stopped <em className="font-medium not-italic">{p?.name}</em> at {formatClock(stopped.durationSeconds)}.</> });
+        return;
       }
+      // Nothing was running. Silence here is what made a Stop button aimed at
+      // the wrong person indistinguishable from a button that does nothing.
+      toast.push({ title: "There was no running timer to stop." });
     },
     onError: (e: unknown) =>
       toast.push({ tone: "danger", title: failureText(e, "Could not stop the timer. It is still running.") }),
@@ -166,7 +183,7 @@ export function TimerProvider({ children }: { children: React.ReactNode }) {
     running,
     elapsed,
     start: async (i) => settled(startM.mutateAsync(i)),
-    stop: async () => settled(stopM.mutateAsync()),
+    stop: async (userId: string) => settled(stopM.mutateAsync(userId)),
     restart: async (id) => settled(restartM.mutateAsync(id)),
     isBusy: startM.isPending || stopM.isPending || restartM.isPending,
     unreachable: timerUnreachable,

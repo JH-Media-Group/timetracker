@@ -306,6 +306,41 @@ describe("timers", () => {
     await expect(stopTimer(ctx)).resolves.toBeNull();
   });
 
+  it("stops the named person's timer and leaves the actor's alone", async () => {
+    /*
+      `stopTimer` has always taken a user id, and nothing called it with one.
+      The timesheet can be pointed at a teammate, so its rows show that person's
+      running entry with a Stop button, and that button stopped the signed-in
+      person's timer instead. On your own timesheet the two are the same timer,
+      which is exactly why it read as "sometimes it works" (t-DVQ2qW).
+    */
+    const adminCtx = ctxFor(alice, "administrator");
+    const theirCtx = ctxFor(karachi, "member", "Asia/Karachi");
+
+    const mine = await createTimeEntry(adminCtx, { projectId, taskId: designTaskId, start: true });
+    const theirs = await createTimeEntry(theirCtx, { projectId, taskId: designTaskId, start: true });
+
+    const stopped = await stopTimer(adminCtx, karachi);
+
+    expect(stopped?.id, "stopped their entry").toBe(theirs.entry.id);
+    expect(await runningEntry(theirCtx), "and theirs is no longer running").toBeNull();
+
+    const stillMine = await runningEntry(adminCtx);
+    expect(stillMine?.id, "while the actor's own timer keeps running").toBe(mine.entry.id);
+  });
+
+  it("refuses to stop another person's timer without the capability", async () => {
+    // A Member holds no `time:edit_others`, so naming somebody else is refused
+    // rather than quietly falling back to their own timer.
+    const adminCtx = ctxFor(alice, "administrator");
+    const memberCtx = ctxFor(karachi, "member", "Asia/Karachi");
+
+    const mine = await createTimeEntry(adminCtx, { projectId, taskId: designTaskId, start: true });
+
+    await expect(stopTimer(memberCtx, alice)).rejects.toThrow();
+    expect((await runningEntry(adminCtx))?.id, "untouched").toBe(mine.entry.id);
+  });
+
   it("refuses a browser clock that starts a timer in the future", async () => {
     /*
       The quick timer sent `new Date().toISOString()` from the person's own
