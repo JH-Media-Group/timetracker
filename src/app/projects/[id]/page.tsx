@@ -24,6 +24,102 @@ import { useApp, useCan } from "@/components/app/providers";
 import { InvoiceBadge, Kpi, KpiRow, SectionTitle } from "@/components/app/kpi";
 import { useZonedToday } from "@/lib/use-zoned-today";
 
+/**
+ * Re-rating this project's unbilled hours.
+ *
+ * An entry keeps the rates it was written with, so setting an hourly rate on a
+ * project changes nothing already logged. That is the rule and it is the right
+ * rule. What was missing was its documented exception: every Example Client 07 hour
+ * imported from Harvest carried a rate of zero, so the project read $0
+ * uninvoiced with 876 entries behind it and nothing in the product could put it
+ * right (t-9Uli4l, t-zNfxik).
+ *
+ * It asks before it acts, and asks with the real computation: the preview is
+ * the same server call with `dryRun`, so the figure shown is the figure that
+ * lands. Anything already invoiced or billed in QuickBooks is refused by the
+ * server and reported here rather than passed over quietly.
+ */
+function ReRateRow({ projectId }: { projectId: string }) {
+  const can = useCan();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [preview, setPreview] = React.useState<api.ReRateOutcome | null>(null);
+
+  const look = useMutation({
+    mutationFn: () => api.reRateProject(projectId, { dryRun: true }),
+    onSuccess: setPreview,
+    onError: (e: unknown) =>
+      toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not check the rates." }),
+  });
+
+  const apply = useMutation({
+    mutationFn: () => api.reRateProject(projectId),
+    onSuccess: (result) => {
+      setPreview(null);
+      qc.invalidateQueries({ queryKey: ["project"] });
+      qc.invalidateQueries({ queryKey: ["summary"] });
+      qc.invalidateQueries({ queryKey: ["time"] });
+      qc.invalidateQueries({ queryKey: ["uninvoiced"] });
+      toast.push({
+        tone: "success",
+        title: `Re-rated ${result.changed} ${result.changed === 1 ? "entry" : "entries"}, now worth ${formatMoney(result.billableCentsAfter)}.`,
+      });
+    },
+    onError: (e: unknown) =>
+      toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not re-rate those hours." }),
+  });
+
+  if (!can("rates:manage")) return null;
+
+  if (!preview) {
+    return (
+      <button
+        className="text-base text-link underline disabled:opacity-60"
+        disabled={look.isPending}
+        onClick={() => look.mutate()}
+      >
+        {look.isPending ? "Checking rates..." : "Re-rate unbilled hours"}
+      </button>
+    );
+  }
+
+  const held = preview.skipped.invoiced + preview.skipped.billedExternally + preview.skipped.locked;
+
+  return (
+    <div className="mt-1 rounded-md border border-border bg-bg-muted p-2 text-sm">
+      {preview.changed === 0 ? (
+        <div className="text-ink-secondary">
+          Nothing to re-rate. Every unbilled hour already carries the rate this project resolves to.
+        </div>
+      ) : (
+        <div className="text-ink">
+          {preview.changed} of {preview.considered} unbilled{" "}
+          {preview.considered === 1 ? "entry" : "entries"} would change, from{" "}
+          {formatMoney(preview.billableCentsBefore)} to {formatMoney(preview.billableCentsAfter)}.
+          {preview.stillUnrated > 0 && (
+            <> {preview.stillUnrated} would still have no rate to resolve to.</>
+          )}
+        </div>
+      )}
+      {held > 0 && (
+        <div className="mt-1 text-ink-secondary">
+          {held} already billed or locked, and will not be touched.
+        </div>
+      )}
+      <div className="mt-2 flex gap-2">
+        {preview.changed > 0 && (
+          <Button size="sm" variant="primary" loading={apply.isPending} onClick={() => apply.mutate()}>
+            Re-rate {preview.changed}
+          </Button>
+        )}
+        <Button size="sm" variant="ghost" onClick={() => setPreview(null)}>
+          {preview.changed > 0 ? "Cancel" : "Close"}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export default function ProjectDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -340,6 +436,7 @@ export default function ProjectDetailPage() {
               <KpiRow label="Billed ahead" value={formatMoney(summary!.overbilledCents)} />
             )}
             <Link href={`/invoices/new?client=${project.clientId}`} className="text-base text-link underline">New invoice</Link>
+            <ReRateRow projectId={project.id} />
           </Kpi>
           )}
         </div>

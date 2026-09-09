@@ -439,3 +439,192 @@ export async function deleteRate(ctx: Ctx, userId: string, rateId: string) {
     before: existing,
   });
 }
+
+/* ---------------------------------------------------------------- re-rate */
+
+/** What a re-rate would do, or did. Money in cents, as everywhere else. */
+export interface ReRateOutcome {
+  /** Entries in scope that were eligible to change. */
+  considered: number;
+  /** Entries whose snapshot actually moved. */
+  changed: number;
+  /** Eligible entries the resolver returned the same numbers for. */
+  unchanged: number;
+  /** In scope but deliberately untouched, by reason. */
+  skipped: { invoiced: number; billedExternally: number; locked: number; running: number };
+  /** The billable value of the considered entries, before and after. */
+  billableCentsBefore: number;
+  billableCentsAfter: number;
+  /** Hours still resolving to no rate, which re-rating cannot fix. */
+  stillUnrated: number;
+}
+
+/**
+ * Re-resolve the rate snapshots on a project's unbilled hours.
+ *
+ * THE ONE THING THAT MAY CHANGE A SNAPSHOT
+ *
+ * An entry records the rates in force when it was written and never
+ * recalculates them, which is what keeps January's cost from moving when
+ * somebody gets a raise in March. The PRD and CLAUDE.md have both described an
+ * "explicit re-rate action" as the single exception since the schema was
+ * written. It did not exist. Nothing in the product could change a snapshot.
+ *
+ * That is not a tidiness problem. Every Example Client 07 hour imported from Harvest
+ * carried a snapshot of zero, because the export had no rates in it. Setting an
+ * hourly rate on the project afterwards correctly changed nothing, so 876
+ * entries of real work were worth nothing on the Uninvoiced screen and nothing
+ * on an invoice, and there was no way to put it right (t-zNfxik, t-9Uli4l).
+ *
+ * WHAT IT REFUSES TO TOUCH
+ *
+ * Anything already billed, by us or elsewhere, and anything locked. An invoice
+ * that has gone to a client is a statement about money owed, and changing the
+ * hours behind it afterwards makes the document disagree with the ledger. Work
+ * marked billed in QuickBooks is the same promise kept somewhere else. Those
+ * are counted and reported rather than silently passed over, because "it did
+ * not change everything I selected" is exactly the thing an operator has to be
+ * told (the lesson from `markBilledExternally`).
+ *
+ * It re-resolves cost as well as billable. Both are snapshots taken by the same
+ * function at the same moment, and an import that lost one usually lost both.
+ */
+export async function reRateProject(
+  ctx: Ctx,
+  input: { projectId: string; from?: IsoDate; to?: IsoDate; dryRun?: boolean }
+): Promise<ReRateOutcome> {
+  assertCan(ctx, "rates:manage");
+
+  const [project] = await ctx.db
+    .select({ id: s.projects.id })
+    .from(s.projects)
+    .where(eq(s.projects.id, input.projectId))
+    .limit(1);
+  if (!project) throw notFound("That project");
+
+  const rows = await ctx.db
+    .select({
+      id: s.timeEntries.id,
+      userId: s.timeEntries.userId,
+      projectTaskId: s.timeEntries.projectTaskId,
+      spentOn: s.timeEntries.spentOn,
+      durationSeconds: s.timeEntries.durationSeconds,
+      billableRateCents: s.timeEntries.billableRateCents,
+      costRateCents: s.timeEntries.costRateCents,
+      invoiceId: s.timeEntries.invoiceId,
+      billedExternally: s.timeEntries.billedExternally,
+      ratesLockedAt: s.timeEntries.ratesLockedAt,
+      timerStartedAt: s.timeEntries.timerStartedAt,
+    })
+    .from(s.timeEntries)
+    .where(
+      and(
+        eq(s.timeEntries.projectId, input.projectId),
+        sql`${s.timeEntries.deletedAt} IS NULL`,
+        input.from ? sql`${s.timeEntries.spentOn} >= ${input.from}` : sql`true`,
+        input.to ? sql`${s.timeEntries.spentOn} <= ${input.to}` : sql`true`
+      )
+    );
+
+  const outcome: ReRateOutcome = {
+    considered: 0,
+    changed: 0,
+    unchanged: 0,
+    skipped: { invoiced: 0, billedExternally: 0, locked: 0, running: 0 },
+    billableCentsBefore: 0,
+    billableCentsAfter: 0,
+    stillUnrated: 0,
+  };
+
+  const eligible: typeof rows = [];
+  for (const row of rows) {
+    if (row.invoiceId) { outcome.skipped.invoiced++; continue; }
+    if (row.billedExternally) { outcome.skipped.billedExternally++; continue; }
+    if (row.ratesLockedAt) { outcome.skipped.locked++; continue; }
+    if (row.timerStartedAt) { outcome.skipped.running++; continue; }
+    eligible.push(row);
+  }
+  outcome.considered = eligible.length;
+
+  /*
+    Value is accumulated in cent-seconds and divided once, per BACKEND_PRD 3.6.
+    Rounding each entry to cents and summing drifts in one direction, and this
+    number is the one somebody decides whether to run the action on.
+  */
+  let beforeCentSeconds = 0;
+  let afterCentSeconds = 0;
+  const updates: { id: string; billableRateCents: number; costRateCents: number }[] = [];
+
+  for (const row of eligible) {
+    const resolved = await resolveForEntry(ctx, {
+      userId: row.userId,
+      projectId: input.projectId,
+      projectTaskId: row.projectTaskId,
+      spentOn: row.spentOn as IsoDate,
+    });
+
+    beforeCentSeconds += row.durationSeconds * row.billableRateCents;
+    afterCentSeconds += row.durationSeconds * resolved.billableRateCents;
+    if (resolved.rateMissing) outcome.stillUnrated++;
+
+    if (
+      resolved.billableRateCents === row.billableRateCents &&
+      resolved.costRateCents === row.costRateCents
+    ) {
+      outcome.unchanged++;
+      continue;
+    }
+
+    outcome.changed++;
+    updates.push({
+      id: row.id,
+      billableRateCents: resolved.billableRateCents,
+      costRateCents: resolved.costRateCents,
+    });
+  }
+
+  outcome.billableCentsBefore = Math.round(beforeCentSeconds / 3600);
+  outcome.billableCentsAfter = Math.round(afterCentSeconds / 3600);
+
+  // A preview writes nothing. It exists so the screen can say what the action
+  // would do to the money before anybody presses it.
+  if (input.dryRun) return outcome;
+  if (!updates.length) return outcome;
+
+  return withTransaction(ctx, async (tx) => {
+    for (const update of updates) {
+      await tx.db
+        .update(s.timeEntries)
+        .set({
+          billableRateCents: update.billableRateCents,
+          costRateCents: update.costRateCents,
+          updatedAt: tx.now(),
+          updatedBy: tx.actor.userId,
+        })
+        .where(eq(s.timeEntries.id, update.id));
+    }
+
+    /*
+      The changed ids go in the audit, not just how many.
+
+      This rewrites money on rows that already existed, which is the one thing
+      the snapshot rule exists to prevent, so the record has to be able to answer
+      "which entries, and from what to what" long after the fact. The scope
+      bounds the size: this runs against one project.
+    */
+    tx.audit({
+      action: "rates.re_rate",
+      entityType: "project",
+      entityId: input.projectId,
+      entityLabel: "Re-rated unbilled hours",
+      after: {
+        from: input.from ?? null,
+        to: input.to ?? null,
+        ...outcome,
+        entries: updates,
+      },
+    });
+
+    return outcome;
+  });
+}

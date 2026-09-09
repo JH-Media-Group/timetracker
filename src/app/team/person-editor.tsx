@@ -121,10 +121,30 @@ function PersonForm({ existing }: { existing: User }) {
   const ownerLocked = Boolean(existing.isOwner) && !isSelf;
   const profileLocked = ownerLocked || isSelf || !canManage;
 
+  /*
+    A pending rate edit from the card below, so "Save changes" saves it too.
+
+    The rates live in their own table behind their own endpoint, and this form
+    posts to `updateUser`, which carries none of them. So the page header's
+    Save quietly skipped the two money fields on the same page and reported
+    success: the audit for the day Person02 reported it showed two user.update
+    rows and no rate.set at all (t-VFx9pa).
+
+    A button labelled "Save changes" saves the changes on the page. The rates
+    go first, because they are the part somebody came to this screen to change
+    and the part that must not be silently dropped.
+  */
+  const pendingRates = React.useRef<(() => Promise<void>) | null>(null);
+  const onPendingRates = React.useCallback((commit: (() => Promise<void>) | null) => {
+    pendingRates.current = commit;
+  }, []);
+
   const save = useMutation({
     mutationFn: async () => {
       const list = (v: string) =>
         v.split(",").map((x) => x.trim()).filter(Boolean);
+
+      if (pendingRates.current) await pendingRates.current();
 
       return api.updateUser(existing.id, {
         firstName: form.firstName.trim(),
@@ -344,7 +364,7 @@ function PersonForm({ existing }: { existing: User }) {
           {/* Rates are their own card: what somebody is paid is a different
               decision from what they may do, gated by different capabilities,
               and the panel decides for itself what to show. */}
-          <RatesPanel userId={existing.id} editable />
+          <RatesPanel userId={existing.id} editable onPendingChange={onPendingRates} />
 
           {canManage && !existing.isOwner && !isSelf && <RemoveCard person={existing} />}
         </div>

@@ -1184,6 +1184,51 @@ export const setRate = (
   */
 ): Promise<RateSet> => put<RateSet>(`/users/${userId}/rates`, input);
 
+/**
+ * Hard delete, which the server refuses once the task has tracked time.
+ *
+ * The route and the service have existed since tasks shipped. This had not, so
+ * the Tasks screen never called either: its Delete action pushed a fixed toast
+ * saying tasks with tracked time cannot be deleted, whether or not the task had
+ * any, which made a brand new task undeletable and told the person something
+ * untrue about why (t-o-itKE).
+ */
+export async function deleteTask(id: ID): Promise<void> {
+  await del<{ deleted: boolean }>(`/tasks/${id}`);
+}
+
+/** What a re-rate would do, or did. */
+export interface ReRateOutcome {
+  considered: number;
+  changed: number;
+  unchanged: number;
+  skipped: { invoiced: number; billedExternally: number; locked: number; running: number };
+  billableCentsBefore: number;
+  billableCentsAfter: number;
+  stillUnrated: number;
+}
+
+/**
+ * Re-resolve the rate snapshots on a project's unbilled hours.
+ *
+ * An entry keeps the rates it was written with, which is why setting a project
+ * rate does not change what has already been logged. This is the documented
+ * exception, and until now it existed only in the documentation: hours imported
+ * from Harvest with no rate were stuck at zero for good (t-zNfxik, t-9Uli4l).
+ *
+ * Pass `dryRun` to ask what it would do without doing it.
+ */
+export async function reRateProject(
+  projectId: ID,
+  input: { from?: string; to?: string; dryRun?: boolean } = {}
+): Promise<ReRateOutcome> {
+  return post<ReRateOutcome>(`/projects/${projectId}/re-rate`, {
+    from: input.from,
+    to: input.to,
+    dryRun: input.dryRun ?? false,
+  });
+}
+
 export const deleteRate = (userId: ID, rateId: ID): Promise<void> =>
   del<void>(`/users/${userId}/rates/${rateId}`);
 

@@ -197,8 +197,39 @@ export default function TasksPage() {
               },
             },
             {
+              /*
+                Actually delete, and let the server decide.
+
+                This used to push a fixed message saying tasks with tracked time
+                cannot be deleted, without asking whether this one had any. A
+                task created a minute ago was refused with a reason that was not
+                true of it (t-o-itKE). `deleteTask` counts the entries behind the
+                task and its message names the number, so the refusal, when it
+                comes, is about the task in front of you.
+              */
               key: "delete", label: "Delete", intent: "danger", input: "modal", end: true,
-              run: () => { toast.push({ tone: "danger", title: "Tasks with tracked time cannot be deleted. Archive them instead." }); },
+              run: async (sel) => {
+                const ids = (sel as Row[]).map((r) => r.id);
+                const refused: string[] = [];
+                let deleted = 0;
+                for (const id of ids) {
+                  try {
+                    await api.deleteTask(id);
+                    deleted++;
+                  } catch (e) {
+                    refused.push(e instanceof Error ? e.message : "That task could not be deleted.");
+                  }
+                }
+                qc.invalidateQueries({ queryKey: ["bootstrap"] });
+                if (deleted) {
+                  toast.push({ tone: "success", title: `Deleted ${deleted} ${deleted === 1 ? "task" : "tasks"}.` });
+                }
+                // Every refusal is reported, not just the first, and a partial
+                // result says so rather than reading as a whole success.
+                for (const message of [...new Set(refused)]) {
+                  toast.push({ tone: "danger", title: message });
+                }
+              },
             },
           ]}
           empty={

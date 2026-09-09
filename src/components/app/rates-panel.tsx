@@ -69,7 +69,24 @@ function amountFor(rate: api.Rate | null): string {
   return rate ? formatMoneyInput(String(rate.amountCents / 100)) : "";
 }
 
-export function RatesPanel({ userId, editable = false }: { userId: string; editable?: boolean }) {
+export function RatesPanel({ userId, editable = false, onPendingChange }: {
+  userId: string;
+  editable?: boolean;
+  /**
+   * Reports an uncommitted rate edit, so a parent's Save can include it.
+   *
+   * This card sits on the person editor, which has its own "Save changes" in
+   * the page header. That button called `updateUser`, which carries no rates,
+   * so somebody who typed a billable and a cost rate and then pressed the
+   * obvious Save saved everything except the two numbers they had come to
+   * change, and was told the person was updated (t-VFx9pa). The audit trail
+   * showed it plainly: two user.update rows that day and not one rate.set.
+   *
+   * Passing this makes the page's Save mean what it says. The callback must be
+   * stable, so wrap it in `useCallback`.
+   */
+  onPendingChange?: (commit: (() => Promise<void>) | null) => void;
+}) {
   const can = useCan();
   const { settings } = useApp();
   const toast = useToast();
@@ -106,7 +123,11 @@ export function RatesPanel({ userId, editable = false }: { userId: string; edita
     billable: dirty.billable ? draft.billable : amountFor(current.billable),
     cost: dirty.cost ? draft.cost : amountFor(current.cost),
   };
-  const editableKinds: RateKind[] = mayEditCost ? ["billable", "cost"] : ["billable"];
+  // Nothing is editable without `rates:manage`. The previous form offered
+  // "billable" whenever cost was unavailable, including to somebody who may not
+  // edit rates at all, which read as a bug even though the fields render only
+  // under `mayEdit`.
+  const editableKinds: RateKind[] = !mayEdit ? [] : mayEditCost ? ["billable", "cost"] : ["billable"];
   const changed = editableKinds.flatMap((kind) => {
     if (!dirty[kind]) return [];
     const amountCents = editableAmount(values[kind]);
@@ -154,6 +175,23 @@ export function RatesPanel({ userId, editable = false }: { userId: string; edita
       });
     },
   });
+
+  /*
+    Hand the parent a way to commit what is typed here but not yet sent.
+
+    Only when there is something valid to send: a null tells the parent there
+    is nothing of ours to save, which is also what it gets when this card
+    unmounts.
+  */
+  const pending = changed.length > 0 && !hasInvalidEdit && !!from;
+  const commitRef = React.useRef<() => Promise<void>>(async () => {});
+  commitRef.current = async () => { await save.mutateAsync(); };
+
+  React.useEffect(() => {
+    if (!onPendingChange) return;
+    onPendingChange(pending ? () => commitRef.current() : null);
+    return () => onPendingChange(null);
+  }, [onPendingChange, pending]);
 
   if (!maySeeAny) return null;
 
