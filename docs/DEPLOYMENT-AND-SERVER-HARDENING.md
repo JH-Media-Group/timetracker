@@ -4,7 +4,7 @@
 
 **Staging deployed:** 2026-08-24
 
-**Staging last updated:** 2026-09-09 20:24 UTC
+**Staging last updated:** 2026-09-09 20:53 UTC
 
 **Production droplet:** `165.245.130.130`
 
@@ -19,6 +19,78 @@ restart unrelated services.
 The repeatable operating procedure now lives in
 `docs/DEPLOYMENT-RUNBOOK.md`. This file retains the deployment evidence and
 the broader shared-server maintenance plan.
+
+## Staging update: the re-rate action, 2026-09-09
+
+Tally staging now runs source commit `2b5656a` as `tally:2b5656a` (image ID
+`sha256:2f785c4195299ed226b96bfd2e165ce36290b6c02b43bd751a6b21176003fcc1`).
+This release fixes Toado tickets `t-zNfxik`, `t-9Uli4l`, `t-VFx9pa` and
+`t-o-itKE`.
+
+The substantial part is `reRateProject`. An entry keeps the rates it was
+written with, so setting an hourly rate on a project correctly changes nothing
+already logged, and the documented exception to that rule had never been built.
+Example Client 07 carried 876 entries snapshotted at zero from the Harvest import and
+exactly one at the new rate, logged after it was set, so the project read $0
+uninvoiced with real work behind it and nothing in the product could correct
+it. The action re-resolves through the same `resolveForEntry` the write path
+uses, refuses anything invoiced, billed externally, rate-locked or running,
+counts each refusal, previews with the same call under `dryRun`, and audits the
+entries it rewrote rather than only how many.
+
+Update evidence:
+
+- The exact pushed source passed 60 test files and 855 tests, TypeScript,
+  palette validation, and a complete Linux production Docker build. The seven
+  new re-rate tests are mostly refusals, because an action that rewrites money
+  on existing rows has to be provably unable to touch billed work.
+- The transferred 101,615,616-byte image tar has SHA-256
+  `52c9e042383a4294d5d4a52f4c7634f991c0485dda3996a0843225d8aaa2c33f`. The
+  server verified its exact size and hash before loading it, and the loaded
+  image ID matched the local build.
+- Preflight recorded 17 containers, none unhealthy, 74 GB free disk and 2.8 GB
+  available memory, with external liveness and readiness at 200.
+- An isolated, unproxied candidate container reached healthy state and returned
+  200 from liveness and database readiness, kept every live security and
+  resource control, published no host port, carried no production network
+  alias, and was removed before the live update.
+- There were no schema changes. The new route is application code; the isolated
+  migration run left all 10 Drizzle and five manual migrations unchanged.
+- The immediate pre-update dump is
+  `/var/backups/tally/tally-20260909T205026Z.dump`, SHA-256
+  `d6955a6690007227f5f18d33e165b261bc3e418505f7bc4e853a09ea704e17f5`.
+- The post-update dump is
+  `/var/backups/tally/tally-20260909T205313Z.dump`, SHA-256
+  `71b0054c4f0e06a751bc35a09b29979a2e0d852219f447591b81222cb9919d10`.
+- Both dumps passed 329-line catalog checks and complete owner-preserving
+  scratch restores reconciling 58 users, 365 projects, [private record count] active time
+  entries, 10 Drizzle migrations, five manual migrations and the
+  `tally_staging` owner. Both scratch databases were removed and confirmed
+  gone.
+- The environment file changed by exactly one line, proven by identical
+  normalized SHA-256 values
+  (`23f3c489d254d4831fbc68727db0bc8a0879af8e22e04544565a0e980da086e8`).
+- Web and MCP were replaced separately with `--no-deps`, web proven healthy on
+  the new image while MCP still ran `tally:fabd137`. Both now run the exact
+  local image ID with zero restarts and no OOM events.
+- External liveness, readiness and both OAuth discovery documents return 200.
+  MCP GET returns 405 and an unauthenticated POST returns 401 with its
+  protected-resource challenge. All five security headers remain present, and
+  the re-rate control appears in the running container's server and client
+  bundles.
+- `/opt/tally/compose.yml` and `/opt/Caddyfile` retained their pre-deploy
+  hashes and Caddy was not reloaded. A full container diff against the
+  pre-deploy baseline showed the two Tally lines changed and nothing else: all
+  15 unrelated containers kept the same image, image ID, restart count and OOM
+  state, none is unhealthy, and public listeners did not change.
+- All four Tally timers remain active, a manual mail run succeeded, web and MCP
+  logs contain no error line since the deployment, and root SSH remains enabled
+  with effective `permitrootlogin yes`.
+
+Rollback and evidence material is under `/opt/tally/artifacts/deploy-2b5656a`,
+the image tar is `/opt/tally/artifacts/tally-2b5656a.tar`, and the previous
+`tally:fabd137` image remains loaded. This application-only update requires no
+database restore for rollback.
 
 ## Staging update: per-row timer controls, 2026-09-09
 
