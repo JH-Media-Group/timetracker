@@ -4,7 +4,7 @@
 
 **Staging deployed:** 2026-08-24
 
-**Staging last updated:** 2026-09-09 22:17 UTC
+**Staging last updated:** 2026-09-09 23:11 UTC
 
 **Production droplet:** `165.245.130.130`
 
@@ -19,6 +19,74 @@ restart unrelated services.
 The repeatable operating procedure now lives in
 `docs/DEPLOYMENT-RUNBOOK.md`. This file retains the deployment evidence and
 the broader shared-server maintenance plan.
+
+## Staging update: the route-reachability guard, 2026-09-09
+
+Tally staging now runs source commit `94342ca` as `tally:94342ca` (image ID
+`sha256:879af6e2cdbff26196589003963ca44ae37571aabe5f870a056ad76ba74b3118`).
+
+Mostly a test release, carrying one production fix that the test found. The new
+`tests/route-reachability.test.ts` asserts that every one of the 139 route
+methods is reached by `src/lib/api.ts` or the MCP server, or carries a written
+reason in an exact ledger. On its first run it found that
+`POST /time-entries/:id/stop` had always accepted a user id in its body and
+always discarded it, which silently undid the previous day's fix for t-DVQ2qW:
+the timesheet passed the row owner's id, the client sent it, and the route
+stopped the actor's own timer regardless. The service tests never caught it
+because they call `stopTimer` directly. The route reads the body now.
+
+Update evidence:
+
+- The exact pushed source passed 61 test files and 859 tests, TypeScript,
+  palette validation, and a complete Linux production Docker build. The guard
+  itself is mutation-tested three ways: a new uncalled route, a client call
+  pointed at a path no route answers, and the restored state.
+- The transferred 101,622,272-byte image tar has SHA-256
+  `3accb2ad203a4665bd4f522461c39c924be4c5d0c06dddef42173c0a6147e0a3`, verified
+  for exact size and hash on the server before loading, with the loaded image
+  ID matching the local build.
+- Preflight recorded 17 containers, none unhealthy, 74 GB free disk and 2.8 GB
+  available memory, with external liveness and readiness at 200.
+- An isolated, unproxied candidate container reached healthy state, returned
+  200 from liveness and database readiness, kept every live security and
+  resource control, published no host port, carried no production network
+  alias, and was removed before the live update.
+- No schema changes. The isolated migration run left all 10 Drizzle and five
+  manual migrations unchanged.
+- The immediate pre-update dump is
+  `/var/backups/tally/tally-20260909T230902Z.dump`, SHA-256
+  `b4adb74da721d34079930f87ecb2de64e611c8e914e753134f0d51e3ceb03855`.
+- The post-update dump is
+  `/var/backups/tally/tally-20260909T231142Z.dump`, SHA-256
+  `047dd1a5254e0783e5d16ad1f9a4545c026fe216598149029080bfe849813b6f`.
+- Both dumps passed 329-line catalog checks and complete owner-preserving
+  scratch restores reconciling 58 users, 365 projects, [private record count] active time
+  entries, 10 Drizzle migrations, five manual migrations and the
+  `tally_staging` owner. Both scratch databases were removed and confirmed
+  gone.
+- The environment file changed by exactly one line, proven by identical
+  normalized SHA-256 values
+  (`23f3c489d254d4831fbc68727db0bc8a0879af8e22e04544565a0e980da086e8`).
+- Web and MCP were replaced separately with `--no-deps`, web proven healthy on
+  the new image while MCP still ran `tally:da915d2`. Both now run the exact
+  local image ID with zero restarts and no OOM events.
+- External liveness, readiness and both OAuth discovery documents return 200.
+  MCP GET returns 405 and an unauthenticated POST returns 401 with its
+  protected-resource challenge. All five security headers remain present, and
+  the stop route's compiled bundle contains the body handling that was added.
+- `/opt/tally/compose.yml` and `/opt/Caddyfile` retained their pre-deploy
+  hashes, the host and container Caddyfiles match, and Caddy was not reloaded.
+  A container diff against the pre-deploy baseline showed the two Tally lines
+  changed and nothing else across 17 containers, none unhealthy, with public
+  listeners unchanged.
+- All four Tally timers remain active, a manual mail run succeeded, web and MCP
+  logs contain no error line since the deployment, and root SSH remains enabled
+  with effective `permitrootlogin yes`.
+
+Rollback and evidence material is under `/opt/tally/artifacts/deploy-94342ca`,
+the image tar is `/opt/tally/artifacts/tally-94342ca.tar`, and the previous
+`tally:da915d2` image remains loaded. This application-only update requires no
+database restore for rollback.
 
 ## Staging update: personal time zones, 2026-09-09
 
