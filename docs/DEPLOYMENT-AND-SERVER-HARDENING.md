@@ -4,7 +4,7 @@
 
 **Staging deployed:** 2026-08-24
 
-**Staging last updated:** 2026-09-08 17:09 UTC
+**Staging last updated:** 2026-09-09 20:24 UTC
 
 **Production droplet:** `165.245.130.130`
 
@@ -19,6 +19,81 @@ restart unrelated services.
 The repeatable operating procedure now lives in
 `docs/DEPLOYMENT-RUNBOOK.md`. This file retains the deployment evidence and
 the broader shared-server maintenance plan.
+
+## Staging update: per-row timer controls, 2026-09-09
+
+Tally staging now runs source commit `fabd137` as `tally:fabd137` (image ID
+`sha256:f5eb0bb84dd1dd443922968569e8a61b98df57fee0f69cda90d7517b0b795627`).
+This release fixes Toado tickets `t-DVQ2qW` and `t-QANtWe`, both reported
+against a timesheet pointed at another person.
+
+The timer context knows one timer, the signed-in person's. The day view's rows
+read `elapsed` and called `stop()` from it whatever entry the row was, so on a
+teammate's timesheet the Stop button stopped the wrong timer and printed the
+wrong elapsed value. `stopTimer` had always accepted a user id and every caller
+omitted it; the id is required now, so reintroducing the defect is a type
+error. The entry dialog computed its total on blur rather than on input, and
+used the presence of that total to decide which of Save and Start timer was the
+primary button, so the same gesture saved or started a timer depending on a
+field that had not been filled in.
+
+Update evidence:
+
+- The exact pushed source passed 59 test files and 848 tests, TypeScript,
+  palette validation, and a complete Linux production Docker build. Requiring
+  the stop target was verified by reintroducing the original call and
+  confirming it fails to compile.
+- The transferred 101,622,272-byte image tar has SHA-256
+  `db37ac9a9c2f755a5ef23e48d7b356bc73fd82e7ee6f6e69f9199b821772e1a1`. The
+  server verified its exact size and hash before loading it, and the loaded
+  image ID matched the local build.
+- Preflight recorded 17 containers, all with zero restarts and no OOM events,
+  75 GB free disk, 2.7 GB available memory, and a 0.28 load average. Public
+  listeners were limited to 22, 80 and 443, with port 53 on loopback only.
+- An isolated, unproxied candidate container reached healthy state and returned
+  200 from liveness and database readiness, kept every live security and
+  resource control, published no host port, carried no production network
+  alias, and was removed before the live update.
+- There were no schema or infrastructure changes. The isolated migration run
+  left all 10 Drizzle and five manual migrations unchanged.
+- The immediate pre-update dump is
+  `/var/backups/tally/tally-20260909T202124Z.dump`, SHA-256
+  `a35b49adc942077e58ca6420d001f2911ddf1774618a7a2d44bb7bb5c112afc5`.
+- The post-update dump is
+  `/var/backups/tally/tally-20260909T202401Z.dump`, SHA-256
+  `0f5f0a04eb58d67c35b8ce128d9bce54eae87f173bdd090d455665d455c876f4`.
+- Both 2,991,825-byte dumps passed 329-line catalog checks and complete
+  owner-preserving scratch restores. Each restored copy matched 58 users, 365
+  projects, [private record count] active time entries, two running timers, 10 Drizzle
+  migrations, five manual migrations, and the `tally_staging` owner. Both
+  scratch databases were removed and confirmed gone.
+- The environment file changed by exactly one line. Normalizing `TALLY_IMAGE=`
+  in the old and candidate files produced identical SHA-256 values
+  (`23f3c489d254d4831fbc68727db0bc8a0879af8e22e04544565a0e980da086e8`).
+- Web and MCP were replaced separately with `--no-deps`, web proven healthy on
+  the new image while MCP still ran `tally:e798939`. Both now run the exact
+  local image ID, are healthy, and retain a read-only root filesystem, no host
+  ports, their existing limits, zero restarts and zero OOM events.
+- External liveness, readiness and both OAuth discovery documents return 200.
+  MCP GET returns 405 and an unauthenticated POST returns 401 with its
+  protected-resource challenge. All five security headers remain present, and
+  the new release's strings appear in the running container's server and client
+  bundles.
+- `/opt/tally/compose.yml` and `/opt/Caddyfile` retained their pre-deploy
+  hashes, the host and container Caddyfiles match, and Caddy was not reloaded.
+  A full container diff against the pre-deploy baseline showed the two Tally
+  lines changed and nothing else: all 15 unrelated containers kept the same
+  image, image ID, restart count and OOM state, no container is unhealthy, and
+  public listeners did not change.
+- All four Tally timers remain active. A manual mail run succeeded with
+  `--no-reminders`, reporting zero sent, zero queued and zero in flight. Web
+  and MCP logs contain no error line since the deployment. Root SSH remains
+  enabled with effective `permitrootlogin yes`.
+
+Rollback and evidence material is under `/opt/tally/artifacts/deploy-fabd137`,
+the image tar is `/opt/tally/artifacts/tally-fabd137.tar`, and the previous
+`tally:e798939` image remains loaded. This application-only update requires no
+database restore for rollback.
 
 ## Staging update: timer clock authority and the Toado batch, 2026-09-08
 
