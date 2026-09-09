@@ -28,6 +28,7 @@ import { PageBody, PageHeader, useUrlState } from "@/components/app/page-chrome"
 import { SectionTitle } from "@/components/app/kpi";
 import { buttonVariants } from "@/components/ui/recipes";
 import { useApp, useCan, useTheme } from "@/components/app/providers";
+import { TimeZonePicker } from "@/components/app/timezone-picker";
 
 const SECTIONS = [
   { key: "company", label: "Company", icon: Building2 },
@@ -162,7 +163,7 @@ function CompanySection({ readOnly }: { readOnly: boolean }) {
           <Field label="Address" className="md:col-span-2">
             <Textarea disabled={readOnly} rows={4} value={form.companyAddress} onChange={(e) => patch("companyAddress", e.target.value)} />
           </Field>
-          <Field label="Time zone" help="The calendar day that a timer belongs to is decided here.">
+          <Field label="Time zone" help="The default for new people, and the zone account-wide jobs like recurring invoices run on. Each person's own zone decides which day their time lands on.">
             <Select disabled={readOnly} value={form.timezone} onChange={(e) => patch("timezone", e.target.value)}>
               {["America/New_York", "America/Chicago", "America/Denver", "America/Los_Angeles", "Europe/London", "Europe/Bucharest", "Asia/Karachi", "UTC"]
                 .map((t) => <option key={t} value={t}>{t}</option>)}
@@ -198,22 +199,86 @@ function CompanySection({ readOnly }: { readOnly: boolean }) {
       </Card>
 
       <Card>
-        <SectionTitle>Appearance</SectionTitle>
+        <SectionTitle>Yours alone</SectionTitle>
         <p className="mb-3 text-base text-ink-secondary">
-          This one is yours alone. Following the system means Tally switches when your computer does.
+          These are your own settings, not the company's, so they need no permission and nobody else sees them.
         </p>
-        <Segmented
-          value={theme}
-          onChange={setTheme}
-          options={[
-            { value: "system", label: "Follow system" },
-            { value: "light", label: "Light" },
-            { value: "dark", label: "Dark" },
-          ]}
-          aria-label="Theme"
-        />
+        <Field label="Theme" help="Following the system means Tally switches when your computer does.">
+          <Segmented
+            value={theme}
+            onChange={setTheme}
+            options={[
+              { value: "system", label: "Follow system" },
+              { value: "light", label: "Light" },
+              { value: "dark", label: "Dark" },
+            ]}
+            aria-label="Theme"
+          />
+        </Field>
+        <div className="mt-4">
+          <MyTimeZone />
+        </div>
       </Card>
     </div>
+  );
+}
+
+/**
+ * Your own time zone, which decides what day your time lands on.
+ *
+ * The only Time zone control on this page was the company one, and it is
+ * read-only to anybody without `settings:manage`. A person's own zone was
+ * reachable solely through the team editor behind `people:manage`, so a
+ * contractor could not change hers at all: her account said America/New_York
+ * while she was working in Pakistan, nine hours away, and every entry she made
+ * landed on the wrong calendar day with nothing she could do about it.
+ *
+ * `PATCH /api/v1/me` has accepted a validated timezone all along and required
+ * no capability, because a preference about yourself is not a permission. It
+ * had no caller.
+ *
+ * Saving refreshes the bootstrap rather than only this card, because "today" on
+ * the timesheet is derived from this value and should move with it.
+ */
+function MyTimeZone() {
+  const { me } = useApp();
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [zone, setZone] = React.useState(me.timezone);
+
+  const save = useMutation({
+    mutationFn: () => api.updateMe({ timezone: zone }),
+    onSuccess: (user) => {
+      qc.setQueryData(["bootstrap"], (old: { me?: typeof user } | undefined) =>
+        old?.me ? { ...old, me: user } : old
+      );
+      qc.invalidateQueries({ queryKey: ["bootstrap"] });
+      qc.invalidateQueries({ queryKey: ["time"] });
+      toast.push({ tone: "success", title: `Your time zone is now ${user.timezone}.` });
+    },
+    onError: (e: unknown) =>
+      toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not change your time zone." }),
+  });
+
+  return (
+    <Field
+      label="Your time zone"
+      help="Which calendar day your hours land on, and what Today means on your timesheet."
+    >
+      <div className="flex items-end gap-2">
+        <div className="min-w-0 flex-1">
+          <TimeZonePicker value={zone} onChange={setZone} />
+        </div>
+        <Button
+          variant="primary"
+          loading={save.isPending}
+          disabled={zone === me.timezone}
+          onClick={() => save.mutate()}
+        >
+          Save
+        </Button>
+      </div>
+    </Field>
   );
 }
 

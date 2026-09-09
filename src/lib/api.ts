@@ -1788,6 +1788,21 @@ export async function updateExpenseCategory(
   return fromCategory(await patch_<CategoryWire>(`/expense-categories/${id}`, patch));
 }
 
+/**
+ * Your own preferences, which need no capability because they are yours.
+ *
+ * `PATCH /api/v1/me` has accepted a validated timezone since it was written and
+ * nothing ever called it. That left a person's own timezone editable only
+ * through `PATCH /users/:id`, which requires `people:manage`, so a contractor
+ * could not change hers at all: the only Time zone control she could see was
+ * the company one on Settings, greyed out. Her account said America/New_York
+ * while she was in Pakistan, so her time landed on the wrong calendar day and
+ * there was no way for her to correct it.
+ */
+export async function updateMe(input: { timezone?: string; theme?: "system" | "light" | "dark" }): Promise<User> {
+  return fromUser(await patch_<UserWire>("/me", input));
+}
+
 /** Ends every session in the account, including this one. */
 export async function signOutEverywhere(): Promise<{ revoked: number }> {
   return post<{ revoked: number }>("/auth/signout-all", {});
