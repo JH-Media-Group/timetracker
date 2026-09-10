@@ -245,16 +245,24 @@ async function main() {
 
   const invoicesCsv = [
     row([
-      "invoice_number", "client", "state", "subject", "issue_date", "due_date", "payment_term",
-      "po_number", "currency", "line_count", "amount", "due_amount", "tax_amount",
-      "tax2_amount", "discount_amount", "sent_at", "paid_date", "closed_at", "notes",
+      /* `harvest_id` is the source system's own key and the only stable one
+         there is: an invoice number is editable free text here. It becomes the
+         external reference on the imported row, which is what lets a second
+         run recognise what the first one wrote. The three percentages are the
+         rates behind the amounts, and the destination has a column for each. */
+      "harvest_id", "invoice_number", "client", "state", "subject", "issue_date", "due_date",
+      "payment_term", "po_number", "currency", "line_count", "amount", "due_amount",
+      "tax_percent", "tax_amount", "tax2_percent", "tax2_amount", "discount_percent",
+      "discount_amount", "sent_at", "paid_date", "closed_at", "notes",
     ]),
     ...invoices.map((i) =>
       row([
-        i.number, i.client.name, i.state, i.subject ?? "", i.issue_date, i.due_date,
+        i.id, i.number, i.client.name, i.state, i.subject ?? "", i.issue_date, i.due_date,
         i.payment_term ?? "", i.purchase_order ?? "", i.currency, i.line_items.length,
-        dollars(cents(i.amount)), dollars(cents(i.due_amount)), dollars(cents(i.tax_amount)),
-        dollars(cents(i.tax2_amount)), dollars(cents(i.discount_amount)),
+        dollars(cents(i.amount)), dollars(cents(i.due_amount)),
+        i.tax ?? "", dollars(cents(i.tax_amount)),
+        i.tax2 ?? "", dollars(cents(i.tax2_amount)),
+        i.discount ?? "", dollars(cents(i.discount_amount)),
         i.sent_at ?? "", i.paid_date ?? "", i.closed_at ?? "", (i.notes ?? "").replace(/\s+/g, " ").trim(),
       ])
     ),
@@ -264,13 +272,13 @@ async function main() {
      reason this route is worth taking even though the other one reconciles. */
   const linesCsv = [
     row([
-      "invoice_number", "line_no", "kind", "description", "quantity", "unit_price", "amount",
+      "harvest_invoice_id", "invoice_number", "line_no", "kind", "description", "quantity", "unit_price", "amount",
       "project_id", "project_name",
     ]),
     ...invoices.flatMap((i) =>
       i.line_items.map((l, n) =>
         row([
-          i.number, n + 1, l.kind, (l.description ?? "").replace(/\s+/g, " ").trim(),
+          i.id, i.number, n + 1, l.kind, (l.description ?? "").replace(/\s+/g, " ").trim(),
           l.quantity, dollars(cents(l.unit_price)), dollars(cents(l.amount)),
           l.project?.id ?? "", l.project?.name ?? "",
         ])
@@ -283,11 +291,18 @@ async function main() {
 
   if (WANT_PAYMENTS) {
     const paymentsCsv = [
-      row(["invoice_number", "payment_no", "amount", "paid_date", "paid_at", "transaction_id", "notes"]),
+      /* `harvest_payment_id` matters more here than anywhere else. Four
+         invoices carry two payments of the same amount on the same day, so
+         amount and date together are not a key, and without the source id an
+         importer cannot tell a duplicate row from a second real payment. */
+      row([
+        "harvest_payment_id", "harvest_invoice_id", "invoice_number", "payment_no", "amount",
+        "paid_date", "paid_at", "transaction_id", "notes",
+      ]),
       ...invoices.flatMap((i) =>
         (payments.get(i.id) ?? []).map((p, n) =>
           row([
-            i.number, n + 1, dollars(cents(p.amount)), p.paid_date ?? "", p.paid_at ?? "",
+            p.id, i.id, i.number, n + 1, dollars(cents(p.amount)), p.paid_date ?? "", p.paid_at ?? "",
             p.transaction_id ?? "", (p.notes ?? "").replace(/\s+/g, " ").trim(),
           ])
         )
