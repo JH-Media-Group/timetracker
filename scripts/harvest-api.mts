@@ -63,8 +63,11 @@ const COMPARE = flag("--compare", join(OUT, "invoices.csv"));
 const WANT_PAYMENTS = has("--payments");
 const LIMIT = Number(flag("--limit", "0")) || 0;
 
+/* Both spellings, because HARVEST_TOKEN is the shorter one people reach for
+   and a credential that is present under the wrong name reads exactly like a
+   credential that is missing. */
 const ACCOUNT_ID = process.env.HARVEST_ACCOUNT_ID ?? "";
-const TOKEN = process.env.HARVEST_ACCESS_TOKEN ?? "";
+const TOKEN = process.env.HARVEST_ACCESS_TOKEN ?? process.env.HARVEST_TOKEN ?? "";
 
 /* ------------------------------------------------------------------- money */
 
@@ -203,7 +206,7 @@ async function main() {
   if (!ACCOUNT_ID || !TOKEN) {
     console.error(
       [
-        "HARVEST_ACCOUNT_ID and HARVEST_ACCESS_TOKEN must both be set.",
+        "HARVEST_ACCOUNT_ID and HARVEST_ACCESS_TOKEN (or HARVEST_TOKEN) must both be set.",
         "",
         "Create a personal access token at https://id.getharvest.com/developers.",
         "Pass them in the environment for one command rather than storing them:",
