@@ -70,6 +70,7 @@ import { clientCalls, mcpCalls, routeMethods, matchRoute, expandLiteral } from "
  */
 const UNREACHED: Record<string, string> = {
   // Reached from a signed-out page through raw fetch.
+  "POST /auth/forgot": "src/app/forgot-password/page.tsx asks for a reset link before a session exists",
   "POST /auth/reset": "src/app/set-password/form.tsx sets a password before a session exists",
   "GET /oauth/request": "src/app/oauth/authorize/page.tsx reads the consent request",
   "POST /oauth/authorize": "src/app/oauth/authorize/page.tsx posts the consent decision",
@@ -98,7 +99,6 @@ const UNREACHED: Record<string, string> = {
   "GET /projects/[id]/chart": "no UI. The project page draws its charts from entries it already has",
   "GET /timesheet/summary": "no UI. The timesheet totals in the browser",
   "GET /approvals/me": "no UI. The approvals screen reads the list, not a personal view",
-  "POST /auth/forgot": "no UI. Nobody can ask for a password reset link; an administrator sends one",
 };
 
 describe("the HTTP seam", () => {

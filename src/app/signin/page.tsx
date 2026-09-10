@@ -12,6 +12,7 @@
  */
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Button, Field, Input } from "@/components/ui/primitives";
 import { Logo } from "@/components/app/logo";
@@ -154,6 +155,12 @@ export default function SignInPage() {
         </div>
 
         <p className="mt-4 text-center text-sm text-ink-tertiary">
+          <Link href="/forgot-password" className="text-link underline">
+            Forgot your password?
+          </Link>
+        </p>
+
+        <p className="mt-2 text-center text-sm text-ink-tertiary">
           Accounts are created by invitation. Ask an administrator if you need one.
         </p>
       </div>

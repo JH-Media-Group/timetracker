@@ -17,8 +17,20 @@ import { describe, expect, it } from "vitest";
 import { ANONYMOUS_PAGES, isAnonymousPage, shouldLoadBugWidget } from "@/lib/anonymous-pages";
 
 describe("the anonymous page list", () => {
-  it("holds the two pages somebody can reach without a session", () => {
-    expect([...ANONYMOUS_PAGES]).toEqual(["/signin", "/set-password"]);
+  /*
+    Named one by one on purpose.
+
+    A page on this list runs before there is a session, is exempt from the
+    middleware's session check, and does not load the bug-reporting widget.
+    Adding one should be a decision somebody made, not something that arrives
+    with a feature, so this fails until the new page is written down here.
+
+    `/forgot-password` was added when the reset-request screen was built: the
+    endpoint had existed since auth shipped and nothing called it, so the only
+    way back into an account was to ask an administrator.
+  */
+  it("holds exactly the pages somebody can reach without a session", () => {
+    expect([...ANONYMOUS_PAGES]).toEqual(["/signin", "/set-password", "/forgot-password"]);
   });
 
   it("matches exactly, so a lookalike path is not anonymous", () => {
@@ -26,8 +38,10 @@ describe("the anonymous page list", () => {
     // beginning with those seven characters public.
     expect(isAnonymousPage("/signin")).toBe(true);
     expect(isAnonymousPage("/set-password")).toBe(true);
+    expect(isAnonymousPage("/forgot-password")).toBe(true);
     expect(isAnonymousPage("/signin-evil")).toBe(false);
     expect(isAnonymousPage("/set-password-trap")).toBe(false);
+    expect(isAnonymousPage("/forgot-password-trap")).toBe(false);
     expect(isAnonymousPage("/timesheet")).toBe(false);
   });
 });

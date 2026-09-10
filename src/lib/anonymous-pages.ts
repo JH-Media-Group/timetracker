@@ -15,7 +15,7 @@
  * Plain data in `lib/` so the edge middleware, a server component and three
  * client components can all read the same array.
  */
-export const ANONYMOUS_PAGES = ["/signin", "/set-password"] as const;
+export const ANONYMOUS_PAGES = ["/signin", "/set-password", "/forgot-password"] as const;
 
 export type AnonymousPage = (typeof ANONYMOUS_PAGES)[number];
 
