@@ -68,6 +68,8 @@ Work is tracked in Jira project **TALLY** and documented in Confluence space **T
 
 ## Non-negotiable conventions
 
+- **Repository privacy:** use fictional fixtures and keep business records, personnel details, and reconciliation outputs outside Git, including commit messages. Read `docs/REPOSITORY-DATA-POLICY.md` before reusing a checkout or branch from before the history cleanup.
+
 - **No em dashes** in user-facing output: UI copy, docs, emails, commit-visible prose. Use commas, parentheses, or hyphens. `grep -cP '\x{2014}'` should return 0 on every doc (the escape keeps this check from flagging itself). The one exception is the em dash used as the **no value** glyph in a value slot: a hyphen there reads as a minus sign, and a money column cannot afford the ambiguity. That is typography, not prose. **The count is no longer stated here, because a stated count drifts.** This file said seven while there were fourteen, for as long as nothing checked. `tests/repo-hygiene.test.ts` now scans `src/` as well as the docs and asserts the rule that actually matters: the glyph may stand alone as an entire value, never inside a sentence.
 - **PowerShell syntax** for any command shown to Jason to run himself. The Bash tool stays bash.
 - **Money is `bigint` cents, durations are integer seconds.** No floats touch storage. Aggregate first, divide last (BACKEND_PRD §3.6).

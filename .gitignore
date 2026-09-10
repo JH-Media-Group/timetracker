@@ -61,3 +61,10 @@ scripts/.probe-*
 # Scratch space for ticket work: downloaded captures, probe scripts, query files.
 # Swept into a commit once by a `git add -A` during a Toado sweep.
 .tmp/
+
+# Private operational data. Use fictional fixtures in tests and mock data.
+/docs/migration/reconciliation*.md
+/harvest_invoice_pack/
+/harvest_invoices_csv/
+/harvest_*_list.csv
+/harvest_*_report.csv
