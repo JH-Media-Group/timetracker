@@ -1,4 +1,26 @@
-/* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+/**
+ * The invoice converter, tested against the shapes that fooled it.
+ *
+ * `scripts/harvest-invoices.mts` produces the only machine-readable copy of a
+ * decade of invoicing that will exist once the source system is switched off.
+ * Nobody is going to read a few thousand invoices to check a parser.
+ *
+ * Every case below is a defect that shipped, and they all share one property:
+ * the run reported success. A dropped row still produced an invoice, a missed
+ * discount still produced a total, and the summary said the same thing either
+ * way. That is the argument for the self-checks, and this is the argument for
+ * testing them: the money was only ever found because the arithmetic was made
+ * to disagree out loud.
+ *
+ * Two of these cannot be caught by arithmetic at all, and they are the ones
+ * worth guarding hardest. A client name resolved to the wrong string still
+ * adds up. A write-off filed as a broken parse still adds up.
+ *
+ * The fixtures are `pdftotext -table` output with the spacing preserved,
+ * because the column gaps are the grammar. Do not tidy the whitespace in them.
+ * They are synthetic: real client names, invoice numbers and amounts stay out
+ * of the repository.
+ */
 
 import { beforeEach, describe, expect, it } from "vitest";
 import { firstFields, parse, problems, setKnownClients } from "../scripts/harvest-invoices.mts";
@@ -34,7 +56,13 @@ describe("the Harvest invoice converter", () => {
   });
 
   it("treats a form feed as a line break", () => {
-    /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+    /*
+      A form feed separates pages and JavaScript does not break a line on it,
+      so the first row of every continuation page arrived with the page
+      marker glued to its front, failed to match at column 0, and was appended
+      to the description above it. Its money vanished with it, one row per page
+      break, across the whole pack.
+    */
     const paged = SIMPLE.replace(
       [
         "                                                                             Subtotal      $1,320.00",
@@ -55,7 +83,12 @@ describe("the Harvest invoice converter", () => {
   });
 
   it("reads Direct Costs, which is a real item type and carries the discounts", () => {
-    /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+    /*
+      "Direct Costs" is a real item type and the list first written for this
+      parser left it out, because the list came from reading a few documents
+      rather than counting the pack. It is the type that carries discounts and
+      credits, so the invoices using it read high by the value of the credit.
+    */
     const withDiscount = [
       "Invoice For  Example Client 16                              Invoice ID  90016-EXAMPLE",
       "                                                          Issue Date  01/15/2024",
@@ -95,7 +128,15 @@ describe("the Harvest invoice converter", () => {
     expect(inv.lines[0]!.description).toBe("Research");
   });
 
-  /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+  /**
+   * The "Invoice For" block, which is the one field that has to match
+   * something outside the PDF for the data to be loadable.
+   *
+   * A wrapped client name and a contact person sit in exactly the same place
+   * with exactly the same shape. These two fixtures differ only in which of
+   * them is a real client, so the layout cannot decide it and the client list
+   * has to.
+   */
   const wrapped = [
     "Invoice For  Example County Economic                      Invoice ID  1",
     "             Development                                 Issue Date  01/15/2024",
@@ -162,7 +203,13 @@ describe("the Harvest invoice converter", () => {
   });
 
   it("checks an invoice that prints no subtotal, rather than skipping it", () => {
-    /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+    /*
+      The source system prints a Subtotal row only when a payment exists, so a
+      large minority of invoices carry none. Both self-checks were conditional
+      on a subtotal being present, so those invoices were published unverified
+      while the run reported nothing wrong. An invoice that cannot be checked
+      has not passed.
+    */
     const noSubtotal = [
       "Invoice For  Example Client 32                                       Invoice ID  90014-1",
       "Item Type    Description                                 Quantity           Unit Price    Amount",
@@ -206,7 +253,16 @@ describe("the Harvest invoice converter", () => {
   });
 
   it("stops reading line items at the totals, and keeps the notes apart", () => {
-    /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+    /*
+      The item loop used to run to the end of the document, so the Notes block
+      fell into the continuation branch and was appended to the last line item.
+      A quarter of the pack carried a description with somebody's bookkeeping
+      note stuck on the end, and every one of them still passed both totals
+      checks, because notes have no money in them.
+
+      The notes are worth keeping rather than merely excluding: they are the
+      only record of why several of these invoices look wrong.
+    */
     const noted = [
       SIMPLE,
       "Notes",
@@ -224,7 +280,13 @@ describe("the Harvest invoice converter", () => {
   });
 
   it("reads a client list whose quoted fields contain newlines", () => {
-    /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+    /*
+      The client export is "Client Name,Address" and the addresses are quoted
+      and multi-line. Splitting the file on newlines invented several clients
+      out of address fragments. They matched nothing, so nothing looked wrong;
+      had one of them equalled the opening words of a real client, invoices
+      would have been attached to the wrong account with no sign of it.
+    */
     const csv = [
       "Client Name,Address",
       '"Example Client 09","Sample Person 08',
@@ -240,6 +302,63 @@ describe("the Harvest invoice converter", () => {
       "Example Client 24",
       "Example Health",
     ]);
+  });
+
+  /*
+    The three shapes the totals block can take, which is how state is derived.
+
+    Harvest prints Subtotal and Payments only when a payment exists. With none
+    it prints the line items and jumps to Amount Due, so an unpaid invoice and
+    a written-off one look identical apart from the figure: the unpaid one
+    still asks for the line total, the written-off one asks for nothing.
+
+    This was read the wrong way round at first. "No subtotal, no payment,
+    nothing due" was treated as a broken parse, which rejected every write-off
+    in the pack, and the guess about the cause was wrong too. The source system
+    settled it, and the rule is worth pinning down here because nothing in the
+    arithmetic can catch getting it wrong: a misfiled write-off still adds up.
+  */
+  const unpaid = [
+    "Invoice For  Example Client 27                       Invoice ID  90014",
+    "Item Type    Description                                 Quantity           Unit Price    Amount",
+    "Service      Consulting                                  4.00               $125.00       $500.00",
+    "                                                                     Amount Due           $500.00",
+  ].join("\n");
+
+  const writtenOff = unpaid.replace(
+    "                                                                     Amount Due           $500.00",
+    "                                                                     Amount Due           $0.00"
+  );
+
+  it("calls an invoice with money still owed open", () => {
+    const inv = parse("90014.pdf", unpaid);
+    expect(inv.state).toBe("open");
+    expect(inv.amountDueCents).toBe(50_000);
+    expect(problems(inv)).toEqual([]);
+  });
+
+  it("calls a settled invoice paid", () => {
+    expect(parse("90011.pdf", SIMPLE).state).toBe("paid");
+  });
+
+  it("calls a cleared invoice with no payment written off, and keeps it", () => {
+    const inv = parse("90015.pdf", writtenOff);
+    expect(inv.state).toBe("written off");
+    // Kept, not rejected. Rejecting these lost every write-off in the pack.
+    expect(problems(inv)).toEqual([]);
+    // Its own line items are the only total the document offers.
+    expect(inv.lines.reduce((a, l) => a + (l.amountCents ?? 0), 0)).toBe(50_000);
+  });
+
+  it("does not hold a write-off to an identity the document cannot show", () => {
+    /*
+      What cleared the balance was a decision, not a payment, and the invoice
+      records no trace of it. Subtotal plus payments will never reach an amount
+      due of zero, so applying the identity would fail every write-off for
+      having been written off.
+    */
+    const inv = parse("90015.pdf", writtenOff);
+    expect(problems(inv).join("; ")).not.toMatch(/imply/);
   });
 
   it("holds money as integer cents, never as a float", () => {

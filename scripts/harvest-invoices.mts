@@ -1,4 +1,55 @@
-/* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+/**
+ * Turn the Harvest invoice PDFs into CSV, and prove the arithmetic while doing it.
+ *
+ *   pnpm harvest:invoices [--pack <dir>] [--out <dir>] [--clients <csv>] [--limit N]
+ *
+ * WHY THIS EXISTS
+ *
+ * Harvest has no CSV export for invoices. What it gives you is a folder of
+ * rendered PDFs, which is a filing cabinet rather than data: you cannot total
+ * it, search it, or reconcile it against anything. This produces the data once,
+ * so the record survives the source system being switched off.
+ *
+ * It writes CSV and never touches the database. Whether any of this is later
+ * loaded into Tally is a separate decision, and a separate program.
+ *
+ * WHAT MAKES IT TRUSTWORTHY
+ *
+ * Nobody is going to read a few thousand invoices to check a parser, so the
+ * parser checks itself on every one of them:
+ *
+ *   the line amounts must add up to the subtotal
+ *   subtotal, plus tax, plus discount, plus payments must equal the amount due
+ *
+ * An invoice that fails either goes to the rejects file with the reason and the
+ * numbers, and stays out of the output. Money that does not add up is worse
+ * than money that is missing, because the second kind gets noticed.
+ *
+ * Every defect found in this file so far shared one property: the run reported
+ * success. A dropped row still produced an invoice and a missed discount still
+ * produced a total. The checks are the only reason any of it surfaced, which is
+ * also the argument for the checks having their own tests.
+ *
+ * The output is checkable against the source system's own reported totals, and
+ * it reconciles to the cent. Note when doing that comparison that the subtotal
+ * column here is BEFORE any discount and Harvest reports its total after, so
+ * the two differ by the discounts and that is not an error.
+ *
+ * HOW IT READS THEM
+ *
+ * `pdftotext -table`, not `-layout`. On a simple invoice the two agree. On a
+ * real one, where descriptions wrap over three lines, `-layout` puts the
+ * quantities and amounts in a column of their own and the descriptions in a
+ * block underneath, so a line-by-line read pairs the wrong number with the
+ * wrong work. `-table` keeps each row on its own line and indents the
+ * continuations, which is the whole reason this parse is possible without a
+ * PDF library.
+ *
+ * Money is integer cents from the first parse to the last write, per the money
+ * rule this repository runs on. Parsing "$1,234.56" into a float and adding
+ * thousands of them is how a reconciliation ends up a few cents out with
+ * nobody able to say where.
+ */
 
 import { execFileSync } from "node:child_process";
 import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
@@ -18,7 +69,17 @@ const OUT = flag("--out", "C:/Users/jason/Downloads/harvest_invoices_csv");
 const LIMIT = Number(flag("--limit", "0")) || 0;
 const CLIENTS = flag("--clients", "C:/Users/jason/Downloads/harvest_client_list.csv");
 
-/* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+/**
+ * The known client names, lowercased for lookup, mapped to their real spelling.
+ *
+ * The source system's own client export, used to settle where a client name
+ * ends and a contact or a street address begins. Without it the parser has to
+ * guess, and the guess was wrong on a couple of dozen invoices whose client
+ * name would then have matched nothing on the way in.
+ *
+ * Empty is a supported state: the run still works, it just resolves every
+ * client from the first line and says so in the summary.
+ */
 export const knownClients = new Map<string, string>();
 
 /** Seed the client list directly. Used by the tests, which have no CSV. */
@@ -29,7 +90,7 @@ export function setKnownClients(names: string[]): void {
 
 /* ------------------------------------------------------------------- money */
 
-/* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+/** "$1,234.56" and "-$1,234.56" as integer cents. Null when there is no money here. */
 function money(text: string): number | null {
   const m = text.match(/(-?)\$\s*([\d,]+)(?:\.(\d{2}))?/);
   if (!m) return null;
@@ -117,6 +178,21 @@ const row = (values: unknown[]) => values.map(cell).join(",");
 
 /* ------------------------------------------------------------------ parsing */
 
+/**
+ * What became of an invoice, as far as the printed document can say.
+ *
+ * Harvest prints the Subtotal and Payments rows only when a payment exists.
+ * With no payment it prints the line items and jumps straight to Amount Due,
+ * which means an unpaid invoice and a written-off one have the same shape and
+ * differ only in the figure: an unpaid invoice still asks for the line total,
+ * a written-off one asks for nothing.
+ *
+ * That was worth learning from the source system rather than guessing. Reading
+ * "no subtotal, no payment, nothing due" as a broken parse rejected every
+ * write-off in the pack, and the guess about why was wrong as well.
+ */
+export type InvoiceState = "paid" | "open" | "written off";
+
 export interface Line {
   itemType: string;
   description: string;
@@ -143,13 +219,31 @@ export interface Invoice {
   pages: number;
   /** Row-shaped lines whose item type this script does not recognise. */
   unknownTypes: string[];
+  /** Derived from the totals block. See `InvoiceState`. */
+  state: InvoiceState;
   /** Whether the client name was settled against the client list or guessed. */
   clientSource: "first line" | "client list";
-  /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+  /**
+   * The Notes block, which is where the explanations live.
+   *
+   * A note saying an invoice was combined with another one is the only account
+   * of why that document looks wrong, and a note recording an agreed discount
+   * is the only account of why another is short. Dropping the block would
+   * throw that away, and it is recoverable from nowhere else.
+   */
   notes: string;
 }
 
-/* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+/**
+ * The item-type column, counted across the whole pack rather than guessed from
+ * a few documents.
+ *
+ * "Direct Costs" was missed on the first pass because the list was written from
+ * reading a handful of invoices. It is the type that carries discounts and
+ * credits, so the invoices using it read high by the value of the credit, and
+ * one of them read at half its true value. Guessing a vocabulary from a sample
+ * is how that happens; counting it is cheap.
+ */
 const ITEM_TYPES = "Service|Product|Direct Costs";
 
 /**
@@ -178,7 +272,15 @@ const LINE_ITEM_BARE = new RegExp(
  */
 const ROW_TAIL = /\s{2,}(-?[\d,]+\.\d{2})\s{2,}(-?\$[\d,.]+)\s{2,}(-?\$[\d,.]+)\s*$/;
 
-/* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+/**
+ * `Label   $1,234.56` anywhere on the line, right-aligned in the totals block.
+ *
+ * The label may carry its own rate in brackets, since a discount prints as
+ * "Discount (0.9415%)" and a tax as "Tax (8.5%)". Requiring the money to follow
+ * the word itself read those as absent, and an absent discount does not
+ * announce itself: the invoice simply failed its own identity check by exactly
+ * the amount that had gone missing.
+ */
 function totalFor(lines: string[], label: string): number | null {
   const pattern = new RegExp(`\\b${label}\\b(?:\\s*\\([^)]*\\))?\\s{2,}(-?\\$[\\d,.]+)`, "i");
   // Last wins: a multi-page invoice repeats nothing, but a description could
@@ -201,7 +303,16 @@ function headerField(lines: string[], label: string): string {
 }
 
 export function parse(file: string, text: string): Invoice {
-  /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+  /*
+    A form feed separates pages, and JavaScript does not count it as a line
+    break the way some other languages do. Splitting on \n alone leaves \f
+    glued to the first row of every continuation page, so that row fails to
+    match at column 0 and is read as a description continuation instead.
+
+    One line item disappears per page break, silently, and the invoice still
+    looks like an invoice. The only reason it surfaced is that the totals are
+    checked against the lines, which is the argument for checking them.
+  */
   const raw = text.split(/\r?\n|\f/);
   const lines = raw.filter((l) => l.trim().length > 0);
 
@@ -209,7 +320,22 @@ export function parse(file: string, text: string): Invoice {
   const header = headerIndex === -1 ? lines : lines.slice(0, headerIndex);
   const body = headerIndex === -1 ? [] : lines.slice(headerIndex + 1);
 
-  /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+  /*
+    The "Invoice For" block, which is the hardest thing on the page to read.
+
+    It is a left column of one to four lines. The first is the start of the
+    client name. What follows may be the rest of a wrapped client name, or a
+    contact person, or a street address, and the layout does not distinguish
+    them: a two-line client name and a client with a named contact underneath
+    are the same shape.
+
+    Appending everything gets the wrapped names right and corrupts the rest.
+    Taking only the first line does the reverse. Since nothing in the text
+    separates the cases, the parser stops guessing and asks a list: every
+    prefix is offered to the known client names and the longest one that
+    matches wins. With no list, or no match in it, the first line is used and
+    the invoice is marked so the run can report how many resolved that way.
+  */
   const rightColumn = /\s{2,}(Invoice ID|Issue Date|Due Date|PO Number)\b.*$/i;
   const forIndex = header.findIndex((l) => /\bInvoice For\b/.test(l));
   const parts = [headerField(header, "Invoice For").replace(rightColumn, "").trim()];
@@ -238,7 +364,16 @@ export function parse(file: string, text: string): Invoice {
   const dueRaw = headerField(header, "Due Date");
   const terms = dueRaw.match(/\(([^)]*)\)/)?.[1]?.replace(/\s+/g, " ").trim() ?? "";
 
-  /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+  /*
+    The line items stop where the totals begin, and everything past that point
+    is somebody's explanation rather than work.
+
+    Running the item loop to the end of the document meant the Notes block fell
+    into the continuation branch and was appended to the last line item, so a
+    quarter of the pack carried a description with somebody's bookkeeping note
+    stuck on the end. Every one of them still added up, because notes have no
+    money in them and the totals check could not see it.
+  */
   const TOTALS_START = /\b(Subtotal|Amount Due)\b\s*(?:\([^)]*\))?\s{2,}-?\$/i;
   const totalsAt = body.findIndex((l) => TOTALS_START.test(l));
   const itemLines = totalsAt === -1 ? body : body.slice(0, totalsAt);
@@ -303,6 +438,23 @@ export function parse(file: string, text: string): Invoice {
     }
   }
 
+  const payments = totalFor(lines, "Payments");
+  const amountDue = totalFor(lines, "Amount Due");
+  const lineSum = items.reduce((a, l) => a + (l.amountCents ?? 0), 0);
+
+  /*
+    Anything still owed is open, whatever has been paid against it so far.
+    Nothing owed against a non-zero invoice with no payment printed is a
+    write-off: something cleared the balance and it was not money. Everything
+    else is settled, including an overpayment, which shows as a credit.
+  */
+  const state: InvoiceState =
+    amountDue == null || amountDue > 0
+      ? "open"
+      : amountDue === 0 && lineSum !== 0 && !payments
+        ? "written off"
+        : "paid";
+
   return {
     file,
     number: headerField(header, "Invoice ID"),
@@ -315,8 +467,9 @@ export function parse(file: string, text: string): Invoice {
     subtotalCents: totalFor(lines, "Subtotal"),
     taxCents: totalFor(lines, "Tax"),
     discountCents: totalFor(lines, "Discount"),
-    paymentsCents: totalFor(lines, "Payments"),
-    amountDueCents: totalFor(lines, "Amount Due"),
+    paymentsCents: payments,
+    amountDueCents: amountDue,
+    state,
     lines: items.map((l) => ({ ...l, description: l.description.trim() })),
     // Counted from the page breaks themselves. Not every invoice carries a
     // "Page n of m" footer, and the ones that do not were all reading as 1.
@@ -329,9 +482,37 @@ export function parse(file: string, text: string): Invoice {
 
 /* ---------------------------------------------------------------- checking */
 
-/* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
-function checkableSubtotal(inv: Invoice): { cents: number | null; source: "document" | "amount due" } {
+/**
+ * The subtotal to check the lines against, and where it came from.
+ *
+ * Harvest prints the Subtotal row only when a payment exists, so a large
+ * minority of invoices do not carry one. Treating that as "no subtotal" and
+ * skipping the check meant those were published unverified while the run
+ * reported nothing wrong, which is worse than a failure: no answer, and no
+ * question either.
+ *
+ * Where nothing has been paid and nothing adjusted, the amount due is the same
+ * number the subtotal would have been, so the lines can still be checked. The
+ * exception is a write-off, where the amount due has been cleared by something
+ * the document does not print. Those have no printed total of any kind and are
+ * reported as such rather than being quietly counted as checked.
+ */
+function checkableSubtotal(
+  inv: Invoice
+): { cents: number | null; source: "document" | "amount due" | "line items" } {
   if (inv.subtotalCents != null) return { cents: inv.subtotalCents, source: "document" };
+
+  /*
+    A write-off's own total is unrecoverable from the paper: the amount due is
+    zero and no subtotal was printed. The line items are the only figure there
+    is, so they are used, and `source` says so. That makes the lines-versus-
+    subtotal check circular for these, which is why the run counts them
+    separately instead of adding them to the verified total.
+  */
+  if (inv.state === "written off") {
+    return { cents: inv.lines.reduce((a, l) => a + (l.amountCents ?? 0), 0), source: "line items" };
+  }
+
   const adjusted = inv.taxCents != null || inv.discountCents != null || inv.paymentsCents != null;
   if (!adjusted && inv.amountDueCents != null) return { cents: inv.amountDueCents, source: "amount due" };
   return { cents: null, source: "document" };
@@ -359,18 +540,27 @@ export function problems(inv: Invoice): string[] {
     if (subtotal == null) {
       out.push("no subtotal and no plain amount due to check the lines against");
     } else if (lineSum !== subtotal) {
-      /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+      /* The source belongs in the message. "Subtotal says nothing" would send
+         somebody looking for a subtotal the document never printed. */
       out.push(
         source === "document"
           ? `lines total ${dollars(lineSum)} but subtotal says ${dollars(subtotal)}`
-          : `lines total ${dollars(lineSum)} but the invoice prints no subtotal, no payment and an amount due of ${dollars(subtotal)}`
+          : `lines total ${dollars(lineSum)} but the invoice prints no subtotal and an amount due of ${dollars(subtotal)}`
       );
     }
   }
 
-  if (inv.amountDueCents != null && subtotal != null) {
-    /* Payments arrive negative, and so does a discount when Harvest prints one,
-       so the identity is a sum rather than a subtraction. */
+  /*
+    Subtotal plus tax plus discount plus payments equals the amount due, where
+    payments and discounts arrive negative, so the identity is a sum rather
+    than a subtraction.
+
+    A write-off is exempt, and has to be. What cleared its balance was a
+    decision, not a payment, and Harvest prints no record of it on the invoice.
+    Holding it to the identity would fail every write-off in the pack for the
+    crime of having been written off.
+  */
+  if (inv.amountDueCents != null && subtotal != null && inv.state !== "written off") {
     const expected =
       subtotal + (inv.taxCents ?? 0) + (inv.discountCents ?? 0) + (inv.paymentsCents ?? 0);
     if (expected !== inv.amountDueCents) {
@@ -431,23 +621,27 @@ function main() {
 
   const invoicesCsv = [
     row([
-      "file", "invoice_number", "client", "client_source", "subject", "issue_date", "due_date",
-      "terms", "po_number", "line_count", "pages", "subtotal", "subtotal_source", "tax",
-      "discount", "payments", "amount_due", "notes",
+      "file", "invoice_number", "client", "client_source", "state", "subject", "issue_date",
+      "due_date", "terms", "po_number", "line_count", "pages", "subtotal", "subtotal_source",
+      "tax", "discount", "payments", "amount_due", "notes",
     ]),
     /*
       `subtotal` is always populated and is always the figure the lines were
       checked against, so summing the column totals the pack. `subtotal_source`
-      says whether the document printed it or whether Harvest left it off an
-      invoice with no adjustments, where the amount due is the same number. A
-      blank column would have been more faithful to the paper and less useful
-      to everything downstream; this is both.
+      says where it came from: the printed row, the amount due on an invoice
+      with nothing paid and nothing adjusted, or the line items on a write-off
+      that printed no total at all. A blank column would have been more
+      faithful to the paper and less useful to everything downstream.
+
+      Note for anyone reconciling this against the source system: this column
+      is the figure BEFORE any discount. Harvest's own invoiced total is after
+      it, so the two differ by the discounts and that is not an error.
     */
     ...good.map((i) => {
       const { cents, source } = checkableSubtotal(i);
       return row([
-        i.file, i.number, i.client, i.clientSource, i.subject, i.issueDate, i.dueDate, i.terms,
-        i.poNumber, i.lines.length, i.pages,
+        i.file, i.number, i.client, i.clientSource, i.state, i.subject, i.issueDate, i.dueDate,
+        i.terms, i.poNumber, i.lines.length, i.pages,
         dollars(cents), source, dollars(i.taxCents), dollars(i.discountCents),
         dollars(i.paymentsCents), dollars(i.amountDueCents), i.notes,
       ]);
@@ -501,6 +695,36 @@ function main() {
     }
     if (names.length > 15) console.log(`   ... and ${names.length - 15} more`);
   }
+
+  /*
+    States, and how much of the total is actually verified.
+
+    A write-off's line items cannot be checked against anything, because the
+    document prints no total for them. Counting those inside "checked" would
+    overstate what this run proves, so they are named separately. The figure to
+    quote when somebody asks how much of this was verified is the first one.
+  */
+  const byState = { paid: 0, open: 0, "written off": 0 } as Record<InvoiceState, number>;
+  for (const i of good) byState[i.state]++;
+  const unverifiable = good.filter((i) => checkableSubtotal(i).source === "line items");
+  const unverifiableCents = unverifiable.reduce(
+    (a, i) => a + i.lines.reduce((b, l) => b + (l.amountCents ?? 0), 0),
+    0
+  );
+
+  console.log("");
+  console.log(`paid ${byState.paid}   open ${byState.open}   written off ${byState["written off"]}`);
+  console.log(
+    `checked against a printed total: ${good.length - unverifiable.length} invoices, ` +
+      `${dollars(invoiced - unverifiableCents)}`
+  );
+  if (unverifiable.length) {
+    console.log(
+      `not checkable, no total printed : ${unverifiable.length} written off, ` +
+        `${dollars(unverifiableCents)}`
+    );
+  }
+
   console.log("");
   console.log(`out: ${OUT}`);
 
