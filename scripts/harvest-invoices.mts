@@ -1,7 +1,7 @@
 /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
 
 import { execFileSync } from "node:child_process";
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -16,6 +16,16 @@ const flag = (name: string, fallback: string) => {
 const PACK = flag("--pack", "C:/Users/jason/Downloads/harvest_invoice_pack");
 const OUT = flag("--out", "C:/Users/jason/Downloads/harvest_invoices_csv");
 const LIMIT = Number(flag("--limit", "0")) || 0;
+const CLIENTS = flag("--clients", "C:/Users/jason/Downloads/harvest_client_list.csv");
+
+/* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+export const knownClients = new Map<string, string>();
+
+/** Seed the client list directly. Used by the tests, which have no CSV. */
+export function setKnownClients(names: string[]): void {
+  knownClients.clear();
+  for (const n of names) knownClients.set(n.toLowerCase(), n);
+}
 
 /* ------------------------------------------------------------------- money */
 
@@ -31,6 +41,73 @@ function money(text: string): number | null {
 }
 
 const dollars = (cents: number | null) => (cents == null ? "" : (cents / 100).toFixed(2));
+
+/**
+ * The first field of every record in a CSV, quoting respected.
+ *
+ * Splitting the file on newlines and taking everything before the first comma
+ * is the obvious version and it is wrong here, because a quoted address field
+ * contains newlines. On this client list that invented six clients out of
+ * address fragments: "Sample Person 02", "Livingston", and "Atlanta" twice.
+ *
+ * None of them matched anything, so the run looked clean. That is the danger:
+ * an invented name that happened to equal the opening words of a real client
+ * would have quietly attached somebody's invoices to the wrong account. A
+ * parser used to decide what is real cannot itself be a guess.
+ */
+export function firstFields(text: string): string[] {
+  const out: string[] = [];
+  let field = "";
+  let quoted = false;
+  let onFirst = true;
+  let started = false;
+
+  const endRecord = () => {
+    if (onFirst && (started || field)) out.push(field);
+    field = "";
+    onFirst = true;
+    started = false;
+  };
+
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (quoted) {
+      if (c !== '"') { field += c; continue; }
+      if (text[i + 1] === '"') { field += '"'; i++; continue; }
+      quoted = false;
+      continue;
+    }
+    if (c === '"') { quoted = true; started = true; continue; }
+    if (c === ",") {
+      if (onFirst) { out.push(field); onFirst = false; }
+      field = "";
+      started = true;
+      continue;
+    }
+    if (c === "\r") continue;
+    if (c === "\n") { endRecord(); continue; }
+    field += c;
+    started = true;
+  }
+  endRecord();
+  return out;
+}
+
+/** Read the client list, if there is one. The header row is dropped. */
+function loadClients(path: string): number {
+  let text: string;
+  try {
+    text = readFileSync(path, "utf8");
+  } catch {
+    return 0;
+  }
+
+  for (const raw of firstFields(text).slice(1)) {
+    const name = raw.replace(/\s+/g, " ").trim();
+    if (name) knownClients.set(name.toLowerCase(), name);
+  }
+  return knownClients.size;
+}
 
 /* --------------------------------------------------------------------- csv */
 
@@ -66,6 +143,10 @@ export interface Invoice {
   pages: number;
   /** Row-shaped lines whose item type this script does not recognise. */
   unknownTypes: string[];
+  /** Whether the client name was settled against the client list or guessed. */
+  clientSource: "first line" | "client list";
+  /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+  notes: string;
 }
 
 /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
@@ -130,31 +211,54 @@ export function parse(file: string, text: string): Invoice {
 
   /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
   const rightColumn = /\s{2,}(Invoice ID|Issue Date|Due Date|PO Number)\b.*$/i;
-  /*
-    Stripped here rather than after the loop below. The wrapped remainder is
-    appended to the end of this string, and a strip that ran afterwards would
-    delete from "Invoice ID" to end of string and take the appended half with
-    it. "Example County Economic / Development" arrived as "Example County Economic" for exactly that reason.
-  */
-  let client = headerField(header, "Invoice For").replace(rightColumn, "").trim();
   const forIndex = header.findIndex((l) => /\bInvoice For\b/.test(l));
+  const parts = [headerField(header, "Invoice For").replace(rightColumn, "").trim()];
   if (forIndex !== -1) {
     for (const line of header.slice(forIndex + 1)) {
       const left = line.split(/\s{4,}/).filter((p) => p.trim())[0]?.trim() ?? "";
       if (!left) continue;
       if (/^(Invoice ID|Issue Date|Due Date|Subject|PO Number|From)\b/i.test(left)) continue;
       if (/^\d{2}\/\d{2}\/\d{4}/.test(left)) continue;
-      client += ` ${left}`;
+      parts.push(left);
     }
   }
-  client = client.replace(/\s+/g, " ").trim();
+
+  const tidy = (v: string) => v.replace(/\s+/g, " ").trim();
+  let client = tidy(parts[0] ?? "");
+  let clientSource: "first line" | "client list" = "first line";
+  for (let take = parts.length; take >= 1; take--) {
+    const candidate = tidy(parts.slice(0, take).join(" "));
+    if (knownClients.has(candidate.toLowerCase())) {
+      client = knownClients.get(candidate.toLowerCase())!;
+      clientSource = "client list";
+      break;
+    }
+  }
 
   const dueRaw = headerField(header, "Due Date");
   const terms = dueRaw.match(/\(([^)]*)\)/)?.[1]?.replace(/\s+/g, " ").trim() ?? "";
 
+  /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+  const TOTALS_START = /\b(Subtotal|Amount Due)\b\s*(?:\([^)]*\))?\s{2,}-?\$/i;
+  const totalsAt = body.findIndex((l) => TOTALS_START.test(l));
+  const itemLines = totalsAt === -1 ? body : body.slice(0, totalsAt);
+
+  // The Notes block, from its own heading to the end, less the page footer.
+  const notesAt = body.findIndex((l, i) => i >= (totalsAt === -1 ? 0 : totalsAt) && /^\s*Notes\s*$/.test(l));
+  const notes =
+    notesAt === -1
+      ? ""
+      : body
+          .slice(notesAt + 1)
+          .filter((l) => !/^\s*Page \d+ of \d+\s*$/.test(l))
+          .map((l) => l.trim())
+          .join(" ")
+          .replace(/\s+/g, " ")
+          .trim();
+
   const items: Line[] = [];
   const unknownTypes: string[] = [];
-  for (const line of body) {
+  for (const line of itemLines) {
     const full = line.match(LINE_ITEM);
     if (full) {
       items.push({
@@ -218,6 +322,8 @@ export function parse(file: string, text: string): Invoice {
     // "Page n of m" footer, and the ones that do not were all reading as 1.
     pages: text.split("\f").filter((p) => p.trim().length > 0).length || 1,
     unknownTypes: [...new Set(unknownTypes)],
+    clientSource,
+    notes,
   };
 }
 
@@ -278,6 +384,13 @@ export function problems(inv: Invoice): string[] {
 /* -------------------------------------------------------------------- main */
 
 function main() {
+  const known = loadClients(CLIENTS);
+  console.log(
+    known
+      ? `${known} client names from ${CLIENTS}`
+      : `no client list at ${CLIENTS}, client names will be read from the first line only`
+  );
+
   const files = readdirSync(PACK).filter((f) => f.toLowerCase().endsWith(".pdf")).sort();
   const chosen = LIMIT ? files.slice(0, LIMIT) : files;
   console.log(`${files.length} PDFs in ${PACK}${LIMIT ? `, reading ${chosen.length}` : ""}`);
@@ -318,9 +431,9 @@ function main() {
 
   const invoicesCsv = [
     row([
-      "file", "invoice_number", "client", "subject", "issue_date", "due_date", "terms",
-      "po_number", "line_count", "pages", "subtotal", "subtotal_source", "tax", "discount",
-      "payments", "amount_due",
+      "file", "invoice_number", "client", "client_source", "subject", "issue_date", "due_date",
+      "terms", "po_number", "line_count", "pages", "subtotal", "subtotal_source", "tax",
+      "discount", "payments", "amount_due", "notes",
     ]),
     /*
       `subtotal` is always populated and is always the figure the lines were
@@ -333,10 +446,10 @@ function main() {
     ...good.map((i) => {
       const { cents, source } = checkableSubtotal(i);
       return row([
-        i.file, i.number, i.client, i.subject, i.issueDate, i.dueDate, i.terms, i.poNumber,
-        i.lines.length, i.pages,
+        i.file, i.number, i.client, i.clientSource, i.subject, i.issueDate, i.dueDate, i.terms,
+        i.poNumber, i.lines.length, i.pages,
         dollars(cents), source, dollars(i.taxCents), dollars(i.discountCents),
-        dollars(i.paymentsCents), dollars(i.amountDueCents),
+        dollars(i.paymentsCents), dollars(i.amountDueCents), i.notes,
       ]);
     }),
   ].join("\n");
@@ -370,6 +483,24 @@ function main() {
   console.log("");
   console.log(`subtotals add to  ${dollars(invoiced)}`);
   console.log(`amounts due add to ${dollars(due)}`);
+
+  /*
+    The client name is the one field that has to match something outside this
+    file for the data to be loadable, so its resolution is reported rather than
+    assumed. A name that fell back to the first line is a name that may carry a
+    contact or a street address with it.
+  */
+  const guessed = good.filter((i) => i.clientSource === "first line");
+  console.log();
+  console.log(`client names settled against the list : ${good.length - guessed.length}`);
+  console.log(`client names taken from the first line: ${guessed.length}`);
+  if (guessed.length) {
+    const names = [...new Set(guessed.map((i) => i.client))].sort();
+    for (const n of names.slice(0, 15)) {
+      console.log(`   ${n}`);
+    }
+    if (names.length > 15) console.log(`   ... and ${names.length - 15} more`);
+  }
   console.log("");
   console.log(`out: ${OUT}`);
 

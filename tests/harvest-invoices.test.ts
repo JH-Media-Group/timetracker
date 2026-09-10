@@ -1,7 +1,9 @@
 /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
 
-import { describe, expect, it } from "vitest";
-import { parse, problems } from "../scripts/harvest-invoices.mts";
+import { beforeEach, describe, expect, it } from "vitest";
+import { firstFields, parse, problems, setKnownClients } from "../scripts/harvest-invoices.mts";
+
+beforeEach(() => setKnownClients([]));
 
 /** A one-page invoice with the totals block Harvest prints when it has one. */
 const SIMPLE = [
@@ -93,23 +95,48 @@ describe("the Harvest invoice converter", () => {
     expect(inv.lines[0]!.description).toBe("Research");
   });
 
-  it("keeps a client name that wraps onto a second line", () => {
-    /*
-      "Example County Economic / Development" arrived as "Example County Economic". The right-hand column was stripped after the wrapped remainder
-      had been appended, so the strip deleted from "Invoice ID" to the end of
-      the string and took the appended half with it.
-    */
-    const wrapped = [
-      "Invoice For  Example County Economic                      Invoice ID  1",
-      "             Development                                 Issue Date  01/15/2024",
-      "Item Type    Description                                 Quantity           Unit Price    Amount",
-      "Service      Retainer                                    1.00               $7,500.00     $7,500.00",
-      "                                                                            Subtotal      $7,500.00",
-      "                                                                            Payments      -$7,500.00",
-      "                                                                     Amount Due           $0.00",
-    ].join("\n");
+  /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+  const wrapped = [
+    "Invoice For  Example County Economic                      Invoice ID  1",
+    "             Development                                 Issue Date  01/15/2024",
+    "Item Type    Description                                 Quantity           Unit Price    Amount",
+    "Service      Retainer                                    1.00               $7,500.00     $7,500.00",
+    "                                                                            Subtotal      $7,500.00",
+    "                                                                            Payments      -$7,500.00",
+    "                                                                     Amount Due           $0.00",
+  ].join("\n");
 
+  const withContact = [
+    "Invoice For  Example Health                              Invoice ID  90012",
+    "             Sample Person 07                              Issue Date  01/15/2024",
+    "Item Type    Description                                 Quantity           Unit Price    Amount",
+    "Service      Example Service - January                           1.00               $7,500.00     $7,500.00",
+    "                                                                            Subtotal      $7,500.00",
+    "                                                                            Payments      -$7,500.00",
+    "                                                                     Amount Due           $0.00",
+  ].join("\n");
+
+  it("joins a client name that wraps, and stops at a contact name that does not", () => {
+    setKnownClients(["Example County Economic Development", "Example Health"]);
     expect(parse("1.pdf", wrapped).client).toBe("Example County Economic Development");
+    expect(parse("90012.pdf", withContact).client).toBe("Example Health");
+  });
+
+  it("takes the longest prefix that is a real client, not merely the first", () => {
+    // Both are in the list. The two-line name must not be truncated to the
+    // one-line name that also happens to match.
+    setKnownClients(["Example County", "Example County Economic Development"]);
+    expect(parse("1.pdf", wrapped).client).toBe("Example County Economic Development");
+  });
+
+  it("says so when it could not settle a client name against the list", () => {
+    setKnownClients(["Somebody Else"]);
+    const inv = parse("90012.pdf", withContact);
+    expect(inv.clientSource).toBe("first line");
+    expect(inv.client).toBe("Example Health");
+
+    setKnownClients(["Example Health"]);
+    expect(parse("90012.pdf", withContact).clientSource).toBe("client list");
   });
 
   it("reads a total whose label carries its own rate in brackets", () => {
@@ -176,6 +203,43 @@ describe("the Harvest invoice converter", () => {
     );
 
     expect(parse("repeated.pdf", repeated).lines[1]!.description).toBe("Reporting");
+  });
+
+  it("stops reading line items at the totals, and keeps the notes apart", () => {
+    /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+    const noted = [
+      SIMPLE,
+      "Notes",
+      "Sample note with a date and a billing explanation",
+      "continued on a separate line",
+    ].join("\n");
+
+    const inv = parse("noted.pdf", noted);
+    expect(inv.lines).toHaveLength(2);
+    expect(inv.lines[1]!.description).toBe("Reporting");
+    expect(inv.notes).toBe(
+      "Sample note with a date and a billing explanation continued on a separate line"
+    );
+    expect(problems(inv)).toEqual([]);
+  });
+
+  it("reads a client list whose quoted fields contain newlines", () => {
+    /* Synthetic invoice fixtures preserve parser edge cases; keep source invoices and operational results outside Git. */
+    const csv = [
+      "Client Name,Address",
+      '"Example Client 09","Sample Person 08',
+      'Sample Person 02',
+      'Sample Person 11"',
+      '"Example Client 24","123 Example Avenue',
+      'Example City, ZZ 00000"',
+      "Example Health,",
+    ].join("\n");
+
+    expect(firstFields(csv).slice(1)).toEqual([
+      "Example Client 09",
+      "Example Client 24",
+      "Example Health",
+    ]);
   });
 
   it("holds money as integer cents, never as a float", () => {
