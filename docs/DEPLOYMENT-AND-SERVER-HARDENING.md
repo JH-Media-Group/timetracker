@@ -4,7 +4,7 @@
 
 **Staging deployed:** 2026-08-24
 
-**Staging last updated:** 2026-09-09 23:11 UTC
+**Staging last updated:** 2026-09-10 00:13 UTC
 
 **Production droplet:** `165.245.130.130`
 
@@ -19,6 +19,78 @@ restart unrelated services.
 The repeatable operating procedure now lives in
 `docs/DEPLOYMENT-RUNBOOK.md`. This file retains the deployment evidence and
 the broader shared-server maintenance plan.
+
+## Staging update: password reset and the handler harness, 2026-09-10
+
+Tally staging now runs source commit `cb82dab` as `tally:cb82dab` (image ID
+`sha256:c7f33f80f3dfbc1a606f67a334f0b1852fb7b4377a7a76396bceb57829a566ea`).
+
+Two things. `POST /api/v1/auth/forgot` had existed since auth was built, with
+constant-time responses, no enumeration channel and IP-keyed rate limiting, and
+nothing had ever called it: nobody could ask for a password reset link, and
+with Google SSO unconfigured a password is the only way in. `/forgot-password`
+is that screen, added to `ANONYMOUS_PAGES`, which is the one list the
+middleware, the layout, the shell and the timer all read.
+
+And `tests/support/route-harness.ts`, which calls a real route handler with a
+real session cookie and Origin, closing the seam `tests/route-reachability.test.ts`
+cannot see: a route that is called and ignores what it was sent.
+
+Update evidence:
+
+- The exact pushed source passed 62 test files and 866 tests, TypeScript,
+  palette validation, and a complete Linux production Docker build. The harness
+  is mutation-tested against the stop-route defect it was written for.
+- The live `auth/forgot` endpoint was verified before the screen was built: an
+  unknown address answers 200 with the neutral message in 0.30s and a malformed
+  one 422 in 0.28s, both above the 250ms floor that hides the difference.
+- The transferred 101,645,312-byte image tar has SHA-256
+  `4f4377b2540adb87bc35f88799937a7b53ce7da86b5a7bc0b1baaff3e7482823`, verified
+  for exact size and hash on the server before loading, with the loaded image
+  ID matching the local build.
+- Preflight recorded 17 containers, none unhealthy, 74 GB free disk and 2.8 GB
+  available memory, with external liveness and readiness at 200.
+- An isolated, unproxied candidate container reached healthy state, returned
+  200 from liveness and database readiness, kept every live security and
+  resource control, published no host port, carried no production network
+  alias, and was removed before the live update.
+- No schema changes. The isolated migration run left all 10 Drizzle and five
+  manual migrations unchanged.
+- The immediate pre-update dump is
+  `/var/backups/tally/tally-20260910T001123Z.dump`, SHA-256
+  `607f0235f52e7ddf84213ebdffd3753e63463d62f783aa3561a470fbd6ff1dd4`.
+- The post-update dump is
+  `/var/backups/tally/tally-20260910T001348Z.dump`, SHA-256
+  `04b18bb59b7fab0ef6bca0c6f571b0c07be34bfd00cf609168fdd7ff3ff8dd1a`.
+- Both dumps passed 329-line catalog checks and complete owner-preserving
+  scratch restores reconciling 58 users, 365 projects, [private record count] active time
+  entries, 10 Drizzle migrations, five manual migrations and the
+  `tally_staging` owner. Both scratch databases were removed and confirmed
+  gone.
+- The environment file changed by exactly one line, proven by identical
+  normalized SHA-256 values
+  (`23f3c489d254d4831fbc68727db0bc8a0879af8e22e04544565a0e980da086e8`).
+- Web and MCP were replaced separately with `--no-deps`, web proven healthy on
+  the new image while MCP still ran `tally:94342ca`. Both now run the exact
+  local image ID with zero restarts and no OOM events.
+- `/forgot-password` returns 200 without a session, confirming the middleware
+  took it from `ANONYMOUS_PAGES`, and the sign-in page carries the link.
+  External liveness, readiness and both OAuth discovery documents return 200,
+  MCP GET returns 405 and an unauthenticated POST 401, and all five security
+  headers remain present.
+- `/opt/tally/compose.yml` and `/opt/Caddyfile` retained their pre-deploy
+  hashes, the host and container Caddyfiles match, and Caddy was not reloaded.
+  A container diff against the pre-deploy baseline showed the two Tally lines
+  changed and nothing else across 17 containers, none unhealthy, with public
+  listeners unchanged.
+- All four Tally timers remain active, a manual mail run succeeded, web and MCP
+  logs contain no error line since the deployment, and root SSH remains enabled
+  with effective `permitrootlogin yes`.
+
+Rollback and evidence material is under `/opt/tally/artifacts/deploy-cb82dab`,
+the image tar is `/opt/tally/artifacts/tally-cb82dab.tar`, and the previous
+`tally:94342ca` image remains loaded. This application-only update requires no
+database restore for rollback.
 
 ## Staging update: the route-reachability guard, 2026-09-09
 
