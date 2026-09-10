@@ -33,7 +33,8 @@
     "harvest:invoices": "tsx scripts/harvest-invoices.mts",
     "harvest:reconcile": "tsx scripts/harvest-reconcile.mts",
     "sweep": "tsx scripts/sweep.mts",
-    "invite:link": "tsx scripts/invite-link.mts"
+    "invite:link": "tsx scripts/invite-link.mts",
+    "harvest:api": "tsx scripts/harvest-api.mts"
   },
   "dependencies": {
     "@node-rs/argon2": "^2.1.0",
