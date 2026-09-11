@@ -35,6 +35,7 @@
     "sweep": "tsx scripts/sweep.mts",
     "invite:link": "tsx scripts/invite-link.mts",
     "harvest:api": "tsx scripts/harvest-api.mts",
+    "harvest:time": "tsx scripts/harvest-time.mts",
     "harvest:invoice-import": "tsx scripts/harvest-invoice-import.mts"
   },
   "dependencies": {

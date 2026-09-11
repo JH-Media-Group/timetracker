@@ -17,13 +17,21 @@ import { describe, expect, it } from "vitest";
 import { withoutComments } from "./support/client-surface";
 import { cents } from "../scripts/harvest-api.mts";
 
-const SCRIPT = join(process.cwd(), "scripts/harvest-api.mts");
-const source = readFileSync(SCRIPT, "utf8");
-/* The comments describe at length the writes it refuses to do. The check is
-   about code. */
-const code = withoutComments(source);
+/*
+  Both readers, held to the same rule.
 
-describe("the Harvest API reader", () => {
+  `harvest-time.mts` came later and reads the time record rather than the
+  billing record, through the same API with the same token. Writing the checks
+  against one file and trusting the second to be similar is how the second one
+  ends up with a second fetch call site nobody audited.
+*/
+const READERS = ["scripts/harvest-api.mts", "scripts/harvest-time.mts"] as const;
+
+describe.each(READERS)("%s, as a read-only client", (script) => {
+  /* The comments describe at length the writes it refuses to do. The check is
+     about code. */
+  const code = withoutComments(readFileSync(join(process.cwd(), script), "utf8"));
+
   it("issues no request that could change anything", () => {
     const forbidden = [
       { pattern: /method:\s*["'`](?!GET)/gi, what: "a non-GET method" },
@@ -52,7 +60,7 @@ describe("the Harvest API reader", () => {
   });
 
   it("takes its credentials from the environment and nowhere else", () => {
-    expect(code).toMatch(/process\.env\.HARVEST_ACCESS_TOKEN/);
+    expect(code).toMatch(/process\.env\.HARVEST_(ACCESS_)?TOKEN/);
     expect(code).toMatch(/process\.env\.HARVEST_ACCOUNT_ID/);
 
     // Not from an argument: those persist in shell history.
@@ -76,9 +84,12 @@ describe("the Harvest API reader", () => {
   it("refuses to run at all without credentials", () => {
     // Not a warning and not a partial run: an unauthenticated request to this
     // API answers 401 for every call and burns the rate limit doing it.
-    expect(code).toMatch(/if\s*\(!ACCOUNT_ID\s*\|\|\s*!TOKEN\)/);
+    expect(code).toMatch(/if\s*\(!(ACCOUNT_ID|TOKEN)\s*\|\|\s*!(ACCOUNT_ID|TOKEN)\)/);
   });
 
+});
+
+describe("the Harvest API reader", () => {
   it("converts money to integer cents, rounding rather than truncating", () => {
     /*
       Harvest sends dollars as a JSON number. Truncating turns a value that
