@@ -107,7 +107,7 @@ export function InviteDialog({
     */
     mutationFn: async (
       submitted: { startedAt: number; userId: string; email: boolean; link: boolean }
-    ): Promise<{ queued: boolean; outcome: InviteOutcome }> => {
+    ): Promise<{ queued: boolean; emailed: boolean; outcome: InviteOutcome }> => {
       const { startedAt } = submitted;
       let result;
       try {
@@ -121,14 +121,15 @@ export function InviteDialog({
           failure. Letting it through showed a danger toast naming whoever is
           on screen now, about a request made for somebody else.
         */
-        if (startedAt !== generation.current) return { queued: false, outcome: "stale" };
+        if (startedAt !== generation.current)
+          return { queued: false, emailed: submitted.email, outcome: "stale" };
         throw error;
       }
-      const outcome = outcomeOf(result, startedAt, generation.current);
+      const outcome = outcomeOf(result, { email: submitted.email }, startedAt, generation.current);
       if (outcome === "link") setLink(result.link!);
-      return { queued: result.queued, outcome };
+      return { queued: result.queued, emailed: submitted.email, outcome };
     },
-    onSuccess: ({ queued, outcome }) => {
+    onSuccess: ({ queued, emailed, outcome }) => {
       // A response belonging to an earlier opening says nothing about the one
       // on screen now. It must not toast about the person currently shown and
       // must not close the dialog out from under them.
@@ -138,6 +139,29 @@ export function InviteDialog({
         // Stay open: the link is the reason they are here and it is not
         // recoverable once this closes.
         if (queued) toast.push({ tone: "success", title: `Invitation queued for ${email}.` });
+        // Asked for the email as well and the queue could not take it. The link
+        // below is now the whole invitation, and they need to know that before
+        // they close this and wait for a message that is not coming.
+        else if (emailed)
+          toast.push({
+            tone: "warning",
+            title: `Nothing was emailed to ${email}: mail is not configured yet. The link below is the invitation.`,
+          });
+        return;
+      }
+
+      /*
+        Email only, and the queue will not deliver it.
+
+        Stay open rather than closing on a success toast that is not true. The
+        invitation has been minted and any earlier one is spent, so the useful
+        thing to say is that the link checkbox is the way to get it to them.
+      */
+      if (outcome === "undelivered") {
+        toast.push({
+          tone: "warning",
+          title: `Mail is not configured, so nothing was sent to ${email}. Tick "Create a link" to hand it over yourself.`,
+        });
         return;
       }
 

@@ -87,9 +87,9 @@ describe("the invitation UI", () => {
       hands it straight to component state and the mutation returns booleans.
       There is one copy, in one place, and the close path clears it.
     */
-    expect(dialog, "the link must not be part of the mutation's data").toContain(
-      "Promise<{ queued: boolean; outcome: InviteOutcome }>"
-    );
+    const returned = dialog.match(/Promise<\{[^}]*outcome: InviteOutcome \}>/)?.[0];
+    expect(returned, "the mutation declares what it resolves to").toBeTruthy();
+    expect(returned, "the link must not be part of the mutation's data").not.toMatch(/link/);
     expect(dialog, "setLink happens in the request, not from cached data").toMatch(
       /if \(outcome === "link"\) setLink\(result\.link!\)/
     );
@@ -110,14 +110,16 @@ describe("the invitation UI", () => {
     are assertions about behaviour.
   */
   describe("a response that outlived its opening of the dialog", () => {
+    const asked = { email: true };
+
     it("is stale, whatever it came back with", () => {
-      expect(outcomeOf({ link: "https://x/set-password?token=abc" }, 1, 2)).toBe("stale");
-      expect(outcomeOf({}, 1, 2)).toBe("stale");
+      expect(outcomeOf({ link: "https://x/set-password?token=abc", queued: true }, asked, 1, 2)).toBe("stale");
+      expect(outcomeOf({ queued: true }, asked, 1, 2)).toBe("stale");
     });
 
     it("is acted on when it is still the current opening", () => {
-      expect(outcomeOf({ link: "https://x/set-password?token=abc" }, 3, 3)).toBe("link");
-      expect(outcomeOf({}, 3, 3)).toBe("queued");
+      expect(outcomeOf({ link: "https://x/set-password?token=abc", queued: true }, asked, 3, 3)).toBe("link");
+      expect(outcomeOf({ queued: true }, asked, 3, 3)).toBe("queued");
     });
 
     it("is ignored by the success handler rather than treated as a plain invite", () => {
@@ -129,7 +131,42 @@ describe("the invitation UI", () => {
     it("is ignored on the error path too", () => {
       // A stale failure would otherwise show a danger toast naming the wrong
       // person, about a request made for somebody else.
-      expect(dialog).toMatch(/if \(startedAt !== generation\.current\) return \{ queued: false, outcome: "stale" \}/);
+      expect(dialog).toMatch(/if \(startedAt !== generation\.current\)\s*\n?\s*return \{ queued: false, emailed: submitted\.email, outcome: "stale" \}/);
+    });
+  });
+
+  /*
+    An invitation nothing can deliver is not a queued invitation.
+
+    The server reports what the queue accepted. With no transport configured
+    the row is written `not_configured` and never sends, and the act has
+    already spent whatever invitation the person was holding, so "Invitation
+    queued" is the one thing the screen must not say.
+  */
+  describe("an email the queue cannot take", () => {
+    it("is a distinct outcome, not a success", () => {
+      expect(outcomeOf({ queued: false }, { email: true }, 1, 1)).toBe("undelivered");
+    });
+
+    it("does not fire when no email was asked for", () => {
+      // Link-only never queues anything, so `queued: false` is the normal case
+      // and says nothing about the transport.
+      expect(outcomeOf({ link: "https://x/set-password?token=abc", queued: false }, { email: false }, 1, 1)).toBe("link");
+    });
+
+    it("never costs the person the link they asked for", () => {
+      // Both channels, mail unconfigured: the link is the whole invitation now
+      // and dropping it to show a warning would be the worse failure.
+      expect(outcomeOf({ link: "https://x/set-password?token=abc", queued: false }, { email: true }, 1, 1)).toBe("link");
+    });
+
+    it("keeps the dialog open and says what to do instead", () => {
+      const branch = dialog.match(/if \(outcome === "undelivered"\) \{([\s\S]*?)\n      \}/)?.[1];
+      expect(branch, "the outcome is handled on its own terms").toBeTruthy();
+      expect(branch, "says what happened").toMatch(/mail is not configured/i);
+      expect(branch, "and how to get the invitation to them").toMatch(/link/i);
+      expect(branch, "closing on a warning hides it").not.toMatch(/onOpenChange\(false\)/);
+      expect(branch, "and it must not fall through to the success toast").toMatch(/return;/);
     });
   });
 

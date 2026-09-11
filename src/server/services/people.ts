@@ -260,7 +260,36 @@ export async function updateUser(ctx: Ctx, id: string, input: UserInput): Promis
   const patch: Record<string, unknown> = { updatedAt: ctx.now() };
   if (input.firstName !== undefined) patch.firstName = input.firstName.trim();
   if (input.lastName !== undefined) patch.lastName = input.lastName.trim();
-  if (input.email !== undefined) patch.email = input.email.trim().toLowerCase();
+  if (input.email !== undefined) {
+    const next = input.email.trim().toLowerCase();
+    /*
+      MOVING WHERE CREDENTIALS ARE DELIVERED IS NOT AN AUTOMATABLE EDIT.
+
+      `inviteUser` refuses to hand a bearer token a link, and the rank checks
+      above stop a token reaching an account stronger than itself. Neither
+      covers the address on the account, and the self-edit exemption three
+      blocks up is there on purpose: editing your own row skips the owner guard
+      and the rank check, because that is how somebody maintains their own
+      account.
+
+      Put together, an API token could change its own owner's email to an
+      address the holder controls, ask for the invitation to be emailed (the
+      channel a token is still allowed), collect the credential there, choose a
+      password, and sign in holding every permission that person has rather
+      than the few the token was scoped to. The owner's row is the worst case
+      and the easiest one, because it holds everything by definition.
+
+      So the email field is restricted the way the link channel is: a session or
+      the system, never a token. This is the address the account is recovered
+      through, and a token is deliberately narrower than the person who made it.
+    */
+    if (next !== before.email.trim().toLowerCase() && ctx.actor.kind !== "user" && ctx.actor.kind !== "system") {
+      throw forbidden(
+        "An email address can only be changed while signed in. An API token cannot move where an account's credentials are delivered."
+      );
+    }
+    patch.email = next;
+  }
   if (input.timezone !== undefined) patch.timezone = input.timezone;
   if (input.weeklyCapacitySeconds !== undefined) {
     if (input.weeklyCapacitySeconds < 0 || input.weeklyCapacitySeconds > 168 * 3600) {

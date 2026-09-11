@@ -655,7 +655,22 @@ async function peekBody(req: NextRequest): Promise<string> {
           chunks.push(value);
         }
       } finally {
-        if (over) await reader.cancel().catch(() => {});
+        /*
+          Cancelled, and deliberately not awaited.
+
+          This reads `req.clone().body`, and cloning a request tees the stream:
+          the original keeps one branch and the clone gets the other. A tee
+          only cancels its source once **both** branches are done with it, so
+          the promise `cancel()` returns here does not settle until the branch
+          the handler owns is also finished. The handler never runs, because
+          this throws. Awaiting it is a request that hangs until the connection
+          dies instead of a 400, which is worse than the oversized body it was
+          added to refuse.
+
+          Nothing needs the result: the bytes are being discarded either way,
+          and the `catch` is there so a rejection is not unhandled.
+        */
+        if (over) void reader.cancel().catch(() => {});
         else reader.releaseLock();
       }
       if (over) throw tooBig();

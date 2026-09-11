@@ -24,15 +24,29 @@
  *
  * So staleness is an outcome in its own right rather than an absence of one,
  * and the caller has to say what it does about it.
+ *
+ * AND "QUEUED" IS A CLAIM ABOUT THE QUEUE, NOT ABOUT THE REQUEST
+ *
+ * The server reports whether the message was accepted for delivery. With no
+ * transport configured the row is written `not_configured` and nothing will
+ * ever send it, so an email-only invite in that state has spent the person's
+ * outstanding invitation and delivered nothing. That is a fourth outcome, not
+ * a variety of success: the screen has to say so, and the way out is to take a
+ * link instead, which is one checkbox away.
+ *
+ * A link that was asked for still wins. It is the credential, it is on screen
+ * once, and a warning about the email is no reason to drop it.
  */
 
-export type InviteOutcome = "stale" | "link" | "queued";
+export type InviteOutcome = "stale" | "link" | "queued" | "undelivered";
 
 export function outcomeOf(
-  result: { link?: string },
+  result: { link?: string; queued: boolean },
+  asked: { email: boolean },
   startedAt: number,
   now: number
 ): InviteOutcome {
   if (startedAt !== now) return "stale";
-  return result.link ? "link" : "queued";
+  if (result.link) return "link";
+  return asked.email && !result.queued ? "undelivered" : "queued";
 }

@@ -17,7 +17,7 @@ import { Button } from "./primitives";
 export interface Toast {
   id: string;
   title: React.ReactNode;
-  tone?: "default" | "success" | "danger";
+  tone?: "default" | "success" | "warning" | "danger";
   undo?: () => void;
   duration?: number;
 }
@@ -74,7 +74,10 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
           <div key={t.id} className={cn(toastClass)} role="status">
             <span
               className={cn("mt-1.5 size-2 shrink-0 rounded-full",
-                t.tone === "success" ? "bg-success" : t.tone === "danger" ? "bg-danger" : "bg-ink-tertiary")}
+                t.tone === "success" ? "bg-success"
+                  : t.tone === "warning" ? "bg-warning"
+                  : t.tone === "danger" ? "bg-danger"
+                  : "bg-ink-tertiary")}
               aria-hidden
             />
             <div className="min-w-0 flex-1 text-base text-ink">{t.title}</div>

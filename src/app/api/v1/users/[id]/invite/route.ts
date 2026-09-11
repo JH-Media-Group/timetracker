@@ -95,8 +95,16 @@ async function readCapped(req: Request, limit: number): Promise<string> {
       discards the rest and lets the runtime close it. The earlier version
       released and claimed in a comment that this was the careful thing to do,
       which was exactly backwards.
+
+      Not awaited, though, and that part matters here more than it looks. Send
+      this endpoint an `Idempotency-Key` and the shared seam clones the request
+      to hash it, which tees the body; a tee cancels its source only when both
+      branches are done, and the other branch closed when the seam finished
+      reading it. The returned promise then never settles. Awaiting it turned a
+      422 into a request that hung, on the one endpoint whose cap is small
+      enough to be crossed by an ordinary mistake.
     */
-    if (over) await reader.cancel().catch(() => {});
+    if (over) void reader.cancel().catch(() => {});
     else reader.releaseLock();
   }
 

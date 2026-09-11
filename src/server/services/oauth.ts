@@ -4,7 +4,7 @@ import type { Ctx } from "@/server/ctx";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
 import { TOKEN_SCOPES } from "./api-keys";
-import { validationFailed } from "@/server/errors";
+import { forbidden, validationFailed } from "@/server/errors";
 import { db } from "@/server/db/client";
 
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
@@ -42,7 +42,25 @@ export async function oauthRequest(ctx: Ctx, input: { clientId: string; redirect
   return { clientName: client.clientName, scopes: scopes(input.scope) };
 }
 
+/**
+ * CONSENT IS GIVEN BY A PERSON. A TOKEN CANNOT GIVE IT TO ITSELF.
+ *
+ * This is the other door into the same escalation `createApiToken` closed. The
+ * exchange below inserts straight into `api_tokens` with whatever scopes the
+ * code carries, so it never passes the check that made token creation refuse a
+ * token. Without this line a bearer limited to `tally.time.write` can register
+ * a client through public dynamic registration, approve `tally.admin` for
+ * itself, exchange the code with the PKCE verifier it chose, and hold a wider
+ * token resolving against its owner's full permissions. No second account, no
+ * interactive step, no race: three requests it is allowed to make.
+ *
+ * Every legitimate caller is a browser session on `/oauth/authorize`, which is
+ * `kind: "user"`. There is no system path: consent by definition has somebody
+ * consenting, so this refuses everything else rather than making an exception
+ * nothing needs.
+ */
 export async function approveOAuth(ctx: Ctx, input: { clientId: string; redirectUri: string; scope: string; codeChallenge: string; state?: string; approved: boolean }) {
+  if (ctx.actor.kind !== "user") throw forbidden("Authorising an application has to be done while signed in.");
   await oauthRequest(ctx, input);
   const target = new URL(input.redirectUri);
   if (!input.approved) { target.searchParams.set("error", "access_denied"); if (input.state) target.searchParams.set("state", input.state); return { redirectTo: target.toString() }; }

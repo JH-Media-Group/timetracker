@@ -90,7 +90,7 @@ async function issue(
   purpose: TokenPurpose,
   createdBy: string | null,
   { sendEmail = true, returnLink = false }: { sendEmail?: boolean; returnLink?: boolean } = {}
-): Promise<{ link?: string; tokenId: string }> {
+): Promise<{ link?: string; tokenId: string; queued: boolean }> {
   const token = mintToken();
   const tokenId = newId();
 
@@ -156,8 +156,21 @@ async function issue(
     sitting in the outbox until mail is configured and then arriving weeks
     later about an invite that was handed over in person and used the same day.
   */
+  /*
+    And what comes back is whether it can actually be delivered, not whether
+    one was asked for.
+
+    `queueMail` writes the row `not_configured` rather than `queued` when no
+    transport exists, which is the honest thing to store, and this function then
+    threw the answer away: the caller reported `queued: email`, the flag the
+    request had set, so the screen said "Invitation queued" for a message
+    nothing can send. The supersede above had already spent whatever invitation
+    was outstanding, so the button destroyed a live credential and reported
+    success.
+  */
+  let queued = false;
   if (sendEmail) {
-    await queueMail(ctx, {
+    const mail = await queueMail(ctx, {
       kind: purpose === "invite" ? "invite" : "password_reset",
       to: user.email,
       subject: copy.subject,
@@ -166,6 +179,7 @@ async function issue(
       relatedId: user.id,
       userId: user.id,
     });
+    queued = mail.queued;
   }
 
   /*
@@ -177,7 +191,7 @@ async function issue(
     returns. A default that hands back a reset credential is the thing the
     comment above is about: harmless today, one careless caller from not being.
   */
-  return returnLink ? { link, tokenId } : { tokenId };
+  return returnLink ? { link, tokenId, queued } : { tokenId, queued };
 }
 
 /**
@@ -447,12 +461,16 @@ export async function inviteUser(
     action: "user.invited",
     entityType: "user",
     entityId: user.id,
-    after: { emailed: email, linkTaken: link, tokenId: issued.tokenId },
+    after: { emailed: email, linkTaken: link, tokenId: issued.tokenId, queued: issued.queued },
   });
 
   // Present only when asked for. A caller that did not request a link must not
   // be handed one by a change to this function's shape.
-  return link ? { queued: email, link: issued.link } : { queued: email };
+  //
+  // `queued` is what the queue actually accepted, not what was asked for. An
+  // email-only invite with no transport configured comes back `false`, and the
+  // screen says so rather than claiming an invitation is on its way.
+  return link ? { queued: issued.queued, link: issued.link } : { queued: issued.queued };
 }
 
 /**

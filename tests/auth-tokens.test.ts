@@ -280,12 +280,12 @@ describe("what a bearer token may do", () => {
     password, and sign in holding every permission that person has rather than
     the few the token was given.
   */
-  const bearer = (userId: string) =>
+  const bearer = (userId: string, capabilities: string[] = ["people:manage"]) =>
     ({
       db,
       audit: () => {},
       now: () => new Date(),
-      actor: { userId, kind: "api", tokenPrefix: "tal_test", capabilities: new Set(["people:manage"]) },
+      actor: { userId, kind: "api", tokenPrefix: "tal_test", capabilities: new Set(capabilities) },
     }) as never;
 
   it("refuses to hand a link to a bearer token", async () => {
@@ -320,6 +320,51 @@ describe("what a bearer token may do", () => {
     const result = await inviteUser(bearer(caller), target, { email: true, link: false });
     expect(result.queued).toBe(true);
     expect(result.link).toBeUndefined();
+  });
+
+  it("refuses to let a token move the address an invitation is delivered to", async () => {
+    /*
+      The email channel stays open to tokens, so the remaining question is
+      where that email goes. Editing your own row is exempt from the owner
+      guard and the rank check on purpose, because it is how somebody
+      maintains their own account, and a token acts as its owner.
+
+      So without this: point the owner's address at an inbox you control, ask
+      for the invitation to be emailed, collect it, choose a password, and sign
+      in holding every permission that person has rather than the handful the
+      token was scoped to. The link refusal alone does not cover it.
+    */
+    const caller = await makeUser({
+      profileId: await makeProfile("bearer-email-change", ["people:manage"]),
+      email: `owner-${newId()}@example.test`,
+    });
+    const [before] = await db.select().from(s.users).where(eq(s.users.id, caller));
+
+    await expect(
+      updateUser(bearer(caller), caller, { email: `attacker-${newId()}@example.test` })
+    ).rejects.toThrow(/only be changed while signed in/i);
+
+    const [after] = await db.select().from(s.users).where(eq(s.users.id, caller));
+    expect(after!.email, "a refused edit must not have landed").toBe(before!.email);
+  });
+
+  it("still lets a token save a person whose address it is not changing", async () => {
+    // The guard is on moving the address, not on touching a record that has
+    // one. Automation that corrects a name keeps working.
+    const target = await makeUser({ profileId: await makeProfile("bearer-rename", []), email: `keep-${newId()}@example.test` });
+    const caller = await makeUser({ profileId: await makeProfile("bearer-rename-caller", ["people:manage", "people:view"]) });
+    const [before] = await db.select().from(s.users).where(eq(s.users.id, target));
+
+    await expect(
+      updateUser(bearer(caller, ["people:manage", "people:view"]), target, {
+        firstName: "Renamed",
+        email: before!.email.toUpperCase(),
+      })
+    ).resolves.toBeTruthy();
+
+    const [after] = await db.select().from(s.users).where(eq(s.users.id, target));
+    expect(after!.firstName).toBe("Renamed");
+    expect(after!.email, "same address, normalised").toBe(before!.email);
   });
 });
 

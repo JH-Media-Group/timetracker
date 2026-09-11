@@ -85,6 +85,29 @@ describe("OAuth authorization code with PKCE", () => {
     expect((await resolveApiToken(token.access_token))!.scopes).toEqual(["tally.read", "tally.time.write"]);
     await expect(exchangeOAuthCode(ctx(), { code, clientId: client.client_id, redirectUri: client.redirect_uris[0]!, codeVerifier: verifier })).rejects.toMatchObject({ oauthCode: "invalid_grant" });
   });
+  it("cannot be consented to by a token, which is the other door into minting a wide one", async () => {
+    /*
+      Closing `createApiToken` to tokens left this open, and it reaches the same
+      place by a longer road: the exchange inserts straight into `api_tokens`
+      with the scopes on the code, so it never passes that check at all.
+
+      Three requests a narrow token is allowed to make. Register a client
+      (public dynamic registration), approve `tally.admin` for itself, exchange
+      the code with the verifier it chose. Consent is something a person gives.
+    */
+    const narrow = await createApiToken(ctx(), { label: "Narrow", scopes: ["tally.time.write"] });
+    const asToken = createCtx({ actor: (await resolveApiToken(narrow.token))!.actor });
+
+    const client = await registerOAuthClient(asToken, { redirect_uris: ["http://127.0.0.1:4567/callback"] });
+    const verifier = "w".repeat(64), codeChallenge = createHash("sha256").update(verifier).digest("base64url");
+    await expect(
+      approveOAuth(asToken, { clientId: client.client_id, redirectUri: client.redirect_uris[0]!, scope: "tally.admin", codeChallenge, approved: true })
+    ).rejects.toThrow(/signed in/i);
+
+    // No code to exchange, so no wider token exists to be resolved.
+    expect(await db.select().from(s.oauthAuthorizationCodes)).toHaveLength(0);
+    expect(await db.select().from(s.apiTokens)).toHaveLength(1);
+  });
   it("declining creates no authorization code or token", async () => {
     const client = await registerOAuthClient(ctx(), { redirect_uris: ["http://localhost:9876/cb"] });
     const result = await approveOAuth(ctx(), { clientId: client.client_id, redirectUri: client.redirect_uris[0]!, scope: "tally.read", codeChallenge: "x".repeat(43), approved: false });
