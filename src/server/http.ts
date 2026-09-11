@@ -600,48 +600,75 @@ const bodyCache = new WeakMap<NextRequest, string>();
 /**
  * The most this will buffer to hash a body for idempotency.
  *
- * Generous next to any real request here and finite, which is the point. This
- * runs before the handler, so a route's own limit cannot protect it: the
- * invite endpoint caps its body at four kilobytes by counting bytes off the
- * stream, and sending an Idempotency-Key made this clone and buffer the whole
- * thing first, defeating the cap through the shared seam rather than the
- * route. A limit that any caller can step around by adding a header is not a
- * limit.
+ * Bounded, and high enough not to refuse work the schemas accept. This runs
+ * before the handler, so a route's own limit cannot protect it: the invite
+ * endpoint caps its body by counting bytes off the stream, and sending an
+ * Idempotency-Key made this clone and buffer the whole thing first. A limit
+ * any caller can step around by adding a header is not a limit.
+ *
+ * Eight megabytes rather than one. One was picked for the invite endpoint's
+ * two booleans and turned out to sit under payloads the invoice schemas allow:
+ * ten thousand characters of notes plus line items, escaped, reaches past a
+ * megabyte and a half, and both invoice creation routes require an
+ * Idempotency-Key, so there is no way for a caller to opt out of the check.
+ * A cap that rejects valid work is a worse defect than the one it prevents.
  */
-const MAX_IDEMPOTENCY_BODY_BYTES = 1_000_000;
+const MAX_IDEMPOTENCY_BODY_BYTES = 8_000_000;
 
 async function peekBody(req: NextRequest): Promise<string> {
   const cached = bodyCache.get(req);
   if (cached != null) return cached;
 
+  const tooBig = () =>
+    new AppError("validation_failed", "That request body is too large to use with an Idempotency-Key.");
+
+  // A declared length over the cap costs nothing to refuse.
   const declared = Number(req.headers.get("content-length"));
-  if (Number.isFinite(declared) && declared > MAX_IDEMPOTENCY_BODY_BYTES) {
-    throw new AppError(
-      "validation_failed",
-      "That request body is too large to use with an Idempotency-Key."
-    );
-  }
+  if (Number.isFinite(declared) && declared > MAX_IDEMPOTENCY_BODY_BYTES) throw tooBig();
 
   let text: string;
   try {
-    text = await req.clone().text();
+    /*
+      Counted while reading rather than measured afterwards.
+
+      `await req.clone().text()` buffers the whole body and only then allows a
+      check, which bounds nothing: a chunked request declares no length, so the
+      first version of this cap read every byte of a two-megabyte probe before
+      refusing it. Reading the stream and stopping at the limit is the only
+      version that actually bounds memory, and the oversized stream is
+      cancelled rather than left half-read.
+    */
+    const body = req.clone().body;
+    if (!body) {
+      text = "";
+    } else {
+      const reader = body.getReader();
+      const chunks: Uint8Array[] = [];
+      let total = 0;
+      let over = false;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          total += value.byteLength;
+          if (total > MAX_IDEMPOTENCY_BODY_BYTES) { over = true; break; }
+          chunks.push(value);
+        }
+      } finally {
+        if (over) await reader.cancel().catch(() => {});
+        else reader.releaseLock();
+      }
+      if (over) throw tooBig();
+      // Decoded once over the joined bytes, so a character split across two
+      // chunks survives.
+      text = new TextDecoder().decode(Buffer.concat(chunks));
+    }
   } catch (e) {
+    if (e instanceof AppError) throw e;
     throw new AppError(
       "internal_error",
       "Could not read the request body for idempotency. Retry without the Idempotency-Key header.",
       { meta: { cause: String(e) } }
-    );
-  }
-  /*
-    Checked again after reading, because a chunked request declares no length
-    and that is the shape this was reachable through. Byte length, not string
-    length: the latter counts UTF-16 units and undercounts every multi-byte
-    character, which is the same mistake an earlier round made in the route.
-  */
-  if (Buffer.byteLength(text, "utf8") > MAX_IDEMPOTENCY_BODY_BYTES) {
-    throw new AppError(
-      "validation_failed",
-      "That request body is too large to use with an Idempotency-Key."
     );
   }
 

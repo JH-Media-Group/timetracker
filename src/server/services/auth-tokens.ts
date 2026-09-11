@@ -343,6 +343,29 @@ export async function inviteUser(
   }
 
   /*
+    A BEARER TOKEN MAY SEND AN INVITE. IT MAY NOT BE HANDED ONE.
+
+    The two channels are not equally dangerous to automate. Emailing puts the
+    credential in the account's own inbox, which no API caller gains anything
+    from. Returning it hands a readable credential to whoever holds the token,
+    and a token is deliberately narrower than the person who made it.
+
+    That is an escalation and it does not even need a second account: self-
+    invite is exempt from the rank rules, on purpose, because it is how
+    somebody recovers their own account. So a scoped token could ask for a link
+    for its own owner, redeem it, set a password, and sign in holding every
+    permission that person has rather than the few the token was given. No
+    race, no stolen key, no second user.
+
+    Sessions keep both channels, because a session already is the person.
+  */
+  if (link && ctx.actor.kind !== "user" && ctx.actor.kind !== "system") {
+    throw forbidden(
+      "A link can only be created while signed in. An API token can send the invitation by email."
+    );
+  }
+
+  /*
     Locked and read in one statement, and everything below decided from what it
     returned.
 

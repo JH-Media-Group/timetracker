@@ -97,7 +97,9 @@ const ctxFor = (userId: string) =>
   ({
     db,
     audit: () => {},
-    actor: { userId, capabilities: new Set(["people:manage"]) },
+    //  matters now: a link may only be handed to a signed-in person or
+    // the system, never to a bearer token.
+    actor: { userId, kind: "user", capabilities: new Set(["people:manage"]) },
   }) as never;
 
 beforeEach(async () => {
@@ -250,7 +252,7 @@ describe("inviteUser", () => {
     const ctx = {
       db,
       audit: (row: { action: string; after?: unknown }) => rows.push(row),
-      actor: { userId: id, capabilities: new Set(["people:manage"]) },
+      actor: { userId: id, kind: "user", capabilities: new Set(["people:manage"]) },
     } as never;
 
     await inviteUser(ctx, id, { email: false, link: true });
@@ -262,6 +264,62 @@ describe("inviteUser", () => {
     // The token id is what joins this row to the moment the link was spent.
     // Without it the two ends of the story can only be guessed at by timestamp.
     expect(after.tokenId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
+
+describe("what a bearer token may do", () => {
+  /*
+    The two channels are not equally dangerous to automate. Emailing puts the
+    credential in the account's own inbox, which an API caller gains nothing
+    from. Returning it hands a readable credential to whoever holds the token,
+    and a token is deliberately narrower than the person who made it.
+
+    The escalation needs no second account: self-invite is exempt from the rank
+    rules on purpose, because it is how somebody recovers their own account. So
+    a scoped token could ask for a link for its own owner, redeem it, set a
+    password, and sign in holding every permission that person has rather than
+    the few the token was given.
+  */
+  const bearer = (userId: string) =>
+    ({
+      db,
+      audit: () => {},
+      now: () => new Date(),
+      actor: { userId, kind: "api", tokenPrefix: "tal_test", capabilities: new Set(["people:manage"]) },
+    }) as never;
+
+  it("refuses to hand a link to a bearer token", async () => {
+    const ordinary = await makeProfile("bearer-target", []);
+    const target = await makeUser({ profileId: ordinary });
+    const caller = await makeUser({ profileId: await makeProfile("bearer-caller", ["people:manage"]) });
+
+    await expect(
+      inviteUser(bearer(caller), target, { email: false, link: true })
+    ).rejects.toThrow(/only be created while signed in/i);
+
+    const tokens = await db.select().from(s.authTokens).where(eq(s.authTokens.userId, target));
+    expect(tokens, "a refused request must not have minted anything").toHaveLength(0);
+  });
+
+  it("refuses even for a self-invite, which is the escalation", async () => {
+    // Self-invite skips the rank rules, so this is the one that turns a narrow
+    // token into its owner's whole account.
+    const caller = await makeUser({ profileId: await makeProfile("bearer-self", ["people:manage"]) });
+    await expect(
+      inviteUser(bearer(caller), caller, { email: false, link: true })
+    ).rejects.toThrow(/only be created while signed in/i);
+  });
+
+  it("still lets a bearer token send the invitation by email", async () => {
+    // Automation that onboards people keeps working; it just cannot read the
+    // credential it creates.
+    const ordinary = await makeProfile("bearer-email", []);
+    const target = await makeUser({ profileId: ordinary });
+    const caller = await makeUser({ profileId: await makeProfile("bearer-email-caller", ["people:manage"]) });
+
+    const result = await inviteUser(bearer(caller), target, { email: true, link: false });
+    expect(result.queued).toBe(true);
+    expect(result.link).toBeUndefined();
   });
 });
 

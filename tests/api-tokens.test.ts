@@ -13,6 +13,31 @@ beforeEach(async () => { await resetDb(); profiles = await seedProfiles(); userI
 afterAll(closeDb);
 
 describe("personal API tokens", () => {
+  it("cannot be created by another token, only by a signed-in person", async () => {
+    /*
+      Scope names were validated and never compared against the caller's own,
+      and this route carries no capability at all, so any live token could ask
+      for every scope and receive one. A `tally.time.write` token minted a
+      `tally.admin` token, which resolves against its owner's full permissions:
+      people management, cost rates, and a set-password link for anybody.
+
+      Scoping a token meant nothing while the first thing a narrow token could
+      do was ask for a wide one. Minting a credential is an interactive act.
+    */
+    const narrow = await createApiToken(ctx(), { label: "Narrow", scopes: ["tally.time.write"] });
+    const resolved = await resolveApiToken(narrow.token);
+    expect(resolved, "the narrow token resolves").toBeTruthy();
+
+    const asToken = createCtx({ actor: resolved!.actor });
+    await expect(
+      createApiToken(asToken, { label: "Escalated", scopes: [...TOKEN_SCOPES] })
+    ).rejects.toThrow(/only be created while signed in/i);
+
+    // And nothing was written.
+    const rows = await db.select().from(s.apiTokens);
+    expect(rows).toHaveLength(1);
+  });
+
   it("requires separate consent for sensitive financial reads", () => {
     const sensitive = ["invoice:view", "report:view_financial", "rates:view_billable", "rates:view_cost", "audit:view"];
     expect(SCOPE_GROUPS["tally.read"]).not.toEqual(expect.arrayContaining(sensitive));

@@ -24,7 +24,7 @@ import type { Actor, Ctx } from "@/server/ctx";
 import { db } from "@/server/db/client";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
-import { AppError, notFound } from "@/server/errors";
+import { AppError, forbidden, notFound } from "@/server/errors";
 import type { Capability } from "@/server/auth/capabilities";
 export { TOKEN_SCOPES, SCOPE_LABELS, type TokenScope } from "@/lib/api-token-scopes";
 import { TOKEN_SCOPES, type TokenScope } from "@/lib/api-token-scopes";
@@ -156,6 +156,29 @@ export async function createApiToken(
     throw new AppError("validation_failed", "A label is required.", {
       fieldErrors: { label: ["Required"] },
     });
+  }
+
+  /*
+    A CREDENTIAL MAY NOT MINT A STRONGER CREDENTIAL.
+
+    Scope names were validated and never compared against the caller's own, and
+    this route carries no capability at all, so any live token could post here
+    asking for every scope and receive one. A `tally.time.write` token minted a
+    `tally.admin` token, which resolves against its owner's full permissions:
+    people management, cost rates, and a set-password link for anybody. Scoping
+    a token meant nothing, because the first thing a narrow token could do was
+    ask for a wide one.
+
+    Minting a credential is an interactive act. From a browser session the
+    person is present and authenticated; from a bearer token nobody is, and the
+    only safe answer is the one that cannot escalate. A token that needs wider
+    reach is a token somebody signs in and issues.
+  */
+  if (ctx.actor.kind !== "user") {
+    throw forbidden(
+      "API tokens can only be created while signed in, not by another token. " +
+        "Sign in and create it there."
+    );
   }
 
   // Validate scopes
