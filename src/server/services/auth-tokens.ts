@@ -57,21 +57,38 @@ const mintToken = () => randomBytes(32).toString("base64url");
 const linkFor = (token: string) => `${env.APP_URL.replace(/\/$/, "")}/set-password?token=${token}`;
 
 /**
- * Create a token and queue the email that carries it.
+ * Create a token, optionally queue the email that carries it, and return the
+ * link.
  *
- * Returns nothing. It used to hand the raw token back "for tests", which sat
- * oddly beside this file's argument that the token must not exist anywhere but
- * the one email: a return value is the easiest thing in the world for a future
- * caller to put in a response body. The tests read it out of the queued message,
- * which is also a truer test, because it proves the link actually reached the
- * mail the person receives.
+ * THIS RETURNS A CREDENTIAL, AND IT DID NOT USED TO
+ *
+ * An earlier version returned nothing, and said so deliberately: it had once
+ * handed the raw token back "for tests", which sat oddly beside this file's
+ * argument that the token must not exist anywhere but the one email, on the
+ * grounds that a return value is the easiest thing in the world for a future
+ * caller to put in a response body.
+ *
+ * That is now exactly what one caller does, on purpose. A queued invite is not
+ * a delivered invite: until mail is configured and draining, pressing the
+ * button writes a row nothing sends and the person waits for an email that
+ * never arrives. `scripts/invite-link.mts` existed only to work around that
+ * from a shell on the host, which needs database credentials, which is far more
+ * authority than the person doing the inviting should need.
+ *
+ * The reasoning behind the old comment still holds, so the shape answers it
+ * rather than ignoring it. The link goes back to a caller that asked for it in
+ * so many words; `inviteUser` omits the field entirely otherwise, the audit row
+ * records which channels were used, and `tests/auth-tokens.test.ts` asserts
+ * both. What must not happen is a link appearing in a response nobody asked
+ * for one in, and that is the thing under test.
  */
 async function issue(
   ctx: Ctx,
   user: { id: string; email: string; firstName: string | null },
   purpose: TokenPurpose,
-  createdBy: string | null
-): Promise<void> {
+  createdBy: string | null,
+  { sendEmail = true }: { sendEmail?: boolean } = {}
+): Promise<{ link: string }> {
   const token = mintToken();
 
   /*
@@ -119,28 +136,69 @@ async function issue(
             `If it was not you, you can ignore this: nothing has changed.\n`,
         };
 
-  await queueMail(ctx, {
-    kind: purpose === "invite" ? "invite" : "password_reset",
-    to: user.email,
-    subject: copy.subject,
-    text: copy.text,
-    relatedType: "user",
-    relatedId: user.id,
-    userId: user.id,
-  });
+  /*
+    Skipped when the caller asked for a link and no email.
 
+    Queueing one anyway would be a message the person never asked to send,
+    sitting in the outbox until mail is configured and then arriving weeks
+    later about an invite that was handed over in person and used the same day.
+  */
+  if (sendEmail) {
+    await queueMail(ctx, {
+      kind: purpose === "invite" ? "invite" : "password_reset",
+      to: user.email,
+      subject: copy.subject,
+      text: copy.text,
+      relatedType: "user",
+      relatedId: user.id,
+      userId: user.id,
+    });
+  }
+
+  return { link };
+}
+
+/** How the invite reaches the person. At least one must be true. */
+export interface InviteChannels {
+  /** Queue the invitation email to their address. */
+  email?: boolean;
+  /** Return the one-time link for the inviter to pass on themselves. */
+  link?: boolean;
 }
 
 /**
  * Invite somebody who already has a user record.
  *
  * Refuses an archived account and refuses an `@imported.invalid` address. The
- * import created 45 history-only people with addresses on that reserved TLD
+ * import created history-only people with addresses on that reserved TLD
  * (RFC 2606) precisely so they could never receive mail; inviting one would
  * bounce, and bounces are what cost a domain its reputation.
+ *
+ * BOTH CHANNELS, ONE TOKEN, ONE CALL
+ *
+ * Issuing a token supersedes every outstanding token of the same purpose, which
+ * is the right rule and makes "email it" and "give me a link" impossible to
+ * offer as two requests. The second call would kill the first token, so
+ * whichever channel the person actually used would be the dead one, and the
+ * failure arrives later as "this link has expired" with nothing to explain it.
+ * `scripts/invite-link.mts` carries a comment about being bitten by exactly
+ * this, from running itself twice.
+ *
+ * So the channels are arguments to one call and there is one token either way.
+ * The email carries it and the caller is handed it, and they are the same link.
  */
-export async function inviteUser(ctx: Ctx, userId: string): Promise<{ queued: boolean }> {
+export async function inviteUser(
+  ctx: Ctx,
+  userId: string,
+  channels: InviteChannels = { email: true }
+): Promise<{ queued: boolean; link?: string }> {
   assertCan(ctx, "people:manage");
+
+  const email = channels.email ?? false;
+  const link = channels.link ?? false;
+  if (!email && !link) {
+    throw new AppError("validation_failed", "Choose at least one of sending the email or creating a link.");
+  }
 
   const [user] = await ctx.db
     .select({
@@ -164,9 +222,25 @@ export async function inviteUser(ctx: Ctx, userId: string): Promise<{ queued: bo
     );
   }
 
-  await issue(ctx, user, "invite", ctx.actor.userId);
-  ctx.audit({ action: "user.invited", entityType: "user", entityId: user.id });
-  return { queued: true };
+  const issued = await issue(ctx, user, "invite", ctx.actor.userId, { sendEmail: email });
+
+  /*
+    The channels are on the audit row because they are not the same act.
+    Queueing the email sends the credential to the address on the account.
+    Taking the link hands it to whoever pressed the button, to pass on by some
+    route this system cannot see. If an account is later found to have been set
+    up by the wrong person, that distinction is the whole question.
+  */
+  ctx.audit({
+    action: "user.invited",
+    entityType: "user",
+    entityId: user.id,
+    after: { emailed: email, linkTaken: link },
+  });
+
+  // Present only when asked for. A caller that did not request a link must not
+  // be handed one by a change to this function's shape.
+  return link ? { queued: email, link: issued.link } : { queued: email };
 }
 
 /**

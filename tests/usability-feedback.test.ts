@@ -59,7 +59,15 @@ describe("live color and person-page hierarchy", () => {
     expect(buttonRecipe).not.toMatch(/\n\s+(info|success):/);
     expect(recipes.replace(/\r\n/g, "\n")).toBe(canonicalRecipes.replace(/\r\n/g, "\n"));
     expect(person).toContain('<Button variant="secondary" onClick={() => router.push(`/timesheet?user=${person.id}`)}>');
-    expect(person).toContain('<Button variant="secondary" loading={invite.isPending}');
+    /*
+      The invite action, which now opens a dialog rather than firing a mutation
+      from the header. What this line is for is the hierarchy: three adjacent
+      actions, all secondary, none competing to look like the primary one. It
+      used to pin `loading={invite.isPending}` too, which was a detail of how
+      the button worked rather than of how it looks beside its neighbours, and
+      pinning it meant moving the mutation broke a test about button variants.
+    */
+    expect(person).toContain('<Button variant="secondary" onClick={() => setInviting(true)}>');
     expect(person).toContain("<Pencil");
   });
 

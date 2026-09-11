@@ -27,10 +27,11 @@ import { syncBaseProfiles } from "@/server/auth/profiles";
 import { createCtx, type Actor, type Ctx } from "@/server/ctx";
 import { BASE_PROFILES, type BaseProfileKey, type Capability } from "@/server/auth/capabilities";
 import { createTimeEntry, runningEntry } from "@/server/services/time";
-import { callRoute } from "./support/route-harness";
+import { callRoute, jsonData } from "./support/route-harness";
 
 import { POST as STOP } from "@/app/api/v1/time-entries/[id]/stop/route";
 import { PATCH as PATCH_ME } from "@/app/api/v1/me/route";
+import { POST as INVITE } from "@/app/api/v1/users/[id]/invite/route";
 
 let profiles: Record<string, string>;
 const people: Record<string, string> = {};
@@ -228,5 +229,98 @@ describe("PATCH /me", () => {
 
     const [admin] = await db.select().from(s.users).where(eq(s.users.id, people.administrator!));
     expect(admin!.timezone).toBe("America/New_York");
+  });
+});
+
+describe("POST /users/:id/invite", () => {
+  /*
+    This handler reads its body by hand rather than through the shared helper,
+    because an absent body has to keep meaning "email only" while a malformed
+    one still has to be refused. That is a strip of code no service test can
+    see, and getting it wrong in either direction is silent: swallow the
+    validation and a typo becomes an email-only invite nobody asked for, read
+    the body twice and every request becomes email-only whatever it said.
+  */
+
+  it("emails and returns no link when the body asks for nothing in particular", async () => {
+    const response = await callRoute(INVITE, {
+      path: `/api/v1/users/${people.member}/invite`,
+      method: "POST",
+      as: people.administrator,
+      params: { id: people.member! },
+      headers: { "content-type": "application/json" },
+    });
+
+    expect(response.status).toBe(200);
+    const data = await jsonData<{ queued: boolean; link?: string }>(response);
+    expect(data.queued).toBe(true);
+    expect(data.link, "a caller that did not ask for a link must not be handed one").toBeUndefined();
+  });
+
+  it("hands back the link when the body asks for one", async () => {
+    const response = await callRoute(INVITE, {
+      path: `/api/v1/users/${people.member}/invite`,
+      method: "POST",
+      as: people.administrator,
+      params: { id: people.member! },
+      body: { email: false, link: true },
+    });
+
+    expect(response.status).toBe(200);
+    const data = await jsonData<{ queued: boolean; link?: string }>(response);
+    expect(data.link).toMatch(/\/set-password\?token=/);
+    expect(data.queued).toBe(false);
+
+    const queued = await db
+      .select()
+      .from(s.outboundMessages)
+      .where(eq(s.outboundMessages.userId, people.member!));
+    expect(queued, "link only means no email").toHaveLength(0);
+  });
+
+  it("refuses a body that asks for neither, rather than defaulting", async () => {
+    // A request that means nothing would otherwise mint a token and supersede
+    // a live invite the person is already holding.
+    const response = await callRoute(INVITE, {
+      path: `/api/v1/users/${people.member}/invite`,
+      method: "POST",
+      as: people.administrator,
+      params: { id: people.member! },
+      body: { email: false, link: false },
+    });
+
+    expect(response.status).toBe(422);
+
+    const tokens = await db.select().from(s.authTokens).where(eq(s.authTokens.userId, people.member!));
+    expect(tokens, "a refused request must not have minted anything").toHaveLength(0);
+  });
+
+  it("refuses a malformed body instead of quietly emailing", async () => {
+    /*
+      The reason this is not `body(req, schema).catch(default)`. That form
+      cannot tell an absent body from an invalid one, so a wrong type becomes
+      an email-only invite and the caller is told it worked.
+    */
+    const response = await callRoute(INVITE, {
+      path: `/api/v1/users/${people.member}/invite`,
+      method: "POST",
+      as: people.administrator,
+      params: { id: people.member! },
+      body: { email: "yes", link: true },
+    });
+
+    expect(response.status).toBe(422);
+  });
+
+  it("is refused without people:manage", async () => {
+    const response = await callRoute(INVITE, {
+      path: `/api/v1/users/${people.administrator}/invite`,
+      method: "POST",
+      as: people.member,
+      params: { id: people.administrator! },
+      body: { email: false, link: true },
+    });
+
+    expect(response.status).toBe(403);
   });
 });

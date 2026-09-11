@@ -110,10 +110,103 @@ describe("inviteUser", () => {
     await expect(inviteUser(ctxFor(id), id)).rejects.toThrow(/archived/);
   });
 
-  it("never puts the token in its own return value", async () => {
+  it("never puts the token in its own return value unless it was asked to", async () => {
+    /*
+      The default is still email only, so the token goes to the inbox on the
+      account and nowhere else. This is the guard on the whole magic-link
+      change: the link may be returned, but only to a caller that said so in
+      the request. Anything else getting one back is a leak.
+    */
     const id = await makeUser();
     const result = await inviteUser(ctxFor(id), id);
+    expect(result.link).toBeUndefined();
     expect(JSON.stringify(result)).not.toMatch(/[A-Za-z0-9_-]{40,}/);
+  });
+
+  it("hands back a working link when one is asked for", async () => {
+    const id = await makeUser();
+    const result = await inviteUser(ctxFor(id), id, { email: false, link: true });
+
+    expect(result.link).toMatch(/\/set-password\?token=/);
+    const token = /token=([A-Za-z0-9_-]+)/.exec(result.link!)![1]!;
+    const subject = await peekToken(token);
+    expect(subject?.userId).toBe(id);
+    expect(subject?.purpose).toBe("invite");
+  });
+
+  it("queues no email for a link-only invite", async () => {
+    /*
+      A message nobody asked to send would sit in the outbox until mail is
+      configured, then arrive weeks later about an invite that was handed over
+      in person and used the same day.
+    */
+    const id = await makeUser();
+    await inviteUser(ctxFor(id), id, { email: false, link: true });
+
+    const queued = await db
+      .select()
+      .from(s.outboundMessages)
+      .where(eq(s.outboundMessages.userId, id));
+    expect(queued).toHaveLength(0);
+  });
+
+  it("emails and returns the same link, not two", async () => {
+    /*
+      The reason both channels are one call. Issuing supersedes any outstanding
+      token of the same purpose, so two requests would leave the first one dead
+      and whichever channel the person actually used might be the dead one. The
+      failure would arrive days later as "this link has expired" with nothing
+      to connect it to.
+    */
+    const id = await makeUser();
+    const result = await inviteUser(ctxFor(id), id, { email: true, link: true });
+
+    const emailed = await linkTokenFor(id);
+    const returned = /token=([A-Za-z0-9_-]+)/.exec(result.link!)![1]!;
+    expect(returned).toBe(emailed);
+
+    // And exactly one token exists, rather than one live and one superseded.
+    const live = await db
+      .select()
+      .from(s.authTokens)
+      .where(eq(s.authTokens.userId, id));
+    expect(live).toHaveLength(1);
+    expect(live[0]!.usedAt).toBeNull();
+  });
+
+  it("refuses an invite that would reach nobody", async () => {
+    // Not a no-op and not a default: a request meaning nothing would still
+    // mint a token and supersede a live invite somebody is already holding.
+    const id = await makeUser();
+    await expect(inviteUser(ctxFor(id), id, { email: false, link: false })).rejects.toThrow(
+      /at least one/i
+    );
+
+    const tokens = await db.select().from(s.authTokens).where(eq(s.authTokens.userId, id));
+    expect(tokens, "a refused invite must not have minted anything").toHaveLength(0);
+  });
+
+  it("records on the audit row which channels were used", async () => {
+    /*
+      Emailing sends the credential to the address on the account. Taking the
+      link hands it to whoever pressed the button, to pass on by a route this
+      system cannot see. If an account turns out to have been set up by the
+      wrong person, that distinction is the whole question.
+    */
+    const rows: { action: string; after?: unknown }[] = [];
+    const id = await makeUser();
+    // A real id: `created_by` on the token is a foreign key, so a placeholder
+    // fails on the insert rather than on the thing under test.
+    const ctx = {
+      db,
+      audit: (row: { action: string; after?: unknown }) => rows.push(row),
+      actor: { userId: id, capabilities: new Set(["people:manage"]) },
+    } as never;
+
+    await inviteUser(ctx, id, { email: false, link: true });
+
+    const invited = rows.find((r) => r.action === "user.invited");
+    expect(invited?.after).toEqual({ emailed: false, linkTaken: true });
   });
 });
 

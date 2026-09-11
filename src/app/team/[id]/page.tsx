@@ -11,7 +11,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { CalendarClock, Mail, Pencil } from "lucide-react";
 import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
@@ -28,27 +28,16 @@ import { Kpi, KpiHelpLabel, KpiRow, SectionTitle } from "@/components/app/kpi";
 import { BarChart, Donut, Legend } from "@/components/app/charts";
 import { useApp, useCan } from "@/components/app/providers";
 import { RatesPanel } from "@/components/app/rates-panel";
+import { InviteDialog } from "@/components/app/invite-dialog";
 import { PROFILE_LABEL } from "@/lib/labels";
-import { useToast } from "@/components/ui/toast";
 
 export default function PersonDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const toast = useToast();
   const { userById, projectById, clientById, taskById, settings, ready } = useApp();
   const can = useCan();
   const person = userById.get(id);
-  const invite = useMutation({
-    mutationFn: () => api.inviteUser(id),
-    onSuccess: () => toast.push({
-      tone: "success",
-      title: `Invitation queued for ${person?.email ?? "that person"}.`,
-    }),
-    onError: (error) => toast.push({
-      tone: "danger",
-      title: error instanceof Error ? error.message : "Could not send that invitation.",
-    }),
-  });
+  const [inviting, setInviting] = React.useState(false);
   // Their zone, not the reader's: this is their timesheet. See minutesOfDay.
   const personZone = person?.timezone ?? settings.timezone;
   const { granularity, anchor, period, onChange } = usePeriod("month", ["week", "month", "quarter", "year"]);
@@ -199,6 +188,13 @@ export default function PersonDetailPage() {
 
   return (
     <>
+      <InviteDialog
+        open={inviting}
+        onOpenChange={setInviting}
+        userId={person.id}
+        name={`${person.firstName} ${person.lastName}`}
+        email={person.email}
+      />
       <PageHeader
         breadcrumb={[{ label: "Team", href: "/team" }]}
         title={
@@ -220,8 +216,8 @@ export default function PersonDetailPage() {
               <CalendarClock className="size-3.5" />View timesheet
             </Button>
             {can("people:manage") && !person.archivedAt && !person.email.endsWith("@imported.invalid") && (
-              <Button variant="secondary" loading={invite.isPending} onClick={() => invite.mutate()}>
-                <Mail className="size-3.5" />Send invite
+              <Button variant="secondary" onClick={() => setInviting(true)}>
+                <Mail className="size-3.5" />Invite
               </Button>
             )}
             {can("people:manage") && (

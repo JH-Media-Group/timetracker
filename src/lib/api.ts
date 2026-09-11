@@ -1250,8 +1250,21 @@ export async function createUser(input: {
   }));
 }
 
-export async function inviteUser(id: ID): Promise<{ queued: boolean }> {
-  return post<{ queued: boolean }>(`/users/${id}/invite`);
+/**
+ * Invite somebody, by email, by link, or both.
+ *
+ * Both in one call rather than two, because issuing an invite supersedes any
+ * outstanding one: a second request would kill the token the first had already
+ * emailed. The link that comes back is the same one in the email.
+ *
+ * `link` is present only when it was asked for, and it is a credential for as
+ * long as it goes unused. Show it once, do not store it, do not log it.
+ */
+export async function inviteUser(
+  id: ID,
+  channels: { email: boolean; link: boolean } = { email: true, link: false }
+): Promise<{ queued: boolean; link?: string }> {
+  return post<{ queued: boolean; link?: string }>(`/users/${id}/invite`, channels);
 }
 
 /* ================================================================ invoices */
