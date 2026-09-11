@@ -453,12 +453,35 @@ const hashBody = (routeKey: string, body: string) =>
  * The row is also matched on `(key, actor)`. Matching on the key alone would
  * hand one actor another actor's stored response body whenever they happened to
  * send the same key.
+ *
+ * THAT PROTECTION USED TO EXCLUDE EVERY API CALLER
+ *
+ * `actorId` was `null` for `kind: "api"`, which collapsed every bearer token in
+ * the account into one actor and so defeated, for exactly those callers, the
+ * rule the paragraph above describes. Two holders of different tokens sending
+ * the same key to the same route with the same body were served each other's
+ * stored response.
+ *
+ * That was survivable while responses carried no secrets. The invite endpoint
+ * can now return a one-time set-password link, so a replayed response is a
+ * credential for somebody else's account: the owner self-invites through a
+ * token, anybody else's token repeats the call with the same key, and the
+ * owner's link comes back to them.
+ *
+ * An API token belongs to a user, so scoping to that user is both available and
+ * the right granularity: two tokens held by one person are one principal. The
+ * unauthenticated `api` actor has a placeholder id that is not a real user row,
+ * so it stays null and is refused a replay outright rather than sharing a
+ * cache with every other anonymous caller.
  */
+const ANONYMOUS_API_ACTOR = "00000000-0000-0000-0000-000000000000";
+
 async function claimIdempotencyKey(ctx: Ctx, req: NextRequest, key: string): Promise<IdempotencyClaim> {
   const routeKey = `${req.method} ${new URL(req.url).pathname}`;
   const raw = await peekBody(req);
   const hash = hashBody(routeKey, raw);
-  const actorId = ctx.actor.kind === "api" ? null : ctx.actor.userId;
+  const anonymous = ctx.actor.kind === "api" && ctx.actor.userId === ANONYMOUS_API_ACTOR;
+  const actorId = anonymous ? null : ctx.actor.userId;
 
   const inserted = await db
     .insert(s.idempotencyKeys)
@@ -481,6 +504,18 @@ async function claimIdempotencyKey(ctx: Ctx, req: NextRequest, key: string): Pro
     .limit(1);
 
   if (!existing) return { key, actorId, replay: null };
+
+  /*
+    A null-owned row belongs to no one in particular, so nobody may read it
+    back. That covers the unauthenticated caller above and any row written
+    before this was scoped, which would otherwise stay replayable by anyone.
+  */
+  if (existing.actorId === null || actorId === null) {
+    throw new AppError(
+      "idempotency_key_reused",
+      "That Idempotency-Key was already used for a different request."
+    );
+  }
 
   if (existing.actorId !== actorId || existing.requestHash !== hash) {
     throw new AppError(

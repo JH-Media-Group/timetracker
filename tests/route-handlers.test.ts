@@ -32,6 +32,7 @@ import { callRoute, jsonData, sessionCookie } from "./support/route-harness";
 import { POST as STOP } from "@/app/api/v1/time-entries/[id]/stop/route";
 import { PATCH as PATCH_ME } from "@/app/api/v1/me/route";
 import { POST as INVITE } from "@/app/api/v1/users/[id]/invite/route";
+import { createApiToken } from "@/server/services/api-keys";
 
 let profiles: Record<string, string>;
 const people: Record<string, string> = {};
@@ -375,5 +376,65 @@ describe("POST /users/:id/invite", () => {
     });
 
     expect(response.status).toBe(403);
+  });
+});
+
+describe("idempotency and who owns a cached response", () => {
+  /*
+    A replayed response is somebody's stored output, and this endpoint can now
+    return a one-time set-password link. So who may read a stored response back
+    stopped being a correctness question and became a security one.
+
+    `claimIdempotencyKey` had a comment saying the row is matched on
+    `(key, actor)` "because matching on the key alone would hand one actor
+    another actor's stored response body", and the next line set the actor to
+    null for every bearer token in the account, collapsing them all into one.
+    The comment described the protection; the code exempted exactly the callers
+    who could reach it programmatically.
+  */
+  it("will not hand one API token another token's stored response", async () => {
+    const admin = ctxFor("administrator");
+    const owner = people.administrator!;
+    const other = people.people_admin!;
+
+    const mine = await createApiToken(admin, { label: `owner-${newId()}`, scopes: ["tally.admin"] });
+    const theirs = await createApiToken(ctxFor("people_admin"), { label: `other-${newId()}`, scopes: ["tally.admin"] });
+
+    /*
+      A target holding nothing, because a scoped token holds the intersection
+      of its group with its owner's capabilities and so does not outrank a
+      Member. That is the rank guard working; here it would just stop the test
+      reaching the thing it is about.
+    */
+    const plainProfile = newId();
+    await db.insert(s.permissionProfiles).values({ id: plainProfile, name: `plain-${plainProfile}`, capabilities: [] });
+    const subject = newId();
+    await db.insert(s.users).values({
+      id: subject,
+      email: `subject-${subject}@example.test`,
+      firstName: "Idempotency",
+      lastName: "Subject",
+      profileId: plainProfile,
+      timezone: "America/New_York",
+    });
+
+    const key = `shared-key-${newId()}`;
+    const call = (bearer: string, actorId: string) =>
+      callRoute(INVITE, {
+        path: `/api/v1/users/${subject}/invite`,
+        method: "POST",
+        params: { id: subject },
+        body: { email: true, link: false },
+        headers: { authorization: `Bearer ${bearer}`, "idempotency-key": key },
+      });
+
+    const first = await call(mine.token, owner);
+    expect(first.status, "the first caller gets a real answer").toBe(200);
+
+    const second = await call(theirs.token, other);
+    expect(
+      second.status,
+      "a different token must not be served the first one's stored response"
+    ).not.toBe(200);
   });
 });

@@ -83,7 +83,14 @@ async function expectRefused(token: string, userId: string): Promise<void> {
 
 /** A Ctx for a caller holding exactly these capabilities. */
 const actorWith = (userId: string, capabilities: string[]) =>
-  ({ db, audit: () => {}, actor: { userId, kind: "user", capabilities: new Set(capabilities) } }) as never;
+  ({
+    db,
+    audit: () => {},
+    // Services that write a timestamp take it from the Ctx, so the fake needs
+    // one or they fail on a missing function rather than on the thing tested.
+    now: () => new Date(),
+    actor: { userId, kind: "user", capabilities: new Set(capabilities) },
+  }) as never;
 
 /** A Ctx with the capability, since the service asserts on it. */
 const ctxFor = (userId: string) =>
@@ -362,6 +369,54 @@ describe("who may invite whom", () => {
   });
 });
 
+describe("changing somebody's email address", () => {
+  it("kills any credential already sent to the old one", async () => {
+    /*
+      A token is bound to a user and not to the address it was delivered to, so
+      correcting a mistyped email left whoever received the first message
+      holding a live link for seven days. Invite an administrator, notice the
+      address was wrong, fix it: the first recipient can still set that
+      administrator's password, and `peekToken` would show them the corrected
+      address on the way through.
+    */
+    const ordinary = await makeProfile("email-change", []);
+    const target = await makeUser({ profileId: ordinary });
+    const inviter = await makeUser({ profileId: await makeProfile("email-inviter", ["people:manage"]) });
+
+    const invited = await inviteUser(actorWith(inviter, ["people:manage"]), target, {
+      email: false,
+      link: true,
+    });
+    const sentToTheWrongAddress = /token=([A-Za-z0-9_-]+)/.exec(invited.link!)![1]!;
+
+    //  as well, because  serialises its result
+    // through , which is scoped and would otherwise answer 404 for a
+    // caller that cannot see anybody but themselves.
+    await updateUser(actorWith(inviter, ["people:manage", "people:view"]), target, {
+      email: `corrected-${newId()}@example.test`,
+    });
+
+    await expectRefused(sentToTheWrongAddress, target);
+  });
+
+  it("leaves the credential alone when the address did not actually change", async () => {
+    // A save that touches the name must not invalidate an invitation somebody
+    // is part-way through using.
+    const ordinary = await makeProfile("no-change", []);
+    const target = await makeUser({ profileId: ordinary });
+    const inviter = await makeUser({ profileId: await makeProfile("no-change-inviter", ["people:manage"]) });
+
+    const invited = await inviteUser(actorWith(inviter, ["people:manage"]), target, {
+      email: false,
+      link: true,
+    });
+    const token = /token=([A-Za-z0-9_-]+)/.exec(invited.link!)![1]!;
+
+    await updateUser(actorWith(inviter, ["people:manage", "people:view"]), target, { firstName: "Renamed" });
+    await expect(consumeToken(token, GOOD)).resolves.toMatchObject({ userId: target });
+  });
+});
+
 describe("recovering an account", () => {
   it("kills every other way in, not just the link that was used", async () => {
     /*
@@ -397,7 +452,7 @@ describe("recovering an account", () => {
     await expect(
       consumeToken(stolen, "a-different-passphrase-77"),
       "recovery has to close every door, not the one it came through"
-    ).rejects.toThrow(/expired or has already been used/i);
+    ).rejects.toThrow(/no longer valid/i);
 
     // And the recovered password is the one that stands.
     const [after] = await db.select().from(s.users).where(eq(s.users.id, target));
@@ -779,7 +834,7 @@ describe("the token itself", () => {
 
     await consumeToken(token, GOOD);
     await expect(consumeToken(token, "another-fine-passphrase-99")).rejects.toThrow(
-      /expired or has already been used/
+      /no longer valid/
     );
   });
 

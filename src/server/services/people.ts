@@ -283,6 +283,27 @@ export async function updateUser(ctx: Ctx, id: string, input: UserInput): Promis
     .where(eq(s.users.id, id))
     .returning(USER_COLUMNS);
 
+  /*
+    A CREDENTIAL SENT TO THE OLD ADDRESS DIES WITH THE OLD ADDRESS.
+
+    A token is bound to a user and not to the address it was delivered to, so
+    correcting a mistyped email left whoever received the first one holding a
+    live link for seven days. That is not a hypothetical sequence: invite an
+    administrator, notice the address was wrong, fix it. The person who got the
+    first message can still set that administrator's password, and `peekToken`
+    will even show them the corrected address on the way through.
+
+    Superseded in the same transaction as the change, so there is no window
+    where the address is new and the old link still works, and across both
+    purposes because an outstanding reset has exactly the same problem.
+  */
+  if (patch.email && before.email !== patch.email) {
+    await ctx.db
+      .update(s.authTokens)
+      .set({ usedAt: new Date() })
+      .where(and(eq(s.authTokens.userId, id), isNull(s.authTokens.usedAt)));
+  }
+
   if (input.roles) await setNamedLinks(ctx, id, input.roles, "roles");
   if (input.departments) await setNamedLinks(ctx, id, input.departments, "departments");
 

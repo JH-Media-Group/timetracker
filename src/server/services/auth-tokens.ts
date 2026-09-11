@@ -192,6 +192,12 @@ async function issue(
  *
  * It does not hide the existence of the account: holding a live token is
  * already proof of that. It hides what happened to it.
+ *
+ * Used for a token that does not resolve as well, not only for the checks
+ * after it. Leaving "expired or already used" on the miss path and this on the
+ * archived path is a two-value oracle: post a retained link, and which
+ * sentence comes back says whether the person was archived. Collapsing one and
+ * not the other would have looked like a fix and left the thing it was for.
  */
 const REFUSED = "That link is no longer valid. Ask for a new one." as const;
 
@@ -593,7 +599,7 @@ export async function consumeToken(token: string, password: string): Promise<{ u
     .limit(1);
 
   if (!candidate) {
-    throw new AppError("validation_failed", "That link has expired or has already been used. Ask for another.");
+    throw new AppError("validation_failed", REFUSED);
   }
 
   const hash = await hashPassword(password);
@@ -659,7 +665,7 @@ export async function consumeToken(token: string, password: string): Promise<{ u
       .for("update");
 
     if (!row) {
-      throw new AppError("validation_failed", "That link has expired or has already been used. Ask for another.");
+      throw new AppError("validation_failed", REFUSED);
     }
 
     /*
