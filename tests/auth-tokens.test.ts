@@ -348,7 +348,59 @@ describe("who may invite whom", () => {
   });
 });
 
+describe("recovering an account", () => {
+  it("kills every other way in, not just the link that was used", async () => {
+    /*
+      Issuing supersedes within a purpose, which left invites and resets able
+      to shadow each other. Somebody holds a stolen invite; the owner of the
+      account notices and does a password reset; the reset succeeds and the
+      invite is untouched, so the thief spends it afterwards, replaces the
+      password that was just recovered and revokes the sessions that came with
+      it. No race and no extra permission needed.
+
+      Recovering an account is the exact moment every other way into it should
+      stop working, and it was the one moment nothing did.
+    */
+    const ordinary = await makeProfile("recovering", []);
+    const target = await makeUser({ profileId: ordinary });
+    const inviter = await makeUser({ profileId: await makeProfile("recovering-inviter", ["people:manage"]) });
+
+    // A live invite, held by somebody else.
+    const invited = await inviteUser(actorWith(inviter, ["people:manage"]), target, {
+      email: false,
+      link: true,
+    });
+    const stolen = /token=([A-Za-z0-9_-]+)/.exec(invited.link!)![1]!;
+
+    // The person recovers their own account through the public reset flow.
+    const [row] = await db.select().from(s.users).where(eq(s.users.id, target));
+    await db.delete(s.outboundMessages).where(eq(s.outboundMessages.userId, target));
+    await requestPasswordReset(row!.email);
+    const reset = await linkTokenFor(target);
+    await consumeToken(reset, GOOD);
+
+    // The invite must not still be spendable afterwards.
+    await expect(
+      consumeToken(stolen, "a-different-passphrase-77"),
+      "recovery has to close every door, not the one it came through"
+    ).rejects.toThrow(/expired or has already been used/i);
+
+    // And the recovered password is the one that stands.
+    const [after] = await db.select().from(s.users).where(eq(s.users.id, target));
+    expect(await verifyPassword(after!.passwordHash!, GOOD)).toBe(true);
+  });
+});
+
 describe("an invite outliving the authority it was issued under", () => {
+  /*
+    The inviters here get a real profile holding `people:manage`, because
+    redemption reads the inviter's stored profile rather than the capabilities
+    on the Ctx that issued the link. A fixture that only carried the capability
+    in memory passed issuance and was then refused at redemption, which is the
+    guard working and the fixture being wrong.
+  */
+  const manager = () => makeProfile("inviter", ["people:manage"]);
+
   /*
     The one that needs no race at all, only patience.
 
@@ -363,7 +415,7 @@ describe("an invite outliving the authority it was issued under", () => {
   it("refuses a link for somebody promoted beyond the inviter since it was issued", async () => {
     const ordinary = await makeProfile("member-ish", []);
     const target = await makeUser({ profileId: ordinary });
-    const inviter = await makeUser();
+    const inviter = await makeUser({ profileId: await manager() });
 
     const result = await inviteUser(actorWith(inviter, ["people:manage"]), target, {
       email: false,
@@ -385,7 +437,7 @@ describe("an invite outliving the authority it was issued under", () => {
   it("refuses a link for somebody who has since become the owner", async () => {
     const ordinary = await makeProfile("plain", []);
     const target = await makeUser({ profileId: ordinary });
-    const inviter = await makeUser();
+    const inviter = await makeUser({ profileId: await manager() });
 
     const result = await inviteUser(actorWith(inviter, ["people:manage"]), target, {
       email: false,
@@ -395,6 +447,79 @@ describe("an invite outliving the authority it was issued under", () => {
 
     await db.update(s.users).set({ isOwner: true }).where(eq(s.users.id, target));
     await expect(consumeToken(token, GOOD)).rejects.toThrow(/permissions have changed/i);
+  });
+
+  it("refuses a link whose inviter has since lost the permission to invite", async () => {
+    /*
+      The rank comparison alone does not ask this, and a demotion satisfies it
+      trivially: a People Admin demoted to Member still "outranks" a Member,
+      because Member's capabilities are contained in Member's. So somebody who
+      had the authority to invite, collected links, and then lost that
+      authority kept every one of them working. Issuing demands
+      `people:manage`; spending somebody else's invite has to demand it too, or
+      taking the permission away takes nothing away.
+    */
+    const ordinary = await makeProfile("demote-target", []);
+    const target = await makeUser({ profileId: ordinary });
+    const inviter = await makeUser({ profileId: await manager() });
+
+    const result = await inviteUser(actorWith(inviter, ["people:manage"]), target, {
+      email: false,
+      link: true,
+    });
+    const token = /token=([A-Za-z0-9_-]+)/.exec(result.link!)![1]!;
+
+    // Demoted to a profile with no people:manage, after the link was cut.
+    await db
+      .update(s.users)
+      .set({ profileId: await makeProfile("demoted", []) })
+      .where(eq(s.users.id, inviter));
+
+    await expect(consumeToken(token, GOOD)).rejects.toThrow(/permissions have changed/i);
+  });
+
+  it("refuses an invite with no recorded issuer", async () => {
+    /*
+      `auth_tokens.created_by` is ON DELETE SET NULL, confirmed against the
+      live schema, so deleting whoever issued a link silently erases the
+      provenance every check here depends on. Guarding with `if (createdBy)`
+      then waves exactly those links through, including for somebody who has
+      since become the owner. A reset legitimately has no issuer; an invite
+      without one fails closed.
+    */
+    const ordinary = await makeProfile("orphan-target", []);
+    const target = await makeUser({ profileId: ordinary });
+    const inviter = await makeUser({ profileId: await manager() });
+
+    const result = await inviteUser(actorWith(inviter, ["people:manage"]), target, {
+      email: false,
+      link: true,
+    });
+    const token = /token=([A-Za-z0-9_-]+)/.exec(result.link!)![1]!;
+
+    await db.update(s.authTokens).set({ createdBy: null }).where(eq(s.authTokens.userId, target));
+    await expect(consumeToken(token, GOOD)).rejects.toThrow(/no longer has an account/i);
+  });
+
+  it("refuses a link for an account that has since been archived", async () => {
+    // `peekToken` already refuses to resolve one, so the screen never renders.
+    // Posting the token directly skipped that and set the password anyway, on
+    // an account that is supposed to be unable to sign in at all.
+    const ordinary = await makeProfile("archived-subject", []);
+    const target = await makeUser({ profileId: ordinary });
+    const inviter = await makeUser({ profileId: await manager() });
+
+    const result = await inviteUser(actorWith(inviter, ["people:manage"]), target, {
+      email: false,
+      link: true,
+    });
+    const token = /token=([A-Za-z0-9_-]+)/.exec(result.link!)![1]!;
+
+    await db.update(s.users).set({ archivedAt: new Date() }).where(eq(s.users.id, target));
+    await expect(consumeToken(token, GOOD)).rejects.toThrow(/archived/i);
+
+    const [row] = await db.select().from(s.users).where(eq(s.users.id, target));
+    expect(row!.passwordHash).toBeNull();
   });
 
   it("refuses a link whose inviter has since been archived", async () => {
@@ -407,7 +532,7 @@ describe("an invite outliving the authority it was issued under", () => {
     */
     const ordinary = await makeProfile("archived-inviter", []);
     const target = await makeUser({ profileId: ordinary });
-    const inviter = await makeUser();
+    const inviter = await makeUser({ profileId: await manager() });
 
     const result = await inviteUser(actorWith(inviter, ["people:manage"]), target, {
       email: false,
@@ -423,7 +548,7 @@ describe("an invite outliving the authority it was issued under", () => {
     // The guard must not cost the ordinary case, which is every real invite.
     const ordinary = await makeProfile("unchanged", []);
     const target = await makeUser({ profileId: ordinary });
-    const inviter = await makeUser();
+    const inviter = await makeUser({ profileId: await manager() });
 
     const result = await inviteUser(actorWith(inviter, ["people:manage"]), target, {
       email: false,

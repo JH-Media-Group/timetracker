@@ -627,7 +627,15 @@ async function assertMayGrantProfile(
   if (ctx.actor.kind === "system") return;
 
   const granting = (profile.capabilities ?? []) as Capability[];
-  const held = ctx.actor.capabilities;
+  /*
+    On what the caller's capabilities confer, matching `assertOutranksOrEqual`.
+
+    Comparing the literal strings here and the effective ones there would mean
+    an Executive Manager could edit a People Admin but not grant that same
+    profile to somebody, refused over a capability they exceed. Two readings of
+    the same question in one file is how one of them ends up wrong.
+  */
+  const held = effectiveCapabilities(ctx.actor.capabilities as Iterable<Capability>);
   const beyond = granting.filter((c) => !held.has(c));
 
   if (beyond.length > 0) {

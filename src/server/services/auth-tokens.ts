@@ -211,6 +211,20 @@ async function assertInviterStillOutranks(ctx: Ctx, inviterId: string, subjectId
   if (!inviter) throw stale;
 
   /*
+    And must still hold the capability that issuing required.
+
+    The rank comparison alone does not ask this, and a demotion satisfies it
+    trivially: a People Admin demoted to Member still "outranks" a Member,
+    because Member's capabilities are contained in Member's. So somebody who
+    had the authority to invite, collected links, and then lost that authority
+    kept every link working. Issuance demands `people:manage`; redemption of
+    somebody else's invite has to demand it too, or losing the permission
+    takes nothing away.
+  */
+  const held0 = effectiveCapabilities((inviter.capabilities ?? []) as Capability[]);
+  if (!held0.has("people:manage")) throw stale;
+
+  /*
     An archived inviter lends nothing either.
 
     The rank rule alone would still pass: somebody walked out last week
@@ -254,8 +268,7 @@ async function assertInviterStillOutranks(ctx: Ctx, inviterId: string, subjectId
   */
   if (!profile) return;
 
-  const held = effectiveCapabilities((inviter.capabilities ?? []) as Capability[]);
-  const beyond = ((profile.capabilities ?? []) as Capability[]).filter((c) => !held.has(c));
+  const beyond = ((profile.capabilities ?? []) as Capability[]).filter((c) => !held0.has(c));
   if (beyond.length > 0) throw stale;
 }
 
@@ -643,11 +656,69 @@ export async function consumeToken(token: string, password: string): Promise<{ u
 
       Refusing costs a re-invite. Not refusing costs the account.
     */
-    if (row.createdBy) {
+    /*
+      A reset has no inviter and needs none: nobody else's authority is being
+      spent and it is how a person recovers their own account.
+
+      An invite with no recorded issuer is a different thing entirely. The
+      foreign key is ON DELETE SET NULL, so deleting the person who issued it
+      silently erases the provenance every check here depends on and the guard
+      would wave the link through. Fail closed: the cost is a re-invite, and
+      the alternative is a credential nobody can account for.
+    */
+    /*
+      An archived person does not get a password.
+
+      `peekToken` already refuses to resolve a token for one, so the screen
+      that asks for a password never renders. Posting the token directly
+      skipped that and set the password anyway, on an account that is supposed
+      to be unable to sign in at all. Archiving somebody is the most complete
+      version of taking access away and it has to survive a link they were sent
+      the week before.
+    */
+    const [subject] = await tx.db
+      .select({ archivedAt: s.users.archivedAt })
+      .from(s.users)
+      .where(eq(s.users.id, row.userId))
+      .limit(1);
+
+    if (subject?.archivedAt) {
+      throw new AppError(
+        "validation_failed",
+        "That link is no longer valid because the account has been archived. Ask for a new one."
+      );
+    }
+
+    if (row.purpose === "invite") {
+      if (!row.createdBy) {
+        throw new AppError(
+          "validation_failed",
+          "That link is no longer valid because the person who sent it no longer has an account. Ask for a new one."
+        );
+      }
       await assertInviterStillOutranks(tx, row.createdBy, row.userId);
     }
 
-    await tx.db.update(s.authTokens).set({ usedAt: new Date() }).where(eq(s.authTokens.id, row.id));
+    /*
+      Every outstanding token for this person, not just the one being spent,
+      and across both purposes.
+
+      Issuing supersedes within a purpose, which left the two able to shadow
+      each other. Somebody holds a stolen invite; the owner of the account
+      notices something is wrong and does a password reset; the reset succeeds
+      and the invite is untouched, so the thief spends it afterwards, replaces
+      the password that was just recovered and revokes the sessions that came
+      with it. Recovering an account is the exact moment every other way into
+      it should stop working, and it was the one moment nothing did.
+
+      No race and no extra permission needed, which is what made this worth
+      fixing before anything else this round.
+    */
+    await tx.db
+      .update(s.authTokens)
+      .set({ usedAt: new Date() })
+      .where(and(eq(s.authTokens.userId, row.userId), isNull(s.authTokens.usedAt)));
+
     await tx.db
       .update(s.users)
       .set({ passwordHash: hash, updatedAt: new Date() })
