@@ -4,7 +4,7 @@
 
 **Staging deployed:** 2026-08-24
 
-**Staging last updated:** 2026-09-10 00:13 UTC
+**Staging last updated:** 2026-09-11 17:39 UTC
 
 **Production droplet:** `165.245.130.130`
 
@@ -19,6 +19,95 @@ restart unrelated services.
 The repeatable operating procedure now lives in
 `docs/DEPLOYMENT-RUNBOOK.md`. This file retains the deployment evidence and
 the broader shared-server maintenance plan.
+
+## Staging update: the invite dialog and twelve rounds of review, 2026-09-11
+
+Tally staging now runs source commit `0ce1e90` as `tally:0ce1e90` (image ID
+`sha256:a407c1ec7f0a35ce6273df6bc78f4b1875b05e6c0906ae4e93b0f103c8f302da`).
+
+The release is the invitation dialog (send the email, take a one-time link, or
+both, in one request and one token) and the twelve adversarial rounds that
+followed it. Those rounds are summarised in `CLAUDE.md`; the short version is
+that they were all one rule from different sides, which is that minting a
+credential is an interactive act and a bearer token is not a person. Four of
+the fixes are guards a token now meets: it cannot create another token, take a
+magic link, give itself OAuth consent, or move the address an invitation is
+delivered to.
+
+Update evidence:
+
+- The exact pushed source passed 67 test files and 967 tests, TypeScript, and
+  palette validation. Each of the two security guards in this release is
+  mutation-tested: removing either one fails its own test and nothing else.
+- The Linux production Docker build succeeded and is the build authority here.
+  A native Windows `pnpm build` compiles and generates all 85 pages, then fails
+  creating standalone symlinks, which is a Windows permission limit rather than
+  a code fault.
+- `git diff` against the deployed commit was impossible: `cb82dab` no longer
+  exists after the repository history rewrite. The comparison was taken against
+  `d7818f4`, the last recorded deployment that survives in current history,
+  which is a superset of what `cb82dab` carried. It shows no Drizzle, Compose,
+  Dockerfile, ops, systemd or schema change, only application source, tests and
+  two `package.json` script entries.
+- The transferred 101,643,776-byte image tar has SHA-256
+  `73a7da0bc06cbf6caab8136e70d7cb43e1b42366df8800ccb1fb5515baa7b7a6`, verified
+  for exact size and hash on the server before loading, with the loaded image
+  ID matching the local build.
+- Preflight recorded 17 containers, none unhealthy, zero restarts and no OOM
+  events anywhere, 73 GB free disk, 2.8 GB available memory, load 0.04, and
+  public listeners of 22, 80 and 443 plus loopback DNS.
+- An isolated, unproxied candidate container reached healthy state, returned
+  200 from liveness and database readiness, kept every live security and
+  resource control, published no host port, carried no production network
+  alias, and was removed before the live update.
+- No schema changes: the isolated migration run left all 10 Drizzle and five
+  manual migrations unchanged. It did re-apply `0001_constraints.sql`, whose
+  stored hash no longer matches the file. The file has not changed in Git since
+  the schema was built, so this is a line-ending difference between the
+  checkout that produced the deployed image and this one. Every statement in
+  those files is written to be idempotent for exactly this case, it ran inside
+  a transaction, and the row count is unchanged. Subsequent deployments from
+  this checkout will report it as already applied.
+- The immediate pre-update dump is
+  `/var/backups/tally/tally-20260911T173304Z.dump`, SHA-256
+  `7814569ba33f4648c9ce4c7a129961f436a235b822614f141678a52cfa59c9e4`.
+- The post-update dump is
+  `/var/backups/tally/tally-20260911T174009Z.dump`, SHA-256
+  `d05067f21e496ebea3bc312b683e283a5edd6b336dbfa503b03cc506ad21787d`.
+- Both dumps passed 329-line catalog checks and complete owner-preserving
+  scratch restores reconciling 58 users, 365 projects, the full time entry
+  count, three running timers, the full invoice count, 10 Drizzle migrations,
+  five manual migrations and the `tally_staging` owner. Both scratch databases
+  were dropped and confirmed gone.
+- The environment file changed by exactly one line, proven by identical
+  normalized SHA-256 values
+  (`23f3c489d254d4831fbc68727db0bc8a0879af8e22e04544565a0e980da086e8`).
+- Web and MCP were replaced separately with `--no-deps`, web proven healthy on
+  the new image while MCP still ran `tally:cb82dab`. Both now run the exact
+  local image ID with zero restarts, no OOM events, read-only root filesystems
+  and their original limits.
+- External liveness, readiness and both OAuth discovery documents return 200,
+  MCP GET returns 405 and an unauthenticated POST returns 401 with the
+  protected-resource challenge, and the security headers remain present.
+- Database counts before and after are identical, including the three running
+  timers, and the mail queue is empty in both directions.
+- `/opt/tally/compose.yml` and `/opt/Caddyfile` retained their pre-deploy
+  hashes, the host and container Caddyfiles match, and Caddy was not reloaded.
+  A container diff against the pre-deploy baseline showed the two Tally lines
+  changed and nothing else across 17 containers, with public listeners
+  unchanged.
+- All four Tally timers remain active, a manual mail run succeeded with
+  `--no-reminders`, web and MCP logs contain no error line since the
+  deployment, and root SSH remains enabled with effective
+  `permitrootlogin yes`.
+- The mail run reports two messages that have exhausted their attempts and will
+  not be retried. They pre-date this release. Read `outbound_messages.last_error`
+  before configuring a real transport.
+
+Rollback and evidence material is under `/opt/tally/artifacts/deploy-0ce1e90`,
+the image tar is `/opt/tally/artifacts/tally-0ce1e90.tar`, and the previous
+`tally:cb82dab` image remains loaded. This application-only update requires no
+database restore for rollback.
 
 ## Staging update: password reset and the handler harness, 2026-09-10
 
