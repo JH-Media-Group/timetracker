@@ -399,6 +399,28 @@ describe("changing somebody's email address", () => {
     await expectRefused(sentToTheWrongAddress, target);
   });
 
+  it("treats a differently-cased address as unchanged", async () => {
+    /*
+      `patch.email` is lowercased and trimmed and the stored value may not be:
+      the import wrote addresses before that normalisation existed. Comparing
+      the two directly meant re-saving the same address reads as a change and
+      spends an invitation nobody corrected anything for.
+    */
+    const ordinary = await makeProfile("case-change", []);
+    const mixed = `Mixed-${newId()}@Example.test`;
+    const target = await makeUser({ profileId: ordinary, email: mixed });
+    const inviter = await makeUser({ profileId: await makeProfile("case-inviter", ["people:manage"]) });
+
+    const invited = await inviteUser(actorWith(inviter, ["people:manage"]), target, {
+      email: false,
+      link: true,
+    });
+    const token = /token=([A-Za-z0-9_-]+)/.exec(invited.link!)![1]!;
+
+    await updateUser(actorWith(inviter, ["people:manage", "people:view"]), target, { email: mixed });
+    await expect(consumeToken(token, GOOD)).resolves.toMatchObject({ userId: target });
+  });
+
   it("leaves the credential alone when the address did not actually change", async () => {
     // A save that touches the name must not invalidate an invitation somebody
     // is part-way through using.

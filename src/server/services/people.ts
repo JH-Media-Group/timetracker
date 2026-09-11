@@ -297,7 +297,16 @@ export async function updateUser(ctx: Ctx, id: string, input: UserInput): Promis
     where the address is new and the old link still works, and across both
     purposes because an outstanding reset has exactly the same problem.
   */
-  if (patch.email && before.email !== patch.email) {
+  /*
+    Both sides normalised before comparing.
+
+    `patch.email` is lowercased and trimmed; `before.email` is whatever is in
+    the row, and the import wrote addresses before that normalisation existed.
+    Comparing the two directly means re-saving `Bob@Example.com` unchanged
+    reads as a change and spends an invitation nobody corrected anything for.
+    The direction is safe, but a save that alters nothing should alter nothing.
+  */
+  if (patch.email && before.email.trim().toLowerCase() !== patch.email) {
     await ctx.db
       .update(s.authTokens)
       .set({ usedAt: new Date() })
