@@ -168,7 +168,27 @@ beforeEach(async () => {
     its override in place and every later test in the file renders from it. That
     happened: one genuine failure became six.
   */
-  await db.update(s.settings).set({ invoiceMessages: {} });
+  /*
+    Seeded if it is not there, rather than assumed.
+
+    The settings row is a singleton inserted by `db:migrate`, and every full
+    truncate removes it. This file was the only one relying on it surviving:
+    the update below matches zero rows and says nothing, and then fifteen tests
+    fail several layers away with "the singleton row is missing". It happened
+    twice in one day, both times costing a diagnosis that had nothing to do
+    with the change being made.
+  */
+  const [existing] = await db.select({ id: s.settings.id }).from(s.settings).limit(1);
+  if (existing) {
+    await db.update(s.settings).set({ invoiceMessages: {} });
+  } else {
+    await db.insert(s.settings).values({
+      id: 1,
+      companyName: "JH Media Group",
+      timezone: "America/New_York",
+      invoiceMessages: {},
+    });
+  }
   invalidateSettings();
   await db.delete(s.outboundMessages);
   await db.delete(s.invoiceMessages);

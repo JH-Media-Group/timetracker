@@ -67,6 +67,20 @@ async function makeProfile(name: string, capabilities: string[]): Promise<string
   return id;
 }
 
+/**
+ * A redemption that must be refused, and must leave nothing behind.
+ *
+ * Asserting the message stopped being useful once every refusal returned the
+ * same one, which is deliberate: the reasons are not all the holder's
+ * business. What matters is the same in every case anyway, and is what these
+ * tests were really about: the password is not set.
+ */
+async function expectRefused(token: string, userId: string): Promise<void> {
+  await expect(consumeToken(token, GOOD)).rejects.toThrow(/no longer valid/i);
+  const [row] = await db.select().from(s.users).where(eq(s.users.id, userId));
+  expect(row!.passwordHash, "a refused redemption must not have set a password").toBeNull();
+}
+
 /** A Ctx for a caller holding exactly these capabilities. */
 const actorWith = (userId: string, capabilities: string[]) =>
   ({ db, audit: () => {}, actor: { userId, kind: "user", capabilities: new Set(capabilities) } }) as never;
@@ -427,7 +441,7 @@ describe("an invite outliving the authority it was issued under", () => {
     const senior = await makeProfile("senior", ["people:manage", "settings:manage", "rates:view_cost"]);
     await db.update(s.users).set({ profileId: senior }).where(eq(s.users.id, target));
 
-    await expect(consumeToken(token, GOOD)).rejects.toThrow(/permissions have changed/i);
+    await expectRefused(token, target);
 
     // And the password is untouched, not merely the request refused.
     const [row] = await db.select().from(s.users).where(eq(s.users.id, target));
@@ -446,7 +460,7 @@ describe("an invite outliving the authority it was issued under", () => {
     const token = /token=([A-Za-z0-9_-]+)/.exec(result.link!)![1]!;
 
     await db.update(s.users).set({ isOwner: true }).where(eq(s.users.id, target));
-    await expect(consumeToken(token, GOOD)).rejects.toThrow(/permissions have changed/i);
+    await expectRefused(token, target);
   });
 
   it("refuses a link whose inviter has since lost the permission to invite", async () => {
@@ -475,7 +489,7 @@ describe("an invite outliving the authority it was issued under", () => {
       .set({ profileId: await makeProfile("demoted", []) })
       .where(eq(s.users.id, inviter));
 
-    await expect(consumeToken(token, GOOD)).rejects.toThrow(/permissions have changed/i);
+    await expectRefused(token, target);
   });
 
   it("refuses an invite with no recorded issuer", async () => {
@@ -498,7 +512,7 @@ describe("an invite outliving the authority it was issued under", () => {
     const token = /token=([A-Za-z0-9_-]+)/.exec(result.link!)![1]!;
 
     await db.update(s.authTokens).set({ createdBy: null }).where(eq(s.authTokens.userId, target));
-    await expect(consumeToken(token, GOOD)).rejects.toThrow(/no longer has an account/i);
+    await expectRefused(token, target);
   });
 
   it("refuses a link for an account that has since been archived", async () => {
@@ -516,10 +530,7 @@ describe("an invite outliving the authority it was issued under", () => {
     const token = /token=([A-Za-z0-9_-]+)/.exec(result.link!)![1]!;
 
     await db.update(s.users).set({ archivedAt: new Date() }).where(eq(s.users.id, target));
-    await expect(consumeToken(token, GOOD)).rejects.toThrow(/archived/i);
-
-    const [row] = await db.select().from(s.users).where(eq(s.users.id, target));
-    expect(row!.passwordHash).toBeNull();
+    await expectRefused(token, target);
   });
 
   it("refuses a link whose inviter has since been archived", async () => {
@@ -541,7 +552,7 @@ describe("an invite outliving the authority it was issued under", () => {
     const token = /token=([A-Za-z0-9_-]+)/.exec(result.link!)![1]!;
 
     await db.update(s.users).set({ archivedAt: new Date() }).where(eq(s.users.id, inviter));
-    await expect(consumeToken(token, GOOD)).rejects.toThrow(/permissions have changed/i);
+    await expectRefused(token, target);
   });
 
   it("still lets an unchanged invite through", async () => {

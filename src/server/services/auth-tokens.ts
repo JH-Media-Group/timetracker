@@ -107,6 +107,16 @@ async function issue(
       and(eq(s.authTokens.userId, user.id), eq(s.authTokens.purpose, purpose), isNull(s.authTokens.usedAt))
     );
 
+  /*
+    An invite has an issuer, and the check at redemption should never be the
+    first thing to notice it does not. Refusing here means the row cannot
+    exist, rather than existing and stranding somebody later behind a message
+    about a person who was never there.
+  */
+  if (purpose === "invite" && !createdBy) {
+    throw new AppError("internal_error", "An invitation must record who issued it.");
+  }
+
   await ctx.db.insert(s.authTokens).values({
     id: tokenId,
     userId: user.id,
@@ -171,6 +181,21 @@ async function issue(
 }
 
 /**
+ * What a redemption says when it refuses.
+ *
+ * One message for every reason, deliberately. The endpoint is anonymous and
+ * the reasons are not all the holder's business: "that account has been
+ * archived" tells somebody who may no longer work here that a colleague was
+ * archived, and "the person who sent it no longer has an account" says
+ * something about a third party entirely. Neither is worth the small help it
+ * gives somebody holding a dead link, whose next step is the same either way.
+ *
+ * It does not hide the existence of the account: holding a live token is
+ * already proof of that. It hides what happened to it.
+ */
+const REFUSED = "That link is no longer valid. Ask for a new one." as const;
+
+/**
  * Does whoever issued this invite still outrank whoever it is for?
  *
  * Re-runs the rule at redemption, because the answer can change in the seven
@@ -202,10 +227,7 @@ async function assertInviterStillOutranks(ctx: Ctx, inviterId: string, subjectId
   // Inviting yourself is always allowed, and is how the owner recovers.
   if (inviterId === subjectId) return;
 
-  const stale = new AppError(
-    "validation_failed",
-    "That link is no longer valid because this account's permissions have changed. Ask for a new one."
-  );
+  const stale = new AppError("validation_failed", REFUSED);
 
   // The inviter is gone, or has no profile and so no authority to lend.
   if (!inviter) throw stale;
@@ -683,18 +705,12 @@ export async function consumeToken(token: string, password: string): Promise<{ u
       .limit(1);
 
     if (subject?.archivedAt) {
-      throw new AppError(
-        "validation_failed",
-        "That link is no longer valid because the account has been archived. Ask for a new one."
-      );
+      throw new AppError("validation_failed", REFUSED);
     }
 
     if (row.purpose === "invite") {
       if (!row.createdBy) {
-        throw new AppError(
-          "validation_failed",
-          "That link is no longer valid because the person who sent it no longer has an account. Ask for a new one."
-        );
+        throw new AppError("validation_failed", REFUSED);
       }
       await assertInviterStillOutranks(tx, row.createdBy, row.userId);
     }

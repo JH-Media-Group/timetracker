@@ -502,8 +502,17 @@ async function assertNotTheLastAdministrator(ctx: Ctx, excludingUserId: string):
     .innerJoin(s.permissionProfiles, eq(s.users.profileId, s.permissionProfiles.id))
     .where(and(isNull(s.users.archivedAt), ne(s.users.id, excludingUserId)));
 
+  /*
+    Counted on effective capabilities, like every other capability question in
+    this file since one of them was found comparing literal strings.
+
+    Nothing implies `people:manage` today, so this changes no answer now. It is
+    the counting that matters: a guard that undercounts holders is a guard that
+    lets you archive the last real one, and the day some profile confers it by
+    implication is not the day to discover that this line was the exception.
+  */
   const remaining = rows.filter((row) =>
-    ((row.capabilities ?? []) as Capability[]).includes("people:manage")
+    effectiveCapabilities((row.capabilities ?? []) as Capability[]).has("people:manage")
   ).length;
 
   if (remaining === 0) {
