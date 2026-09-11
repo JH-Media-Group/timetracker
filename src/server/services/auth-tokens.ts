@@ -211,6 +211,21 @@ export async function inviteUser(
     throw new AppError("validation_failed", "Choose at least one of sending the email or creating a link.");
   }
 
+  /*
+    Locked and read in one statement, and everything below decided from what it
+    returned.
+
+    The first version of this read the person, authorized against that read,
+    and only then took the lock, which is a check-then-act race with a
+    concurrent promotion. An `updateUser` transaction raising somebody from
+    Member to Administrator commits between the two; the invite authorized
+    against the Member profile, waited on the lock, and then issued a
+    credential for an Administrator account. The guard is only worth as much as
+    the values it was evaluated on.
+
+    `FOR UPDATE` is also what serialises two invites for the same person, which
+    is why it has to happen before the supersede rather than after the read.
+  */
   const [user] = await ctx.db
     .select({
       id: s.users.id,
@@ -222,7 +237,8 @@ export async function inviteUser(
     })
     .from(s.users)
     .where(eq(s.users.id, userId))
-    .limit(1);
+    .limit(1)
+    .for("update");
 
   if (!user) throw notFound("That person");
 
@@ -260,21 +276,6 @@ export async function inviteUser(
       "That account has no real email address. It exists only to carry imported history. Give it a real address first."
     );
   }
-
-  /*
-    Take the user row before issuing.
-
-    Superseding is `UPDATE ... WHERE used_at IS NULL`, which locks nothing when
-    there is no outstanding token, so two invites arriving together both
-    superseded nothing, both inserted, and two live seven-day links existed.
-    That is the state superseding is for, and it made the dialog's promise that
-    a new invite "replaces any earlier invitation" false.
-
-    `requestPasswordReset` below already carries this lock and a comment saying
-    it was added for exactly this race. The rule is the same for both purposes
-    and it belongs in both places.
-  */
-  await ctx.db.select({ id: s.users.id }).from(s.users).where(eq(s.users.id, user.id)).limit(1).for("update");
 
   const issued = await issue(ctx, user, "invite", ctx.actor.userId, { sendEmail: email, returnLink: link });
 
@@ -490,6 +491,27 @@ export async function consumeToken(token: string, password: string): Promise<{ u
   const ctx = createCtx({ actor: systemActor(candidate.userId), db });
 
   const userId = await withTransaction(ctx, async (tx) => {
+    /*
+      The user row first, then the token. That order matters more than it looks.
+
+      `inviteUser` locks the user and then updates `auth_tokens` to supersede.
+      This function used to lock `auth_tokens` and then update `users`, which is
+      a lock-order inversion: re-invite holds the user and waits for the token,
+      consumption holds the token and waits for the user, and Postgres breaks
+      the cycle by aborting one of them. Nothing here retries a deadlock and
+      `fromDatabaseError` does not translate 40P01, so somebody setting their
+      password at the moment an admin re-invites them gets a 500 and, if
+      consumption is the transaction that loses, a token the re-invite has
+      since superseded.
+
+      Taking them in the same order in both places means the two serialise
+      instead of deadlocking. The user id comes from the unlocked pre-check
+      above, which is safe for this purpose because a token never moves between
+      users; everything the decision rests on is still re-read under the lock
+      below.
+    */
+    await tx.db.select({ id: s.users.id }).from(s.users).where(eq(s.users.id, candidate.userId)).limit(1).for("update");
+
     /*
       Claim the token under a row lock before touching the password.
 

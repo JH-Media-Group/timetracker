@@ -61,13 +61,44 @@ export function InviteDialog({
   const [link, setLink] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState(false);
 
+  /*
+    Which opening of the dialog a request belongs to.
+
+    `invite.reset()` detaches the observer; it does not cancel a request in
+    flight or stop its callback running. Cancel a pending link-only invite,
+    reopen, invite again, and the first response can land after the second and
+    overwrite the displayed link with one the second request has already
+    superseded. The person then copies a dead link and finds out days later.
+
+    A generation captured at submit and compared on arrival makes a late
+    response from a previous opening a no-op.
+  */
+  const generation = React.useRef(0);
+
   const invite = useMutation({
-    mutationFn: () => api.inviteUser(userId, { email: sendEmail, link: wantLink }),
+    /*
+      The link never becomes the mutation's data.
+
+      Returning it put the credential in the shared mutation cache, where
+      `reset()` does not reach: it clears the observer and leaves
+      `state.data` until garbage collection, several minutes later. The round
+      that added `reset()` believed it had fixed this and had a test asserting
+      the source contained the call rather than that the cache was empty.
+
+      Handing it straight to component state instead means there is one copy,
+      in one place, that the close path actually clears.
+    */
+    mutationFn: async (): Promise<{ queued: boolean; hadLink: boolean }> => {
+      const mine = generation.current;
+      const result = await api.inviteUser(userId, { email: sendEmail, link: wantLink });
+      if (mine !== generation.current) return { queued: result.queued, hadLink: false };
+      if (result.link) setLink(result.link);
+      return { queued: result.queued, hadLink: !!result.link };
+    },
     onSuccess: (result) => {
-      if (result.link) {
+      if (result.hadLink) {
         // Stay open: the link is the reason they are here and it is not
         // recoverable once this closes.
-        setLink(result.link);
         if (result.queued) toast.push({ tone: "success", title: `Invitation queued for ${email}.` });
       } else {
         toast.push({ tone: "success", title: `Invitation queued for ${email}.` });
@@ -94,6 +125,9 @@ export function InviteDialog({
     devtools as the first.
   */
   React.useEffect(() => {
+    // Bumped on both edges, so any request still in flight from the previous
+    // opening lands on a generation that no longer matches and does nothing.
+    generation.current += 1;
     setSendEmail(true);
     setWantLink(false);
     setLink(null);

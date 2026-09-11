@@ -27,7 +27,7 @@ import { syncBaseProfiles } from "@/server/auth/profiles";
 import { createCtx, type Actor, type Ctx } from "@/server/ctx";
 import { BASE_PROFILES, type BaseProfileKey, type Capability } from "@/server/auth/capabilities";
 import { createTimeEntry, runningEntry } from "@/server/services/time";
-import { callRoute, jsonData } from "./support/route-harness";
+import { callRoute, jsonData, sessionCookie } from "./support/route-harness";
 
 import { POST as STOP } from "@/app/api/v1/time-entries/[id]/stop/route";
 import { PATCH as PATCH_ME } from "@/app/api/v1/me/route";
@@ -310,6 +310,59 @@ describe("POST /users/:id/invite", () => {
     });
 
     expect(response.status).toBe(422);
+  });
+
+  it("refuses an oversized body that declares no length", async () => {
+    /*
+      The first cap read `content-length`, defaulted a missing one to zero, and
+      measured the body after `.trim()`. So a body with no declared length and
+      a hundred kilobytes of leading whitespace was measured as twenty-seven
+      characters and accepted, having already been buffered in full.
+
+      Built as a stream with no `Content-Length` on purpose, because that is the
+      shape that got through.
+    */
+    const payload = " ".repeat(100_000) + JSON.stringify({ email: false, link: true });
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(payload));
+        controller.close();
+      },
+    });
+
+    const request = new Request(`https://tally.test/api/v1/users/${people.member}/invite`, {
+      method: "POST",
+      headers: {
+        origin: (await import("@/server/env")).env.APP_URL.replace(/\/$/, ""),
+        "content-type": "application/json",
+        cookie: await sessionCookie(people.administrator!),
+      },
+      body: stream,
+      // Required by undici whenever the body is a stream.
+      duplex: "half",
+    } as RequestInit & { duplex: "half" });
+
+    Object.defineProperty(request, "cookies", {
+      value: {
+        get(name: string) {
+          const jar = request.headers.get("cookie") ?? "";
+          for (const pair of jar.split(";")) {
+            const [key, ...rest] = pair.trim().split("=");
+            if (key === name) return { name, value: rest.join("=") };
+          }
+          return undefined;
+        },
+      },
+    });
+
+    const response = await INVITE(
+      request as never,
+      { params: Promise.resolve({ id: people.member! }) } as never
+    );
+
+    expect(response.status).toBe(422);
+    const problem = (await response.json()) as { errors?: Record<string, string[]> };
+    expect(problem.errors?._?.[0]).toMatch(/far larger/i);
   });
 
   it("is refused without people:manage", async () => {

@@ -9,7 +9,7 @@
 
 import { and, asc, eq, inArray, isNull, ne, sql } from "drizzle-orm";
 import { assertCan, type Ctx } from "@/server/ctx";
-import { BASE_PROFILES, type BaseProfileKey, type Capability } from "@/server/auth/capabilities";
+import { BASE_PROFILES, effectiveCapabilities, type BaseProfileKey, type Capability } from "@/server/auth/capabilities";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
 import { userScope, visibleUserIds } from "@/server/auth/scope";
@@ -520,7 +520,16 @@ export async function assertOutranksOrEqual(ctx: Ctx, targetProfileId: string, v
   if (!profile) return; // No profile is no permissions; nothing to outrank.
 
   const theirs = (profile.capabilities ?? []) as Capability[];
-  const held = ctx.actor.capabilities;
+  /*
+    Compared on what the caller's capabilities actually confer, not on the
+    literal strings.
+
+    `report:view_all` subsumes `report:view_team`, and an Executive Manager
+    holds the first without the second, so a set difference reported the
+    Executive Manager as lacking something a People Admin had and refused the
+    action. The same profile is allowed to read every report in the account.
+  */
+  const held = effectiveCapabilities(ctx.actor.capabilities as Iterable<Capability>);
   const beyond = theirs.filter((c) => !held.has(c));
 
   if (beyond.length > 0) {

@@ -52,6 +52,39 @@ describe("the invitation UI", () => {
     expect(persisted, "a one-time credential must not be written to storage").toBe(false);
   });
 
+  it("never puts the credential into the mutation cache at all", () => {
+    /*
+      Round one "fixed" the credential outliving the dialog by calling
+      `invite.reset()`, and asserted the fix by checking the source contained
+      that call. Round two showed `reset()` clears the observer and leaves the
+      mutation's own `state.data` in the shared cache until garbage collection,
+      minutes later. The source assertion was true and the property was false.
+
+      So the credential no longer travels as the mutation's result: the request
+      hands it straight to component state and the mutation returns booleans.
+      There is one copy, in one place, and the close path clears it.
+    */
+    expect(dialog, "the link must not be part of the mutation's data").toContain(
+      "Promise<{ queued: boolean; hadLink: boolean }>"
+    );
+    expect(dialog).toContain("hadLink: !!result.link");
+    expect(dialog, "setLink happens in the request, not from cached data").toMatch(
+      /if \(result\.link\) setLink\(result\.link\)/
+    );
+  });
+
+  it("ignores a response from a previous opening of the dialog", () => {
+    /*
+      `reset()` does not cancel a request in flight. Cancel a pending link-only
+      invite, reopen, invite again, and the first response can land after the
+      second and overwrite the live link with one that has been superseded. The
+      person copies a dead link and finds out days later.
+    */
+    expect(dialog).toContain("const generation = React.useRef(0)");
+    expect(dialog).toContain("generation.current += 1");
+    expect(dialog).toMatch(/if \(mine !== generation\.current\)/);
+  });
+
   it("drops the link from state and from the mutation cache when it closes", () => {
     /*
       This test used to assert the opposite, and was wrong: it pinned "clears on

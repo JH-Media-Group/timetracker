@@ -59,6 +59,35 @@ export const CAPABILITIES = [
 
 export type Capability = (typeof CAPABILITIES)[number];
 
+/**
+ * Capabilities that subsume other capabilities.
+ *
+ * The set is a lattice rather than a ladder, which `assertCanAny` in
+ * `src/server/ctx.ts` already says and `teamReport` already works around:
+ * `report:view_all` is strictly wider than `report:view_team`, and an
+ * Executive Manager holds the first without the second.
+ *
+ * Anything comparing two capability sets has to know that, or it concludes
+ * that somebody who can see every report cannot be trusted with somebody who
+ * can see their team's. `assertOutranksOrEqual` concluded exactly that and
+ * refused an Executive Manager the right to edit, archive or invite a People
+ * Admin, on the strength of one capability the Executive Manager exceeds.
+ *
+ * Keep this minimal and evidenced. A pair belongs here when the code already
+ * treats one as covering the other somewhere it matters, not because the names
+ * suggest a hierarchy.
+ */
+export const COVERS: Partial<Record<Capability, readonly Capability[]>> = {
+  "report:view_all": ["report:view_team"],
+};
+
+/** Every capability `held` confers, including the ones it subsumes. */
+export function effectiveCapabilities(held: Iterable<Capability>): Set<Capability> {
+  const out = new Set<Capability>(held);
+  for (const c of [...out]) for (const implied of COVERS[c] ?? []) out.add(implied);
+  return out;
+}
+
 export const isCapability = (v: string): v is Capability => (CAPABILITIES as readonly string[]).includes(v);
 
 /* ------------------------------------------------------------- profiles */

@@ -299,6 +299,30 @@ describe("who may invite whom", () => {
     expect(result.link).toMatch(/set-password/);
   });
 
+  it("lets a wider capability outrank a narrower one it subsumes", async () => {
+    /*
+      `report:view_all` subsumes `report:view_team`, which this codebase already
+      says twice: `assertCanAny` exists for it and `teamReport` works around it.
+      `assertOutranksOrEqual` compared the literal strings, so an Executive
+      Manager, who holds the first and not the second, was reported as lacking
+      something a People Admin had and refused.
+
+      The refusal was real for editing and archiving before it was real for
+      inviting; extending the check to invites is what made it visible. Fixing
+      the comparison fixes all three.
+    */
+    const peopleAdmin = await makeProfile("pa", ["people:manage", "report:view_own", "report:view_team"]);
+    const target = await makeUser({ profileId: peopleAdmin });
+    const execManager = await makeUser();
+
+    const result = await inviteUser(
+      actorWith(execManager, ["people:manage", "report:view_own", "report:view_all"]),
+      target,
+      { email: false, link: true }
+    );
+    expect(result.link, "an Executive Manager reads every report in the account").toMatch(/set-password/);
+  });
+
   it("refuses to invite somebody whose permissions exceed the caller's", async () => {
     const strongProfile = await makeProfile("strong", ["people:manage", "rates:view_cost", "settings:manage"]);
     const target = await makeUser({ profileId: strongProfile });
@@ -319,6 +343,67 @@ describe("who may invite whom", () => {
       link: true,
     });
     expect(result.link).toMatch(/set-password/);
+  });
+});
+
+describe("a promotion racing an invite", () => {
+  /*
+    The check-then-act hole round two found in round one's fix.
+
+    The guard read the person, authorized against that read, and only then took
+    the lock. An `updateUser` transaction promoting somebody commits in that
+    window: the invite authorizes against the old profile, waits on the lock,
+    and then issues a credential for an account that is now senior to the
+    caller. A guard is only worth the values it was evaluated on, so the read
+    that authorizes has to be the locked one.
+  */
+  it("authorizes against the profile the lock returns, not the one read before it", async () => {
+    const strong = await makeProfile("promoted", ["people:manage", "settings:manage", "rates:view_cost"]);
+    const weak = await makeProfile("ordinary", []);
+    const target = await makeUser({ profileId: weak });
+    const caller = await makeUser();
+
+    const ctx = createCtx({
+      actor: {
+        userId: caller,
+        profileId: null,
+        baseKey: null,
+        capabilities: new Set(["people:manage"]) as never,
+        kind: "user",
+        timezone: "America/New_York",
+        isOwner: false,
+      } as never,
+    });
+
+    /*
+      Hold the target's row and promote them, then release. The invite starts
+      while the promotion is uncommitted, so its own read must block until the
+      promotion lands and then see the new profile.
+    */
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+
+    const promotion = db.transaction(async (tx) => {
+      await tx.select({ id: s.users.id }).from(s.users).where(eq(s.users.id, target)).limit(1).for("update");
+      await tx.update(s.users).set({ profileId: strong }).where(eq(s.users.id, target));
+      await released;
+    });
+
+    // Let the promotion take its lock before the invite asks for one.
+    await new Promise((r) => setTimeout(r, 50));
+
+    const invite = withTransaction(ctx, (tx) => inviteUser(tx, target, { email: false, link: true }));
+    await new Promise((r) => setTimeout(r, 50));
+    release();
+    await promotion;
+
+    await expect(
+      invite,
+      "the invite must see the promotion it waited for"
+    ).rejects.toThrow(/exceed your own/i);
+
+    const tokens = await db.select().from(s.authTokens).where(eq(s.authTokens.userId, target));
+    expect(tokens, "and must not have minted anything").toHaveLength(0);
   });
 });
 

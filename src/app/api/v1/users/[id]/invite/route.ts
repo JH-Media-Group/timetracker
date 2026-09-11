@@ -38,25 +38,63 @@ const schema = z.object({
   link: z.boolean().optional(),
 });
 
+/**
+ * The body as text, refusing anything over `limit` bytes without buffering it.
+ *
+ * Stops reading at the first chunk that takes the total past the limit, so an
+ * oversized body costs one chunk rather than all of it. Returns the trimmed
+ * text, because an empty body and a body of whitespace mean the same thing
+ * here.
+ */
+async function readCapped(req: Request, limit: number): Promise<string> {
+  const tooBig = () =>
+    validationFailed({ _: ["That request body is far larger than this endpoint accepts."] });
+
+  // A declared length over the limit is refused without reading anything, but
+  // its absence proves nothing and the stream is counted regardless.
+  const declared = Number(req.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > limit) throw tooBig();
+
+  if (!req.body) return "";
+
+  const reader = req.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limit) throw tooBig();
+      chunks.push(value);
+    }
+  } finally {
+    // Release the stream whether this finished or bailed out, so an oversized
+    // body is not left half-read on the connection.
+    reader.releaseLock();
+  }
+
+  return new TextDecoder().decode(Buffer.concat(chunks)).trim();
+}
+
 export const POST = route(
   async (ctx, req, params) => {
     /*
-      Capped before parsing. Reading the body by hand also means losing
-      whatever the shared helper would have done about size, and this body is
-      two booleans: anything past a few hundred bytes is a mistake or a game.
-      An authenticated insider is the only one who can reach it, so this is
-      tidiness rather than defence, but buffering an arbitrary body and then
-      copying it with `.trim()` is a silly thing to leave available.
-    */
-    const declared = Number(req.headers.get("content-length") ?? "0");
-    if (declared > 4096) {
-      throw validationFailed({ _: ["That request body is far larger than this endpoint accepts."] });
-    }
+      Capped by counting bytes off the stream, not by trusting a header and not
+      by measuring the string afterwards.
 
-    const raw = (await req.text()).trim();
-    if (raw.length > 4096) {
-      throw validationFailed({ _: ["That request body is far larger than this endpoint accepts."] });
-    }
+      The first version did both of the wrong things. A missing `Content-Length`
+      defaulted to zero and passed, and the length check ran after `.trim()`, so
+      a hundred kilobytes of leading whitespace followed by a valid body was
+      measured as twenty-seven characters and accepted. `String.length` counts
+      UTF-16 units rather than bytes as well. Reading the whole body before
+      deciding whether it is too big is the part that makes a cap pointless.
+
+      This body is two booleans. An authenticated holder of `people:manage` is
+      the only one who can reach it, so this is tidiness rather than defence,
+      but the tidy version should at least do what it says.
+    */
+    const raw = await readCapped(req, 4096);
     let parsed: unknown = {};
     if (raw) {
       try {
