@@ -437,4 +437,56 @@ describe("idempotency and who owns a cached response", () => {
       "a different token must not be served the first one's stored response"
     ).not.toBe(200);
   });
+
+  it("will not let a narrow token replay what its owner's session did", async () => {
+    /*
+      Scoping the claim to the user was not enough, and the round that did it
+      called user-level "the right granularity", which was wrong. A person's
+      session and a deliberately narrowed token of theirs are not one
+      principal: the token was issued with fewer scopes on purpose. A replay is
+      served before the handler and so before every capability check, so the
+      token receives an answer its own scopes would have been refused.
+    */
+    const plainProfile = newId();
+    await db.insert(s.permissionProfiles).values({ id: plainProfile, name: `narrow-${plainProfile}`, capabilities: [] });
+    const subject = newId();
+    await db.insert(s.users).values({
+      id: subject,
+      email: `narrow-${subject}@example.test`,
+      firstName: "Narrow",
+      lastName: "Subject",
+      profileId: plainProfile,
+      timezone: "America/New_York",
+    });
+
+    const token = await createApiToken(ctxFor("administrator"), {
+      label: `narrow-${newId()}`,
+      scopes: ["tally.admin"],
+    });
+
+    const key = `session-then-token-${newId()}`;
+    const body = { email: true, link: false };
+
+    const fromSession = await callRoute(INVITE, {
+      path: `/api/v1/users/${subject}/invite`,
+      method: "POST",
+      as: people.administrator,
+      params: { id: subject },
+      body,
+      headers: { "idempotency-key": key },
+    });
+    expect(fromSession.status, "the session's own request succeeds").toBe(200);
+
+    const fromToken = await callRoute(INVITE, {
+      path: `/api/v1/users/${subject}/invite`,
+      method: "POST",
+      params: { id: subject },
+      body,
+      headers: { authorization: `Bearer ${token.token}`, "idempotency-key": key },
+    });
+    expect(
+      fromToken.status,
+      "the same person's narrower token is a different principal"
+    ).not.toBe(200);
+  });
 });

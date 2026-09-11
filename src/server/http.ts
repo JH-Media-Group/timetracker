@@ -439,8 +439,26 @@ interface IdempotencyClaim {
   replay: NextResponse | null;
 }
 
-const hashBody = (routeKey: string, body: string) =>
-  createHash("sha256").update(`${routeKey}\n${body}`).digest("hex");
+/**
+ * What makes two requests "the same request" for idempotency purposes.
+ *
+ * The route, the body, and **who is asking**, where who includes which
+ * credential they hold rather than only which person they are.
+ *
+ * Scoping the claim to the user was not enough, and the comment saying that
+ * was "the right granularity" was wrong. A person's browser session and a
+ * deliberately narrowed API token of theirs are not one principal: the token
+ * was issued with fewer scopes on purpose. Without the credential in the hash,
+ * the session makes a request and the narrow token replays the stored response
+ * for it, receiving an answer its own scopes would have been refused, because
+ * a replay is served before the handler runs and therefore before every
+ * capability check inside the service.
+ *
+ * Folding it into the hash rather than adding a column means a mismatch
+ * surfaces as "that key was used for a different request", which is what it is.
+ */
+const hashBody = (routeKey: string, body: string, credential: string) =>
+  createHash("sha256").update(`${routeKey}\n${credential}\n${body}`).digest("hex");
 
 /**
  * Claims the key before the handler runs.
@@ -479,7 +497,13 @@ const ANONYMOUS_API_ACTOR = "00000000-0000-0000-0000-000000000000";
 async function claimIdempotencyKey(ctx: Ctx, req: NextRequest, key: string): Promise<IdempotencyClaim> {
   const routeKey = `${req.method} ${new URL(req.url).pathname}`;
   const raw = await peekBody(req);
-  const hash = hashBody(routeKey, raw);
+  /*
+    The token prefix identifies the credential; a browser session is its own
+    kind. Two tokens held by one person differ here, which is the point: they
+    were issued with different scopes and are not interchangeable.
+  */
+  const credential = ctx.actor.tokenPrefix ? `token:${ctx.actor.tokenPrefix}` : `kind:${ctx.actor.kind}`;
+  const hash = hashBody(routeKey, raw, credential);
   const anonymous = ctx.actor.kind === "api" && ctx.actor.userId === ANONYMOUS_API_ACTOR;
   const actorId = anonymous ? null : ctx.actor.userId;
 
@@ -573,9 +597,31 @@ async function completeIdempotencyClaim(claim: IdempotencyClaim, status: number,
  */
 const bodyCache = new WeakMap<NextRequest, string>();
 
+/**
+ * The most this will buffer to hash a body for idempotency.
+ *
+ * Generous next to any real request here and finite, which is the point. This
+ * runs before the handler, so a route's own limit cannot protect it: the
+ * invite endpoint caps its body at four kilobytes by counting bytes off the
+ * stream, and sending an Idempotency-Key made this clone and buffer the whole
+ * thing first, defeating the cap through the shared seam rather than the
+ * route. A limit that any caller can step around by adding a header is not a
+ * limit.
+ */
+const MAX_IDEMPOTENCY_BODY_BYTES = 1_000_000;
+
 async function peekBody(req: NextRequest): Promise<string> {
   const cached = bodyCache.get(req);
   if (cached != null) return cached;
+
+  const declared = Number(req.headers.get("content-length"));
+  if (Number.isFinite(declared) && declared > MAX_IDEMPOTENCY_BODY_BYTES) {
+    throw new AppError(
+      "validation_failed",
+      "That request body is too large to use with an Idempotency-Key."
+    );
+  }
+
   let text: string;
   try {
     text = await req.clone().text();
@@ -586,6 +632,19 @@ async function peekBody(req: NextRequest): Promise<string> {
       { meta: { cause: String(e) } }
     );
   }
+  /*
+    Checked again after reading, because a chunked request declares no length
+    and that is the shape this was reachable through. Byte length, not string
+    length: the latter counts UTF-16 units and undercounts every multi-byte
+    character, which is the same mistake an earlier round made in the route.
+  */
+  if (Buffer.byteLength(text, "utf8") > MAX_IDEMPOTENCY_BODY_BYTES) {
+    throw new AppError(
+      "validation_failed",
+      "That request body is too large to use with an Idempotency-Key."
+    );
+  }
+
   bodyCache.set(req, text);
   return text;
 }

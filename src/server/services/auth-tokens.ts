@@ -511,7 +511,38 @@ export async function requestPasswordReset(email: string): Promise<void> {
       issued, so two live links went out. The lock serialises them and the
       second one then sees the first one's token.
     */
-    await tx.db.select({ id: s.users.id }).from(s.users).where(eq(s.users.id, user.id)).limit(1).for("update");
+    /*
+      Locked, and the address re-read from the locked row, not carried in from
+      the lookup above.
+
+      Issuing against the earlier read meant a reset could be delivered to an
+      address that had just stopped being this account's. Somebody is invited
+      at a mistyped address; its recipient asks for a reset while an
+      administrator is correcting the address; the reset reads the old address,
+      waits for the lock, and then issues to it after the correction has
+      committed and invalidated every other token. The new link survives the
+      correction and sets that account's password, and a reset carries no
+      inviter for the redemption guard to check.
+
+      So the request is honoured only if the address it named is still the
+      address on the account. Silently, like every other refusal on this path:
+      telling the caller would say whether an address is current, which is the
+      thing this endpoint exists not to disclose.
+    */
+    const [locked] = await tx.db
+      .select({
+        id: s.users.id,
+        email: s.users.email,
+        firstName: s.users.firstName,
+        archivedAt: s.users.archivedAt,
+      })
+      .from(s.users)
+      .where(eq(s.users.id, user.id))
+      .limit(1)
+      .for("update");
+
+    if (!locked || locked.archivedAt) return;
+    if (locked.email.trim().toLowerCase() !== email.trim().toLowerCase()) return;
 
     const [recent] = await tx.db
       .select({ id: s.authTokens.id })
@@ -530,7 +561,9 @@ export async function requestPasswordReset(email: string): Promise<void> {
       .limit(1);
 
     if (recent) return;
-    await issue(tx, user, "password_reset", null);
+    // From the locked row, so the address the mail goes to is the one that
+    // is on the account now.
+    await issue(tx, locked, "password_reset", null);
   });
 }
 

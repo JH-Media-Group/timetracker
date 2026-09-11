@@ -369,6 +369,78 @@ describe("who may invite whom", () => {
   });
 });
 
+describe("a reset racing an address correction", () => {
+  /*
+    A reset carries no inviter, so the redemption guard has nothing to check,
+    which makes where the link is delivered the only control there is.
+
+    Issuing against a read taken before the lock meant a reset could be
+    delivered to an address that had just stopped being this account's:
+    somebody is invited at a mistyped address, its recipient asks for a reset
+    while an administrator is correcting the address, the reset reads the old
+    address, waits for the lock, and then issues to it after the correction has
+    committed and invalidated everything else.
+  */
+  it("does not issue to an address that is no longer on the account", async () => {
+    /*
+      Interleaved, because sequentially there is nothing to test: once the
+      correction has committed, the lookup by address finds nobody and the
+      function returns before reaching the check. The defect needs the reset to
+      find the account under the old address and then have the correction land
+      while it waits for the lock, which is exactly the window the fix closes.
+
+      A first version of this test was sequential, passed, and went on passing
+      with the fix removed.
+    */
+    const ordinary = await makeProfile("reset-race", []);
+    const wrong = `wrong-${newId()}@example.test`;
+    const right = `right-${newId()}@example.test`;
+    const target = await makeUser({ profileId: ordinary, email: wrong });
+    await db.delete(s.outboundMessages).where(eq(s.outboundMessages.userId, target));
+
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+
+    // Holds the user row while the address changes, and does not commit until
+    // the reset has already read the old address and started waiting.
+    const correction = db.transaction(async (tx) => {
+      await tx.select({ id: s.users.id }).from(s.users).where(eq(s.users.id, target)).limit(1).for("update");
+      await tx.update(s.users).set({ email: right }).where(eq(s.users.id, target));
+      await tx.update(s.authTokens).set({ usedAt: new Date() }).where(eq(s.authTokens.userId, target));
+      await released;
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+    const reset = requestPasswordReset(wrong);
+    await new Promise((r) => setTimeout(r, 50));
+    release();
+    await correction;
+    await reset;
+
+    const queued = await db
+      .select()
+      .from(s.outboundMessages)
+      .where(eq(s.outboundMessages.userId, target));
+    expect(queued, "nothing may be sent to an address that is not theirs").toHaveLength(0);
+
+    const tokens = await db
+      .select()
+      .from(s.authTokens)
+      .where(and(eq(s.authTokens.userId, target), isNull(s.authTokens.usedAt)));
+    expect(tokens, "and no credential may be minted for it").toHaveLength(0);
+  });
+
+  it("still issues for the address that is on the account", async () => {
+    const ordinary = await makeProfile("reset-ok", []);
+    const target = await makeUser({ profileId: ordinary });
+    const [row] = await db.select().from(s.users).where(eq(s.users.id, target));
+
+    await requestPasswordReset(row!.email);
+    const token = await linkTokenFor(target);
+    expect(await peekToken(token)).toMatchObject({ userId: target, purpose: "password_reset" });
+  });
+});
+
 describe("changing somebody's email address", () => {
   it("kills any credential already sent to the old one", async () => {
     /*
