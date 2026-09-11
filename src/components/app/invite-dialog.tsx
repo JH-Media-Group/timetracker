@@ -24,7 +24,15 @@
  *
  * Anybody holding it can set this person's password, once, within seven days.
  * It is shown after the fact rather than offered as a thing to keep, it is
- * never stored, and it disappears when the dialog closes.
+ * never written to storage, and it is dropped from component state and from
+ * the mutation cache when the dialog closes.
+ *
+ * That last clause used to say "it disappears when the dialog closes" while the
+ * code cleared on open, which meant the credential sat in React state and in
+ * `useMutation`'s `data` for the rest of the session: still there behind an
+ * unlocked screen, in a screenshare, or in devtools. A reviewer caught the
+ * comment claiming a property the code did not have, which is the flattering
+ * direction for a comment to drift in.
  */
 
 import * as React from "react";
@@ -53,21 +61,6 @@ export function InviteDialog({
   const [link, setLink] = React.useState<string | null>(null);
   const [copied, setCopied] = React.useState(false);
 
-  /*
-    Back to the starting state every time it opens, rather than on close.
-    Clearing on close races the closing animation, and a link that flashes back
-    into view for a frame on the way out is the one thing that must not happen
-    to a credential.
-  */
-  React.useEffect(() => {
-    if (open) {
-      setSendEmail(true);
-      setWantLink(false);
-      setLink(null);
-      setCopied(false);
-    }
-  }, [open]);
-
   const invite = useMutation({
     mutationFn: () => api.inviteUser(userId, { email: sendEmail, link: wantLink }),
     onSuccess: (result) => {
@@ -88,21 +81,73 @@ export function InviteDialog({
       }),
   });
 
+  /*
+    Cleared both ways, for two different reasons.
+
+    On open, so the dialog starts from a known state rather than showing the
+    last invite's answer. On close, so the credential does not outlive the
+    dialog: clearing only on open left it in component state and in the
+    mutation cache until the page was navigated away from.
+
+    The close path drops the mutation result too. `invite.data.link` is a second
+    copy that `setLink(null)` does not touch, and it is just as readable from
+    devtools as the first.
+  */
+  React.useEffect(() => {
+    setSendEmail(true);
+    setWantLink(false);
+    setLink(null);
+    setCopied(false);
+    if (!open) invite.reset();
+    // `invite` is stable for the life of the component; depending on it would
+    // re-run this on every mutation state change and wipe the link on success.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  const cannotCopy = () =>
+    toast.push({ tone: "danger", title: "Could not copy. Select the link and copy it by hand." });
+
   const copy = () => {
     if (!link) return;
-    navigator.clipboard.writeText(link).then(
-      () => {
+    /*
+      try/catch as well as the rejection handler. `navigator.clipboard` is
+      undefined on an insecure origin, so this throws synchronously rather than
+      returning a rejected promise, and the handler that was supposed to say
+      "copy it by hand" would never run. The link is still on screen and
+      selectable, so the message is the whole recovery path.
+    */
+    try {
+      navigator.clipboard.writeText(link).then(() => {
         setCopied(true);
         toast.push({ tone: "default", title: "Link copied." });
-      },
-      () => toast.push({ tone: "danger", title: "Could not copy. Select the link and copy it by hand." })
-    );
+      }, cannotCopy);
+    } catch {
+      cannotCopy();
+    }
+  };
+
+  /*
+    Closing while the link is on screen destroys the only copy, and Esc or a
+    click on the overlay does it without asking. Recovering means inviting
+    again, which supersedes, which kills a link that may already be pasted into
+    a message to the person. So while a link is showing, only the Done button
+    closes this.
+  */
+  const requestClose = (next: boolean) => {
+    if (!next && link && !copied) {
+      toast.push({
+        tone: "default",
+        title: "Copy the link first. It will not be shown again.",
+      });
+      return;
+    }
+    onOpenChange(next);
   };
 
   const nothingChosen = !sendEmail && !wantLink;
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={requestClose}>
       <DialogContent
         title={`Invite ${name}`}
         description={link ? undefined : "They will be asked to choose a password."}

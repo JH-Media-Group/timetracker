@@ -508,7 +508,7 @@ async function assertNotTheLastAdministrator(ctx: Ctx, excludingUserId: string):
  * Reaching down is the same escalation as reaching up. Somebody who can remove
  * the people above them ends up the most powerful account by subtraction.
  */
-async function assertOutranksOrEqual(ctx: Ctx, targetProfileId: string, verb: string): Promise<void> {
+export async function assertOutranksOrEqual(ctx: Ctx, targetProfileId: string, verb: string): Promise<void> {
   if (ctx.actor.kind === "system") return;
 
   const [profile] = await ctx.db

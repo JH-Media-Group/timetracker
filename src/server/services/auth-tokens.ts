@@ -37,10 +37,11 @@ import { db } from "@/server/db/client";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
 import { assertCan } from "@/server/ctx";
-import { AppError, notFound } from "@/server/errors";
+import { AppError, forbidden, notFound } from "@/server/errors";
 import { hashPassword, checkPasswordPolicy } from "@/server/auth/password";
 import { revokeAllSessions } from "@/server/auth/session";
 import { queueMail } from "@/server/services/mail";
+import { assertOutranksOrEqual } from "@/server/services/people";
 import { TOKEN_TTL_MS as TTL_MS, type TokenPurpose } from "@/server/auth/token-ttl";
 import { env } from "@/server/env";
 
@@ -87,9 +88,10 @@ async function issue(
   user: { id: string; email: string; firstName: string | null },
   purpose: TokenPurpose,
   createdBy: string | null,
-  { sendEmail = true }: { sendEmail?: boolean } = {}
-): Promise<{ link: string }> {
+  { sendEmail = true, returnLink = false }: { sendEmail?: boolean; returnLink?: boolean } = {}
+): Promise<{ link?: string; tokenId: string }> {
   const token = mintToken();
+  const tokenId = newId();
 
   /*
     Supersede any outstanding token of the same purpose.
@@ -105,7 +107,7 @@ async function issue(
     );
 
   await ctx.db.insert(s.authTokens).values({
-    id: newId(),
+    id: tokenId,
     userId: user.id,
     purpose,
     tokenHash: digest(token),
@@ -155,7 +157,16 @@ async function issue(
     });
   }
 
-  return { link };
+  /*
+    The link goes back only to a caller that asked for it, not to every caller
+    by default.
+
+    Narrowed here as well as in `inviteUser` because this function serves the
+    password-reset purpose too, and `requestPasswordReset` discards what it
+    returns. A default that hands back a reset credential is the thing the
+    comment above is about: harmless today, one careless caller from not being.
+  */
+  return returnLink ? { link, tokenId } : { tokenId };
 }
 
 /** How the invite reaches the person. At least one must be true. */
@@ -206,12 +217,40 @@ export async function inviteUser(
       email: s.users.email,
       firstName: s.users.firstName,
       archivedAt: s.users.archivedAt,
+      isOwner: s.users.isOwner,
+      profileId: s.users.profileId,
     })
     .from(s.users)
     .where(eq(s.users.id, userId))
     .limit(1);
 
   if (!user) throw notFound("That person");
+
+  /*
+    AN INVITE IS A CREDENTIAL FOR SOMEBODY ELSE'S ACCOUNT, SO IT IS RANKED.
+
+    `updateUser` has refused to edit the owner's record, or anybody holding
+    permissions beyond the caller's, since the day somebody noticed that the
+    owner's email was editable by any holder of `people:manage`. Inviting had
+    neither check, which was survivable only while the credential could go
+    nowhere but the account's own inbox: the victim was told.
+
+    A link-only invite removes that. Without these two lines a People Admin can
+    take a set-password link for the account owner, use it, and `consumeToken`
+    revokes every session the owner holds. That is a silent takeover by
+    somebody the permission model says is junior to them, and `people:manage`
+    is held by two base profiles, not just Administrator.
+
+    Same rule, same wording, same helper as editing them. Inviting somebody is
+    at least as powerful as editing them.
+  */
+  if (user.isOwner && ctx.actor.kind !== "system" && user.id !== ctx.actor.userId) {
+    throw forbidden("Only the account owner can invite the owner.");
+  }
+  if (user.profileId && user.id !== ctx.actor.userId) {
+    await assertOutranksOrEqual(ctx, user.profileId, "invite");
+  }
+
   if (user.archivedAt) {
     throw new AppError("conflict", "That person is archived. Restore them before inviting them.");
   }
@@ -222,7 +261,22 @@ export async function inviteUser(
     );
   }
 
-  const issued = await issue(ctx, user, "invite", ctx.actor.userId, { sendEmail: email });
+  /*
+    Take the user row before issuing.
+
+    Superseding is `UPDATE ... WHERE used_at IS NULL`, which locks nothing when
+    there is no outstanding token, so two invites arriving together both
+    superseded nothing, both inserted, and two live seven-day links existed.
+    That is the state superseding is for, and it made the dialog's promise that
+    a new invite "replaces any earlier invitation" false.
+
+    `requestPasswordReset` below already carries this lock and a comment saying
+    it was added for exactly this race. The rule is the same for both purposes
+    and it belongs in both places.
+  */
+  await ctx.db.select({ id: s.users.id }).from(s.users).where(eq(s.users.id, user.id)).limit(1).for("update");
+
+  const issued = await issue(ctx, user, "invite", ctx.actor.userId, { sendEmail: email, returnLink: link });
 
   /*
     The channels are on the audit row because they are not the same act.
@@ -230,12 +284,15 @@ export async function inviteUser(
     Taking the link hands it to whoever pressed the button, to pass on by some
     route this system cannot see. If an account is later found to have been set
     up by the wrong person, that distinction is the whole question.
+
+    The token id goes on the row too, so the invite that issued a credential can
+    be joined to the moment it was used rather than guessed at by timestamp.
   */
   ctx.audit({
     action: "user.invited",
     entityType: "user",
     entityId: user.id,
-    after: { emailed: email, linkTaken: link },
+    after: { emailed: email, linkTaken: link, tokenId: issued.tokenId },
   });
 
   // Present only when asked for. A caller that did not request a link must not
@@ -404,7 +461,7 @@ export async function consumeToken(token: string, password: string): Promise<{ u
     one is a filter, not the decision.
   */
   const [candidate] = await db
-    .select({ id: s.authTokens.id })
+    .select({ id: s.authTokens.id, userId: s.authTokens.userId })
     .from(s.authTokens)
     .where(and(eq(s.authTokens.tokenHash, tokenHash), isNull(s.authTokens.usedAt), gt(s.authTokens.expiresAt, new Date())))
     .limit(1);
@@ -415,7 +472,24 @@ export async function consumeToken(token: string, password: string): Promise<{ u
 
   const hash = await hashPassword(password);
 
-  const userId = await db.transaction(async (tx) => {
+  /*
+    A Ctx so that spending a token is audited like every other change to a user.
+
+    There is no signed-in actor here by design: whoever holds the link is the
+    only party, and the endpoint is anonymous. The system is therefore the
+    actor, acting for the account, which is the same shape `requestPasswordReset`
+    above uses for the same reason.
+
+    Before this, the one moment a credential actually changed hands wrote
+    nothing at all. `user.invited` recorded who issued a link and by which
+    channel, and then the trail stopped: an auditor asking "who set this account
+    up" could see an invitation and a `used_at` timestamp, and had to infer the
+    join between them. Now the invite row carries the token id and this row
+    names the same token, so the two ends meet.
+  */
+  const ctx = createCtx({ actor: systemActor(candidate.userId), db });
+
+  const userId = await withTransaction(ctx, async (tx) => {
     /*
       Claim the token under a row lock before touching the password.
 
@@ -423,8 +497,8 @@ export async function consumeToken(token: string, password: string): Promise<{ u
       one password rather than race. The lock plus the `used_at` recheck makes
       the second one find nothing.
     */
-    const [row] = await tx
-      .select({ id: s.authTokens.id, userId: s.authTokens.userId })
+    const [row] = await tx.db
+      .select({ id: s.authTokens.id, userId: s.authTokens.userId, purpose: s.authTokens.purpose })
       .from(s.authTokens)
       .where(
         and(eq(s.authTokens.tokenHash, tokenHash), isNull(s.authTokens.usedAt), gt(s.authTokens.expiresAt, new Date()))
@@ -436,8 +510,8 @@ export async function consumeToken(token: string, password: string): Promise<{ u
       throw new AppError("validation_failed", "That link has expired or has already been used. Ask for another.");
     }
 
-    await tx.update(s.authTokens).set({ usedAt: new Date() }).where(eq(s.authTokens.id, row.id));
-    await tx
+    await tx.db.update(s.authTokens).set({ usedAt: new Date() }).where(eq(s.authTokens.id, row.id));
+    await tx.db
       .update(s.users)
       .set({ passwordHash: hash, updatedAt: new Date() })
       .where(eq(s.users.id, row.userId));
@@ -452,7 +526,19 @@ export async function consumeToken(token: string, password: string): Promise<{ u
     // Through the shared helper rather than a copy of its update: the inlined
     // version left `revokeAllSessions` with no caller in `src/`, which is how
     // an exported function and the thing it is supposed to do drift apart.
-    await revokeAllSessions(row.userId, tx);
+    await revokeAllSessions(row.userId, tx.db);
+
+    /*
+      The locked row's user, not the one read before the lock. The pre-check is
+      a filter and says so; deciding anything from it would make this row a
+      guess at exactly the moment somebody is relying on it.
+    */
+    tx.audit({
+      action: "user.password_set_via_token",
+      entityType: "user",
+      entityId: row.userId,
+      after: { purpose: row.purpose, tokenId: row.id, sessionsRevoked: true },
+    });
 
     return row.userId;
   });

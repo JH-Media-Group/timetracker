@@ -14,8 +14,9 @@ vi.mock("@/server/mail/transport", async () => {
   return { ...actual, canSend: () => true, send: vi.fn(async () => ({ messageId: null })) };
 });
 
-import { eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import { db, sql as pg } from "@/server/db/client";
+import { createCtx, withTransaction } from "@/server/ctx";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
 import { consumeToken, inviteUser, peekToken, requestPasswordReset } from "@/server/services/auth-tokens";
@@ -38,6 +39,8 @@ async function linkTokenFor(userId: string): Promise<string> {
 
 /** Only the users this file created, so cleanup can delete by id. */
 const madeUsers: string[] = [];
+/** Profiles this file created, deleted after the users that reference them. */
+const madeProfiles: string[] = [];
 
 async function makeUser(over: Partial<typeof s.users.$inferInsert> = {}) {
   const [profile] = await db.select().from(s.permissionProfiles).limit(1);
@@ -52,6 +55,14 @@ async function makeUser(over: Partial<typeof s.users.$inferInsert> = {}) {
     timezone: "America/New_York",
     ...over,
   });
+  return id;
+}
+
+/** A profile holding exactly the capabilities named, and nothing else. */
+async function makeProfile(name: string, capabilities: string[]): Promise<string> {
+  const id = newId();
+  await db.insert(s.permissionProfiles).values({ id, name: `${name}-${id}`, capabilities });
+  madeProfiles.push(id);
   return id;
 }
 
@@ -81,8 +92,21 @@ beforeEach(async () => {
   */
   if (madeUsers.length) {
     await db.delete(s.sessions).where(inArray(s.sessions.userId, madeUsers));
+    /*
+      And the audit rows, which now exist because these tests drive the real
+      transaction. `audit_log.actor_id` is a foreign key to users, so deleting
+      a person who has audited anything fails on it. This is the same shape of
+      constraint the comment above is about; it simply had no audit rows to
+      trip over until the race test started using `withTransaction`.
+    */
+    await db.delete(s.auditLog).where(inArray(s.auditLog.actorId, madeUsers));
     await db.delete(s.users).where(inArray(s.users.id, madeUsers));
     madeUsers.length = 0;
+  }
+  // After the users, because `users.profile_id` references them.
+  if (madeProfiles.length) {
+    await db.delete(s.permissionProfiles).where(inArray(s.permissionProfiles.id, madeProfiles));
+    madeProfiles.length = 0;
   }
 });
 
@@ -206,7 +230,135 @@ describe("inviteUser", () => {
     await inviteUser(ctx, id, { email: false, link: true });
 
     const invited = rows.find((r) => r.action === "user.invited");
-    expect(invited?.after).toEqual({ emailed: false, linkTaken: true });
+    const after = invited?.after as { emailed: boolean; linkTaken: boolean; tokenId: string };
+    expect(after.emailed).toBe(false);
+    expect(after.linkTaken).toBe(true);
+    // The token id is what joins this row to the moment the link was spent.
+    // Without it the two ends of the story can only be guessed at by timestamp.
+    expect(after.tokenId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+});
+
+describe("who may invite whom", () => {
+  /*
+    An invite is a credential for somebody else's account, so it is ranked the
+    same way editing them is.
+
+    This was found by an adversarial review of the magic-link change and it was
+    real. `updateUser` had refused to touch the owner's record, or anybody
+    holding permissions beyond the caller's, since somebody noticed the owner's
+    email was editable by any holder of `people:manage`. Inviting had neither
+    check, which was survivable only while the credential could go nowhere but
+    the account's own inbox: the victim was told.
+
+    A link-only invite removes that notification. Without these guards a People
+    Admin could take a set-password link for the account owner, use it, and
+    `consumeToken` would revoke every session the owner held. Silent takeover,
+    by somebody the permission model says is junior.
+  */
+
+  const actorWith = (userId: string, capabilities: string[]) =>
+    ({ db, audit: () => {}, actor: { userId, kind: "user", capabilities: new Set(capabilities) } }) as never;
+
+  it("refuses to invite the account owner", async () => {
+    const ownerId = await makeUser({ isOwner: true });
+    const junior = await makeUser();
+
+    await expect(
+      inviteUser(actorWith(junior, ["people:manage"]), ownerId, { email: false, link: true })
+    ).rejects.toThrow(/owner/i);
+
+    const tokens = await db.select().from(s.authTokens).where(eq(s.authTokens.userId, ownerId));
+    expect(tokens, "a refused invite must not have minted a credential").toHaveLength(0);
+  });
+
+  it("lets the owner invite themselves", async () => {
+    // Re-inviting yourself is how you recover your own account, and the guard
+    // must not be so broad that it takes that away.
+    const ownerId = await makeUser({ isOwner: true });
+    const result = await inviteUser(actorWith(ownerId, ["people:manage"]), ownerId, {
+      email: false,
+      link: true,
+    });
+    expect(result.link).toMatch(/set-password/);
+  });
+
+  it("refuses to invite somebody whose permissions exceed the caller's", async () => {
+    const strongProfile = await makeProfile("strong", ["people:manage", "rates:view_cost", "settings:manage"]);
+    const target = await makeUser({ profileId: strongProfile });
+    const weak = await makeUser();
+
+    await expect(
+      inviteUser(actorWith(weak, ["people:manage"]), target, { email: false, link: true })
+    ).rejects.toThrow(/exceed your own/i);
+  });
+
+  it("allows an equal to invite an equal", async () => {
+    const profile = await makeProfile("equal", ["people:manage"]);
+    const target = await makeUser({ profileId: profile });
+    const peer = await makeUser();
+
+    const result = await inviteUser(actorWith(peer, ["people:manage"]), target, {
+      email: false,
+      link: true,
+    });
+    expect(result.link).toMatch(/set-password/);
+  });
+});
+
+describe("two invites at once", () => {
+  /*
+    Driven through `withTransaction`, because that is the only way this can be
+    tested at all.
+
+    The first version of this test called the service with a bare handle, so
+    every statement autocommitted and `SELECT ... FOR UPDATE` released the row
+    the instant it was taken. Removing the lock entirely did not fail it, which
+    is the whole point of mutation-testing a guard: the test looked like it
+    covered the race and covered nothing. A route wraps mutations in a
+    transaction, so the test has to as well.
+
+    And repeated, because racing once proves nothing: the first `Promise.all`
+    in a process is serialised by connection establishment.
+  */
+  const realCtx = (userId: string) =>
+    createCtx({
+      actor: {
+        userId,
+        profileId: null,
+        baseKey: null,
+        capabilities: new Set(["people:manage"]) as never,
+        kind: "user",
+        timezone: "America/New_York",
+        isOwner: false,
+      } as never,
+    });
+
+  it("leaves one live token, not two", async () => {
+    const inviter = await makeUser();
+    // No capabilities, so the rank guard is satisfied and the race is what is
+    // actually under test here rather than the authorization added beside it.
+    const target = await makeUser({ profileId: await makeProfile("race-target", []) });
+    const ctx = realCtx(inviter);
+
+    // Warm the pool so the first round is not serialised by connect latency.
+    await withTransaction(ctx, (tx) => inviteUser(tx, target, { email: true, link: false }));
+
+    for (let round = 0; round < 12; round++) {
+      await db.delete(s.authTokens).where(eq(s.authTokens.userId, target));
+
+      await Promise.all([
+        withTransaction(ctx, (tx) => inviteUser(tx, target, { email: false, link: true })).catch(() => {}),
+        withTransaction(ctx, (tx) => inviteUser(tx, target, { email: false, link: true })).catch(() => {}),
+      ]);
+
+      const live = await db
+        .select()
+        .from(s.authTokens)
+        .where(and(eq(s.authTokens.userId, target), isNull(s.authTokens.usedAt)));
+
+      expect(live, `round ${round}: two live invite links is what superseding is for`).toHaveLength(1);
+    }
   });
 });
 
@@ -230,6 +382,38 @@ describe("the token itself", () => {
     await expect(consumeToken(token, "another-fine-passphrase-99")).rejects.toThrow(
       /expired or has already been used/
     );
+  });
+
+  it("records that a credential was set, and against which token", async () => {
+    /*
+      The moment the credential actually changes hands used to write nothing at
+      all. `user.invited` recorded who issued a link and by which channel, and
+      then the trail stopped: an auditor asking "who set this account up" found
+      an invitation and a `used_at` timestamp and had to infer the join.
+
+      Both ends now name the same token id, so the question is answerable
+      rather than inferable. Found by an adversarial review, which pointed out
+      that the commit's own stated standard was not met by its own code.
+    */
+    const id = await makeUser();
+    await inviteUser(ctxFor(id), id);
+    const token = await linkTokenFor(id);
+
+    await consumeToken(token, GOOD);
+
+    const [row] = await db
+      .select()
+      .from(s.auditLog)
+      .where(and(eq(s.auditLog.action, "user.password_set_via_token"), eq(s.auditLog.entityId, id)));
+
+    expect(row, "spending a token must leave a trace").toBeTruthy();
+    const after = row!.after as { purpose: string; tokenId: string; sessionsRevoked: boolean };
+    expect(after.purpose).toBe("invite");
+    expect(after.sessionsRevoked).toBe(true);
+
+    // The same token the invite recorded, so the two ends of the story join.
+    const [tokenRow] = await db.select().from(s.authTokens).where(eq(s.authTokens.userId, id));
+    expect(after.tokenId).toBe(tokenRow!.id);
   });
 
   it("is refused once expired", async () => {

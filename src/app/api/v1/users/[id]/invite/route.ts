@@ -40,7 +40,23 @@ const schema = z.object({
 
 export const POST = route(
   async (ctx, req, params) => {
+    /*
+      Capped before parsing. Reading the body by hand also means losing
+      whatever the shared helper would have done about size, and this body is
+      two booleans: anything past a few hundred bytes is a mistake or a game.
+      An authenticated insider is the only one who can reach it, so this is
+      tidiness rather than defence, but buffering an arbitrary body and then
+      copying it with `.trim()` is a silly thing to leave available.
+    */
+    const declared = Number(req.headers.get("content-length") ?? "0");
+    if (declared > 4096) {
+      throw validationFailed({ _: ["That request body is far larger than this endpoint accepts."] });
+    }
+
     const raw = (await req.text()).trim();
+    if (raw.length > 4096) {
+      throw validationFailed({ _: ["That request body is far larger than this endpoint accepts."] });
+    }
     let parsed: unknown = {};
     if (raw) {
       try {

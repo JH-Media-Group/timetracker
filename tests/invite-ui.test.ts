@@ -52,10 +52,33 @@ describe("the invitation UI", () => {
     expect(persisted, "a one-time credential must not be written to storage").toBe(false);
   });
 
-  it("clears the link when the dialog opens, not when it closes", () => {
-    // Clearing on close races the closing animation, and a credential flashing
-    // back into view on the way out is the one thing that must not happen.
-    expect(dialog).toContain("if (open) {");
+  it("drops the link from state and from the mutation cache when it closes", () => {
+    /*
+      This test used to assert the opposite, and was wrong: it pinned "clears on
+      open" as the desired behaviour, which left the credential in React state
+      and in `useMutation`'s `data` for the rest of the session. A reviewer
+      caught the header comment claiming it disappeared on close while the code
+      did no such thing, and the test was enshrining the defect rather than
+      catching it.
+
+      `setLink(null)` alone is not enough. `invite.data.link` is a second copy
+      and just as readable from devtools.
+    */
     expect(dialog).toContain("setLink(null)");
+    expect(dialog, "the mutation result is the second copy").toContain("invite.reset()");
+    expect(dialog).toMatch(/if \(!open\) invite\.reset\(\)/);
+  });
+
+  it("will not let Esc or the overlay silently destroy an uncopied link", () => {
+    // Recovering means inviting again, which supersedes, which kills a link
+    // that may already be pasted into a message to the person.
+    expect(dialog).toContain("onOpenChange={requestClose}");
+    expect(dialog).toMatch(/if \(!next && link && !copied\)/);
+  });
+
+  it("survives a clipboard API that is absent rather than failing", () => {
+    // `navigator.clipboard` is undefined on an insecure origin, so writeText
+    // throws synchronously and a rejection handler never runs.
+    expect(dialog).toMatch(/try \{[\s\S]*navigator\.clipboard[\s\S]*\} catch \{/);
   });
 });
