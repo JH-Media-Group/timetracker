@@ -272,6 +272,22 @@ describe("who may invite whom", () => {
     expect(tokens, "a refused invite must not have minted a credential").toHaveLength(0);
   });
 
+  it("still lets the system actor invite anybody, including the owner", async () => {
+    /*
+      `scripts/invite-link.mts` and `bootstrap-owner.mts` run as the system and
+      exist precisely to recover an account nobody can currently sign in to,
+      the owner's included. Both new guards exempt the system actor, and they
+      have to: running either script needs a shell on the host and the database
+      credentials, which is already more authority than any profile confers, so
+      a check there would be theatre that broke the recovery path.
+    */
+    const ownerId = await makeUser({ isOwner: true });
+    const ctx = { db, audit: () => {}, actor: { userId: ownerId, kind: "system", capabilities: new Set() } } as never;
+
+    const result = await inviteUser(ctx, ownerId, { email: false, link: true });
+    expect(result.link).toMatch(/set-password/);
+  });
+
   it("lets the owner invite themselves", async () => {
     // Re-inviting yourself is how you recover your own account, and the guard
     // must not be so broad that it takes that away.
