@@ -397,6 +397,28 @@ describe("an invite outliving the authority it was issued under", () => {
     await expect(consumeToken(token, GOOD)).rejects.toThrow(/permissions have changed/i);
   });
 
+  it("refuses a link whose inviter has since been archived", async () => {
+    /*
+      The rank rule alone would pass: somebody walked out last week still
+      outranks a Member on paper. A live credential for a colleague's account
+      in the hands of an ex-employee is not something to leave working for a
+      week on that technicality, and the cost of refusing is one re-invite by
+      somebody still here.
+    */
+    const ordinary = await makeProfile("archived-inviter", []);
+    const target = await makeUser({ profileId: ordinary });
+    const inviter = await makeUser();
+
+    const result = await inviteUser(actorWith(inviter, ["people:manage"]), target, {
+      email: false,
+      link: true,
+    });
+    const token = /token=([A-Za-z0-9_-]+)/.exec(result.link!)![1]!;
+
+    await db.update(s.users).set({ archivedAt: new Date() }).where(eq(s.users.id, inviter));
+    await expect(consumeToken(token, GOOD)).rejects.toThrow(/permissions have changed/i);
+  });
+
   it("still lets an unchanged invite through", async () => {
     // The guard must not cost the ordinary case, which is every real invite.
     const ordinary = await makeProfile("unchanged", []);

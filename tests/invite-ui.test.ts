@@ -30,11 +30,33 @@ describe("the invitation UI", () => {
       the dead one, and the failure surfaces days later with nothing to connect
       it to. One call, one token, both channels.
     */
-    expect(dialog).toContain("api.inviteUser(userId, { email: sendEmail, link: wantLink })");
     expect(
       (dialog.match(/api\.inviteUser\(/g) ?? []).length,
       "one call site, so the two channels cannot become two tokens"
     ).toBe(1);
+    expect(dialog, "both channels go in the one request").toContain("email: submitted.email");
+    expect(dialog).toContain("link: submitted.link");
+  });
+
+  it("captures everything the request needs at submit, not when it runs", () => {
+    /*
+      A paused offline mutation runs its body on resume, so anything read
+      inside is read then: the generation of a different opening, the channel
+      checkboxes as they were reset, and the `userId` prop, which by then may
+      be a different person. The server would mint a token for somebody nobody
+      asked about and supersede their outstanding invite, while the generation
+      guard quietly made the UI a no-op.
+
+      Round four moved the generation out and left the rest, fixing the symptom
+      that had been noticed rather than the cause.
+    */
+    expect(dialog).toMatch(
+      /submitted: \{ startedAt: number; userId: string; email: boolean; link: boolean \}/
+    );
+    expect(dialog).toContain("api.inviteUser(submitted.userId");
+    expect(dialog, "nothing the request depends on may be read from a closure").not.toMatch(
+      /api\.inviteUser\(userId/
+    );
   });
 
   it("will not submit with neither channel chosen", () => {

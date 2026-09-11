@@ -608,11 +608,19 @@ async function assertMayGrantProfile(
     });
   }
 
+  /*
+    Shared-locked for the same reason the read in `assertOutranksOrEqual` is:
+    this is the profile about to be granted, and deciding whether the caller
+    may grant it from capabilities that can be widened before the grant lands
+    is the same check-then-act one layer along. Taken after the target user's
+    row, so the order stays users then permission_profiles.
+  */
   const [profile] = await ctx.db
     .select({ capabilities: s.permissionProfiles.capabilities, name: s.permissionProfiles.name })
     .from(s.permissionProfiles)
     .where(eq(s.permissionProfiles.id, profileId))
-    .limit(1);
+    .limit(1)
+    .for("share");
 
   if (!profile) throw validationFailed({ profileId: ["That permission profile does not exist."] });
 

@@ -185,7 +185,7 @@ async function issue(
  */
 async function assertInviterStillOutranks(ctx: Ctx, inviterId: string, subjectId: string): Promise<void> {
   const [inviter] = await ctx.db
-    .select({ capabilities: s.permissionProfiles.capabilities })
+    .select({ capabilities: s.permissionProfiles.capabilities, archivedAt: s.users.archivedAt })
     .from(s.users)
     .leftJoin(s.permissionProfiles, eq(s.permissionProfiles.id, s.users.profileId))
     .where(eq(s.users.id, inviterId))
@@ -210,15 +210,48 @@ async function assertInviterStillOutranks(ctx: Ctx, inviterId: string, subjectId
   // The inviter is gone, or has no profile and so no authority to lend.
   if (!inviter) throw stale;
 
+  /*
+    An archived inviter lends nothing either.
+
+    The rank rule alone would still pass: somebody walked out last week
+    outranks a Member on paper exactly as they did before. But a live
+    credential for a colleague's account in the hands of an ex-employee is not
+    something to leave working for seven days on a technicality, and the cost
+    of refusing is one re-invite by somebody still here.
+  */
+  if (inviter.archivedAt) throw stale;
+
   if (subject.isOwner) throw stale;
   if (!subject.profileId) return;
 
+  /*
+    Shared-locked, because this read is the decision.
+
+    Locking the subject's `users` row covers them being moved to another
+    profile. It does nothing about the profile they already point at being
+    widened, which takes `FOR UPDATE` on `permission_profiles` and touches no
+    user row at all. Without this the guard added to make redemption
+    authoritative is itself a check-then-act, which is the defect it exists to
+    prevent one layer down.
+
+    Deadlock-safe: every path that reaches a profile lock has already taken the
+    subject's `users` row, so two of them serialise there rather than forming a
+    cycle.
+  */
   const [profile] = await ctx.db
     .select({ capabilities: s.permissionProfiles.capabilities })
     .from(s.permissionProfiles)
     .where(eq(s.permissionProfiles.id, subject.profileId))
-    .limit(1);
+    .limit(1)
+    .for("share");
 
+  /*
+    A profile that no longer exists confers nothing, so there is nothing to
+    outrank. Refusing here would strand somebody with no way back into an
+    account if a profile were ever deleted while in use, and the same reading
+    is what `assertOutranksOrEqual` already applies. Deliberate, not an
+    oversight.
+  */
   if (!profile) return;
 
   const held = effectiveCapabilities((inviter.capabilities ?? []) as Capability[]);

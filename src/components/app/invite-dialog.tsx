@@ -90,19 +90,31 @@ export function InviteDialog({
       in one place, that the close path actually clears.
     */
     /*
-      The opening is a variable passed to `mutate`, not something read inside.
+      The whole request is a variable passed to `mutate`, not read inside.
 
-      Reading `generation.current` at the top of the mutation function looks
-      equivalent and is not: react-query pauses a mutation while the browser is
-      offline and resumes it later, so the function body first runs after the
-      dialog has been closed and reopened, and the paused request adopts the
-      new opening's number and reports itself as current. Captured at submit,
-      it belongs to the opening that asked for it whatever happens afterwards.
+      Anything the function body reads is read when the body runs, and
+      react-query pauses a mutation while the browser is offline and resumes it
+      later. So a paused request wakes up reading whatever the dialog holds by
+      then: the generation of a different opening, the channel checkboxes as
+      they were reset, and worst of all the `userId` prop, which by then may be
+      a different person. The generation guard would make the outcome a no-op
+      while the server had already minted a token for somebody nobody asked
+      about and superseded their outstanding invite.
+
+      Round four moved the generation out and left the rest behind, which fixed
+      the symptom that had been noticed and not the thing causing it. Everything
+      the request depends on is captured at submit now.
     */
-    mutationFn: async (startedAt: number): Promise<{ queued: boolean; outcome: InviteOutcome }> => {
+    mutationFn: async (
+      submitted: { startedAt: number; userId: string; email: boolean; link: boolean }
+    ): Promise<{ queued: boolean; outcome: InviteOutcome }> => {
+      const { startedAt } = submitted;
       let result;
       try {
-        result = await api.inviteUser(userId, { email: sendEmail, link: wantLink });
+        result = await api.inviteUser(submitted.userId, {
+          email: submitted.email,
+          link: submitted.link,
+        });
       } catch (error) {
         /*
           A failure belonging to an earlier opening is not this opening's
@@ -222,7 +234,14 @@ export function InviteDialog({
               <Button
                 loading={invite.isPending}
                 disabled={nothingChosen}
-                onClick={() => invite.mutate(generation.current)}
+                onClick={() =>
+                  invite.mutate({
+                    startedAt: generation.current,
+                    userId,
+                    email: sendEmail,
+                    link: wantLink,
+                  })
+                }
               >
                 Invite
               </Button>
