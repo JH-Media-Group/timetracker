@@ -20,6 +20,7 @@ import { createCtx, withTransaction } from "@/server/ctx";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
 import { consumeToken, inviteUser, peekToken, requestPasswordReset } from "@/server/services/auth-tokens";
+import { updateUser } from "@/server/services/people";
 import { verifyPassword } from "@/server/auth/password";
 import { AppError } from "@/server/errors";
 
@@ -65,6 +66,10 @@ async function makeProfile(name: string, capabilities: string[]): Promise<string
   madeProfiles.push(id);
   return id;
 }
+
+/** A Ctx for a caller holding exactly these capabilities. */
+const actorWith = (userId: string, capabilities: string[]) =>
+  ({ db, audit: () => {}, actor: { userId, kind: "user", capabilities: new Set(capabilities) } }) as never;
 
 /** A Ctx with the capability, since the service asserts on it. */
 const ctxFor = (userId: string) =>
@@ -257,9 +262,6 @@ describe("who may invite whom", () => {
     by somebody the permission model says is junior.
   */
 
-  const actorWith = (userId: string, capabilities: string[]) =>
-    ({ db, audit: () => {}, actor: { userId, kind: "user", capabilities: new Set(capabilities) } }) as never;
-
   it("refuses to invite the account owner", async () => {
     const ownerId = await makeUser({ isOwner: true });
     const junior = await makeUser();
@@ -346,6 +348,86 @@ describe("who may invite whom", () => {
   });
 });
 
+describe("an invite outliving the authority it was issued under", () => {
+  /*
+    The one that needs no race at all, only patience.
+
+    Every other guard here protects the moment a link is made, and a link is
+    good for seven days. A People Admin invites a Member, keeps the link, and
+    waits for somebody to promote that Member to Administrator. The retained
+    link then sets an Administrator's password and revokes their sessions.
+
+    So the rank rule is applied again at redemption, against who the person is
+    now rather than who they were when the link was cut.
+  */
+  it("refuses a link for somebody promoted beyond the inviter since it was issued", async () => {
+    const ordinary = await makeProfile("member-ish", []);
+    const target = await makeUser({ profileId: ordinary });
+    const inviter = await makeUser();
+
+    const result = await inviteUser(actorWith(inviter, ["people:manage"]), target, {
+      email: false,
+      link: true,
+    });
+    const token = /token=([A-Za-z0-9_-]+)/.exec(result.link!)![1]!;
+
+    // Promoted after the link was cut, which is the whole scenario.
+    const senior = await makeProfile("senior", ["people:manage", "settings:manage", "rates:view_cost"]);
+    await db.update(s.users).set({ profileId: senior }).where(eq(s.users.id, target));
+
+    await expect(consumeToken(token, GOOD)).rejects.toThrow(/permissions have changed/i);
+
+    // And the password is untouched, not merely the request refused.
+    const [row] = await db.select().from(s.users).where(eq(s.users.id, target));
+    expect(row!.passwordHash, "a refused redemption must not have set anything").toBeNull();
+  });
+
+  it("refuses a link for somebody who has since become the owner", async () => {
+    const ordinary = await makeProfile("plain", []);
+    const target = await makeUser({ profileId: ordinary });
+    const inviter = await makeUser();
+
+    const result = await inviteUser(actorWith(inviter, ["people:manage"]), target, {
+      email: false,
+      link: true,
+    });
+    const token = /token=([A-Za-z0-9_-]+)/.exec(result.link!)![1]!;
+
+    await db.update(s.users).set({ isOwner: true }).where(eq(s.users.id, target));
+    await expect(consumeToken(token, GOOD)).rejects.toThrow(/permissions have changed/i);
+  });
+
+  it("still lets an unchanged invite through", async () => {
+    // The guard must not cost the ordinary case, which is every real invite.
+    const ordinary = await makeProfile("unchanged", []);
+    const target = await makeUser({ profileId: ordinary });
+    const inviter = await makeUser();
+
+    const result = await inviteUser(actorWith(inviter, ["people:manage"]), target, {
+      email: false,
+      link: true,
+    });
+    const token = /token=([A-Za-z0-9_-]+)/.exec(result.link!)![1]!;
+
+    await expect(consumeToken(token, GOOD)).resolves.toMatchObject({ userId: target });
+  });
+
+  it("leaves a self-service password reset alone", async () => {
+    /*
+      A reset has no inviter to outrank: `created_by` is null, nobody else's
+      authority is being spent, and it is how a person recovers their own
+      account. Refusing these would break recovery for the owner in particular,
+      whose profile no inviter outranks by definition.
+    */
+    const ownerId = await makeUser({ isOwner: true });
+    const [row] = await db.select().from(s.users).where(eq(s.users.id, ownerId));
+    await requestPasswordReset(row!.email);
+
+    const token = await linkTokenFor(ownerId);
+    await expect(consumeToken(token, GOOD)).resolves.toMatchObject({ userId: ownerId });
+  });
+});
+
 describe("a promotion racing an invite", () => {
   /*
     The check-then-act hole round two found in round one's fix.
@@ -404,6 +486,64 @@ describe("a promotion racing an invite", () => {
 
     const tokens = await db.select().from(s.authTokens).where(eq(s.authTokens.userId, target));
     expect(tokens, "and must not have minted anything").toHaveLength(0);
+  });
+});
+
+describe("a promotion racing an edit", () => {
+  /*
+    The same check-then-act hole as the invite one, in `updateUser`, and it
+    lives here beside its sibling because that is where the interleaving
+    harness is and because the two are one defect wearing two hats.
+
+    `updateUser` read the person unlocked, authorized on that read, and then
+    wrote. A People Admin submits an email change for a Member while an
+    Administrator is mid-promotion; the read sees Member, the promotion
+    commits, and the write lands on an Administrator account. With mail
+    working, the new address then requests a password reset.
+
+    Round three made this easier to hit rather than causing it: adding a lock
+    inside `assertOutranksOrEqual` gave the losing transaction somewhere to
+    wait, widening a window that was previously a few milliseconds.
+  */
+  it("authorizes an edit against the profile the lock returns", async () => {
+    const strong = await makeProfile("edit-strong", ["people:manage", "settings:manage", "rates:view_cost"]);
+    const weak = await makeProfile("edit-weak", []);
+    const target = await makeUser({ profileId: weak });
+    const caller = await makeUser();
+
+    const ctx = createCtx({
+      actor: {
+        userId: caller,
+        profileId: null,
+        baseKey: null,
+        capabilities: new Set(["people:manage"]) as never,
+        kind: "user",
+        timezone: "America/New_York",
+        isOwner: false,
+      } as never,
+    });
+
+    let release!: () => void;
+    const released = new Promise<void>((resolve) => { release = resolve; });
+
+    const promotion = db.transaction(async (tx) => {
+      await tx.select({ id: s.users.id }).from(s.users).where(eq(s.users.id, target)).limit(1).for("update");
+      await tx.update(s.users).set({ profileId: strong }).where(eq(s.users.id, target));
+      await released;
+    });
+
+    await new Promise((r) => setTimeout(r, 50));
+    const edit = withTransaction(ctx, (tx) =>
+      updateUser(tx, target, { email: `taken-over-${newId()}@example.test` })
+    );
+    await new Promise((r) => setTimeout(r, 50));
+    release();
+    await promotion;
+
+    await expect(edit, "the edit must see the promotion it waited for").rejects.toThrow(/exceed your own/i);
+
+    const [row] = await db.select().from(s.users).where(eq(s.users.id, target));
+    expect(row!.email, "and must not have changed the address").toMatch(/^person-/);
   });
 });
 

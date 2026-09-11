@@ -42,6 +42,7 @@ import { hashPassword, checkPasswordPolicy } from "@/server/auth/password";
 import { revokeAllSessions } from "@/server/auth/session";
 import { queueMail } from "@/server/services/mail";
 import { assertOutranksOrEqual } from "@/server/services/people";
+import { effectiveCapabilities, type Capability } from "@/server/auth/capabilities";
 import { TOKEN_TTL_MS as TTL_MS, type TokenPurpose } from "@/server/auth/token-ttl";
 import { env } from "@/server/env";
 
@@ -167,6 +168,62 @@ async function issue(
     comment above is about: harmless today, one careless caller from not being.
   */
   return returnLink ? { link, tokenId } : { tokenId };
+}
+
+/**
+ * Does whoever issued this invite still outrank whoever it is for?
+ *
+ * Re-runs the rule at redemption, because the answer can change in the seven
+ * days a link is good for and the consequence of it changing is the whole
+ * account. Built from the two profiles as they stand now: the inviter's, for
+ * what they may reach, and the subject's, for what redeeming it would hand
+ * over.
+ *
+ * Refuses rather than silently downgrading. A link that no longer carries the
+ * authority it was issued with is not a link with less authority, it is a link
+ * that should not be spent.
+ */
+async function assertInviterStillOutranks(ctx: Ctx, inviterId: string, subjectId: string): Promise<void> {
+  const [inviter] = await ctx.db
+    .select({ capabilities: s.permissionProfiles.capabilities })
+    .from(s.users)
+    .leftJoin(s.permissionProfiles, eq(s.permissionProfiles.id, s.users.profileId))
+    .where(eq(s.users.id, inviterId))
+    .limit(1);
+
+  const [subject] = await ctx.db
+    .select({ isOwner: s.users.isOwner, profileId: s.users.profileId })
+    .from(s.users)
+    .where(eq(s.users.id, subjectId))
+    .limit(1);
+
+  if (!subject) throw notFound("That person");
+
+  // Inviting yourself is always allowed, and is how the owner recovers.
+  if (inviterId === subjectId) return;
+
+  const stale = new AppError(
+    "validation_failed",
+    "That link is no longer valid because this account's permissions have changed. Ask for a new one."
+  );
+
+  // The inviter is gone, or has no profile and so no authority to lend.
+  if (!inviter) throw stale;
+
+  if (subject.isOwner) throw stale;
+  if (!subject.profileId) return;
+
+  const [profile] = await ctx.db
+    .select({ capabilities: s.permissionProfiles.capabilities })
+    .from(s.permissionProfiles)
+    .where(eq(s.permissionProfiles.id, subject.profileId))
+    .limit(1);
+
+  if (!profile) return;
+
+  const held = effectiveCapabilities((inviter.capabilities ?? []) as Capability[]);
+  const beyond = ((profile.capabilities ?? []) as Capability[]).filter((c) => !held.has(c));
+  if (beyond.length > 0) throw stale;
 }
 
 /** How the invite reaches the person. At least one must be true. */
@@ -520,7 +577,12 @@ export async function consumeToken(token: string, password: string): Promise<{ u
       the second one find nothing.
     */
     const [row] = await tx.db
-      .select({ id: s.authTokens.id, userId: s.authTokens.userId, purpose: s.authTokens.purpose })
+      .select({
+        id: s.authTokens.id,
+        userId: s.authTokens.userId,
+        purpose: s.authTokens.purpose,
+        createdBy: s.authTokens.createdBy,
+      })
       .from(s.authTokens)
       .where(
         and(eq(s.authTokens.tokenHash, tokenHash), isNull(s.authTokens.usedAt), gt(s.authTokens.expiresAt, new Date()))
@@ -530,6 +592,26 @@ export async function consumeToken(token: string, password: string): Promise<{ u
 
     if (!row) {
       throw new AppError("validation_failed", "That link has expired or has already been used. Ask for another.");
+    }
+
+    /*
+      AN INVITE MUST NOT OUTLIVE THE AUTHORITY IT WAS ISSUED UNDER.
+
+      Everything else here guards the moment a link is created, and a link is
+      good for seven days. A People Admin invites a Member, keeps the link, and
+      waits: somebody promotes that Member to Administrator, and the retained
+      link now sets an Administrator's password and revokes their sessions. No
+      race, no concurrency, no unusual timing. Just patience.
+
+      So the rank rule is applied again here, against who the person is now
+      rather than who they were then. `createdBy` is null for a self-service
+      password reset, which has no inviter to outrank and is how somebody
+      recovers their own account; those are unaffected.
+
+      Refusing costs a re-invite. Not refusing costs the account.
+    */
+    if (row.createdBy) {
+      await assertInviterStillOutranks(tx, row.createdBy, row.userId);
     }
 
     await tx.db.update(s.authTokens).set({ usedAt: new Date() }).where(eq(s.authTokens.id, row.id));

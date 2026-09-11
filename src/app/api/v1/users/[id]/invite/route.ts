@@ -59,12 +59,15 @@ async function readCapped(req: Request, limit: number): Promise<string> {
   if (!req.body) return "";
 
   /*
-    If something upstream already consumed the body, fall back rather than
-    throwing `TypeError: locked` and turning a 422 into a 500. The wrapper's
-    idempotency peek reads a clone, which leaves this readable, but that is a
-    property of another file and this should not break if it changes.
+    No fallback for an already-consumed body, deliberately.
+
+    A previous version tried `req.text()` here, which was worse than nothing:
+    reading a consumed body throws, so the "defensive" path turned a 422 into
+    a 500 and could not have recovered the bytes in any case, since they are
+    gone. There is one owner of this body and it is this function. If that ever
+    stops being true, the fix is to pass the parsed body down rather than to
+    read it twice.
   */
-  if (req.bodyUsed || req.body.locked) return (await req.text()).trim();
 
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];

@@ -89,8 +89,17 @@ export function InviteDialog({
       Handing it straight to component state instead means there is one copy,
       in one place, that the close path actually clears.
     */
-    mutationFn: async (): Promise<{ queued: boolean; outcome: InviteOutcome }> => {
-      const startedAt = generation.current;
+    /*
+      The opening is a variable passed to `mutate`, not something read inside.
+
+      Reading `generation.current` at the top of the mutation function looks
+      equivalent and is not: react-query pauses a mutation while the browser is
+      offline and resumes it later, so the function body first runs after the
+      dialog has been closed and reopened, and the paused request adopts the
+      new opening's number and reports itself as current. Captured at submit,
+      it belongs to the opening that asked for it whatever happens afterwards.
+    */
+    mutationFn: async (startedAt: number): Promise<{ queued: boolean; outcome: InviteOutcome }> => {
       let result;
       try {
         result = await api.inviteUser(userId, { email: sendEmail, link: wantLink });
@@ -213,7 +222,7 @@ export function InviteDialog({
               <Button
                 loading={invite.isPending}
                 disabled={nothingChosen}
-                onClick={() => invite.mutate()}
+                onClick={() => invite.mutate(generation.current)}
               >
                 Invite
               </Button>

@@ -215,7 +215,26 @@ export async function updateUser(ctx: Ctx, id: string, input: UserInput): Promis
   // Anything here changes what somebody can do or what they cost.
   assertCan(ctx, "people:manage");
 
-  const [before] = await ctx.db.select(USER_COLUMNS).from(s.users).where(eq(s.users.id, id)).limit(1);
+  /*
+    Locked, and everything below decided from what the lock returned.
+
+    Reading unlocked and authorizing on that read is a check-then-act race, and
+    the same one already fixed in `inviteUser`. A promotion committing in the
+    window means the rank check passes against the old profile and the write
+    lands on the new one: a People Admin edits an account that became an
+    Administrator while they waited, changes its email, and takes it over
+    through a password reset.
+
+    Taking the user before the profile also fixes the order. The profile read
+    below locks too, so a caller that took them the other way round would
+    deadlock against this one.
+  */
+  const [before] = await ctx.db
+    .select(USER_COLUMNS)
+    .from(s.users)
+    .where(eq(s.users.id, id))
+    .limit(1)
+    .for("update");
   if (!before) throw notFound("That person");
 
   /**
@@ -282,7 +301,13 @@ export async function updateUser(ctx: Ctx, id: string, input: UserInput): Promis
 export async function archiveUser(ctx: Ctx, id: string, archived: boolean): Promise<UserDto> {
   assertCan(ctx, "people:manage");
 
-  const [before] = await ctx.db.select(USER_COLUMNS).from(s.users).where(eq(s.users.id, id)).limit(1);
+  // Locked before the decision, for the reason given in `updateUser`.
+  const [before] = await ctx.db
+    .select(USER_COLUMNS)
+    .from(s.users)
+    .where(eq(s.users.id, id))
+    .limit(1)
+    .for("update");
   if (!before) throw notFound("That person");
   if (before.isOwner && archived) {
     throw validationFailed({ _: ["The account owner cannot be archived."] });
@@ -529,7 +554,15 @@ export async function assertOutranksOrEqual(ctx: Ctx, targetProfileId: string, v
     .from(s.permissionProfiles)
     .where(eq(s.permissionProfiles.id, targetProfileId))
     .limit(1)
-    .for("update");
+    /*
+      Shared, not exclusive. This only reads the profile; it needs the
+      capabilities to stay put until the transaction ends, not the right to
+      change them. `FOR UPDATE` made every invite for every Member queue behind
+      whichever one held the Member profile, through token issuance, mail
+      queuing and commit. `FOR SHARE` blocks a capability edit and lets
+      concurrent readers through.
+    */
+    .for("share");
 
   if (!profile) return; // No profile is no permissions; nothing to outrank.
 
