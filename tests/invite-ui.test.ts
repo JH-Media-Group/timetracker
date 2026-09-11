@@ -9,6 +9,7 @@
 
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { outcomeOf } from "@/lib/invite-outcome";
 
 const page = readFileSync("src/app/team/[id]/page.tsx", "utf8");
 const dialog = readFileSync("src/components/app/invite-dialog.tsx", "utf8");
@@ -65,24 +66,49 @@ describe("the invitation UI", () => {
       There is one copy, in one place, and the close path clears it.
     */
     expect(dialog, "the link must not be part of the mutation's data").toContain(
-      "Promise<{ queued: boolean; hadLink: boolean }>"
+      "Promise<{ queued: boolean; outcome: InviteOutcome }>"
     );
-    expect(dialog).toContain("hadLink: !!result.link");
     expect(dialog, "setLink happens in the request, not from cached data").toMatch(
-      /if \(result\.link\) setLink\(result\.link\)/
+      /if \(outcome === "link"\) setLink\(result\.link!\)/
     );
   });
 
-  it("ignores a response from a previous opening of the dialog", () => {
-    /*
-      `reset()` does not cancel a request in flight. Cancel a pending link-only
-      invite, reopen, invite again, and the first response can land after the
-      second and overwrite the live link with one that has been superseded. The
-      person copies a dead link and finds out days later.
-    */
-    expect(dialog).toContain("const generation = React.useRef(0)");
-    expect(dialog).toContain("generation.current += 1");
-    expect(dialog).toMatch(/if \(mine !== generation\.current\)/);
+  /*
+    The stale-response rule, tested as a rule rather than as a source string.
+
+    Round three found that round two's generation guard covered the link and
+    not the success handler: a response from a cancelled request returned
+    `hadLink: false`, which read as an email-only invite that worked, so it
+    toasted "Invitation queued for" whoever was on screen now and closed the
+    dialog underneath them. The tests at the time asserted the source contained
+    the guard, and could not have seen it, which is the third round running
+    that a source-string assertion has covered for a live defect.
+
+    `outcomeOf` exists so the rule is a pure function with no DOM, and these
+    are assertions about behaviour.
+  */
+  describe("a response that outlived its opening of the dialog", () => {
+    it("is stale, whatever it came back with", () => {
+      expect(outcomeOf({ link: "https://x/set-password?token=abc" }, 1, 2)).toBe("stale");
+      expect(outcomeOf({}, 1, 2)).toBe("stale");
+    });
+
+    it("is acted on when it is still the current opening", () => {
+      expect(outcomeOf({ link: "https://x/set-password?token=abc" }, 3, 3)).toBe("link");
+      expect(outcomeOf({}, 3, 3)).toBe("queued");
+    });
+
+    it("is ignored by the success handler rather than treated as a plain invite", () => {
+      // The defect: `stale` falling through to the branch that toasts about
+      // the person currently shown and closes the dialog.
+      expect(dialog).toMatch(/if \(outcome === "stale"\) return;/);
+    });
+
+    it("is ignored on the error path too", () => {
+      // A stale failure would otherwise show a danger toast naming the wrong
+      // person, about a request made for somebody else.
+      expect(dialog).toMatch(/if \(startedAt !== generation\.current\) return \{ queued: false, outcome: "stale" \}/);
+    });
   });
 
   it("drops the link from state and from the mutation cache when it closes", () => {

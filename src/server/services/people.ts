@@ -511,11 +511,25 @@ async function assertNotTheLastAdministrator(ctx: Ctx, excludingUserId: string):
 export async function assertOutranksOrEqual(ctx: Ctx, targetProfileId: string, verb: string): Promise<void> {
   if (ctx.actor.kind === "system") return;
 
+  /*
+    Locked, because the capabilities read here are what the decision rests on.
+
+    Locking the user serialises against somebody being moved to a different
+    profile. It does nothing about the profile they already point at being
+    widened, which is how a custom profile gains capabilities: no `users` row
+    is touched at all. Without this the check can authorize against
+    capabilities that were current when it read them and are not when it acts.
+
+    Always taken after the caller has the user row, so the order is users then
+    permission_profiles everywhere this runs, and two of these cannot deadlock
+    against each other.
+  */
   const [profile] = await ctx.db
     .select({ capabilities: s.permissionProfiles.capabilities })
     .from(s.permissionProfiles)
     .where(eq(s.permissionProfiles.id, targetProfileId))
-    .limit(1);
+    .limit(1)
+    .for("update");
 
   if (!profile) return; // No profile is no permissions; nothing to outrank.
 

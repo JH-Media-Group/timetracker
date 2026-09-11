@@ -41,6 +41,7 @@ import { Check, Copy, Link2, Mail } from "lucide-react";
 import * as api from "@/lib/api";
 import { Button, Checkbox, Dialog, DialogContent } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
+import { outcomeOf, type InviteOutcome } from "@/lib/invite-outcome";
 
 export function InviteDialog({
   open,
@@ -88,22 +89,39 @@ export function InviteDialog({
       Handing it straight to component state instead means there is one copy,
       in one place, that the close path actually clears.
     */
-    mutationFn: async (): Promise<{ queued: boolean; hadLink: boolean }> => {
-      const mine = generation.current;
-      const result = await api.inviteUser(userId, { email: sendEmail, link: wantLink });
-      if (mine !== generation.current) return { queued: result.queued, hadLink: false };
-      if (result.link) setLink(result.link);
-      return { queued: result.queued, hadLink: !!result.link };
+    mutationFn: async (): Promise<{ queued: boolean; outcome: InviteOutcome }> => {
+      const startedAt = generation.current;
+      let result;
+      try {
+        result = await api.inviteUser(userId, { email: sendEmail, link: wantLink });
+      } catch (error) {
+        /*
+          A failure belonging to an earlier opening is not this opening's
+          failure. Letting it through showed a danger toast naming whoever is
+          on screen now, about a request made for somebody else.
+        */
+        if (startedAt !== generation.current) return { queued: false, outcome: "stale" };
+        throw error;
+      }
+      const outcome = outcomeOf(result, startedAt, generation.current);
+      if (outcome === "link") setLink(result.link!);
+      return { queued: result.queued, outcome };
     },
-    onSuccess: (result) => {
-      if (result.hadLink) {
+    onSuccess: ({ queued, outcome }) => {
+      // A response belonging to an earlier opening says nothing about the one
+      // on screen now. It must not toast about the person currently shown and
+      // must not close the dialog out from under them.
+      if (outcome === "stale") return;
+
+      if (outcome === "link") {
         // Stay open: the link is the reason they are here and it is not
         // recoverable once this closes.
-        if (result.queued) toast.push({ tone: "success", title: `Invitation queued for ${email}.` });
-      } else {
-        toast.push({ tone: "success", title: `Invitation queued for ${email}.` });
-        onOpenChange(false);
+        if (queued) toast.push({ tone: "success", title: `Invitation queued for ${email}.` });
+        return;
       }
+
+      toast.push({ tone: "success", title: `Invitation queued for ${email}.` });
+      onOpenChange(false);
     },
     onError: (error) =>
       toast.push({

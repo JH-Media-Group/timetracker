@@ -55,25 +55,52 @@ async function readCapped(req: Request, limit: number): Promise<string> {
   const declared = Number(req.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > limit) throw tooBig();
 
+  // No body at all, which is the legacy call and means email only.
   if (!req.body) return "";
+
+  /*
+    If something upstream already consumed the body, fall back rather than
+    throwing `TypeError: locked` and turning a 422 into a 500. The wrapper's
+    idempotency peek reads a clone, which leaves this readable, but that is a
+    property of another file and this should not break if it changes.
+  */
+  if (req.bodyUsed || req.body.locked) return (await req.text()).trim();
 
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
+  let over = false;
+
   try {
     for (;;) {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
-      if (total > limit) throw tooBig();
+      if (total > limit) {
+        over = true;
+        break;
+      }
       chunks.push(value);
     }
   } finally {
-    // Release the stream whether this finished or bailed out, so an oversized
-    // body is not left half-read on the connection.
-    reader.releaseLock();
+    /*
+      Cancel rather than merely release when bailing out.
+
+      `releaseLock` hands the stream back unread, which is what leaves an
+      oversized body half-consumed on the connection with nobody able to finish
+      it; a loop of those is a cheap way to pin connections. Cancelling
+      discards the rest and lets the runtime close it. The earlier version
+      released and claimed in a comment that this was the careful thing to do,
+      which was exactly backwards.
+    */
+    if (over) await reader.cancel().catch(() => {});
+    else reader.releaseLock();
   }
 
+  if (over) throw tooBig();
+
+  // Decoded once over the concatenated bytes, so a multi-byte character split
+  // across two chunks is not mangled.
   return new TextDecoder().decode(Buffer.concat(chunks)).trim();
 }
 
