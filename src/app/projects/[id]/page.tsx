@@ -74,6 +74,12 @@ function MissingRateBanner({ project }: { project: { id: string; billingType: st
   const apply = useMutation({
     mutationFn: () => api.reRateProject(project.id),
     onSuccess: (result) => {
+      // Nothing left to apply is a fact the moment this succeeds, so the
+      // banner goes now. Waiting for the re-check left it on screen after the
+      // toast said the work was done, inviting a second press.
+      qc.setQueryData<api.ReRateOutcome>(["re-rate-preview", project.id], (prev) =>
+        prev ? { ...prev, changed: 0, firstChangedOn: null, lastChangedOn: null } : prev
+      );
       qc.invalidateQueries({ queryKey: ["re-rate-preview", project.id] });
       qc.invalidateQueries({ queryKey: ["project-summary", project.id] });
       qc.invalidateQueries({ queryKey: ["time"] });

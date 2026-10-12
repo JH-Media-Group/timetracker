@@ -366,6 +366,58 @@ describe("re-rating a project's unbilled hours", () => {
       expect(row!.billableRateCents).toBe(0);
     });
 
+    it("leaves imported history at the rate the old system recorded, even a zero", async () => {
+      /*
+        A zero on an imported entry is what the old system held, and most of
+        that work was invoiced elsewhere without being marked so here. Filling
+        it turns settled history into an unpaid receivable, which is a decision
+        for a person with the invoices in front of them, not a banner button.
+      */
+      const ctx = ctxFor("administrator");
+      const clientId = await makeClient("Imported Co");
+      const projectId = await makeProject(clientId, { name: "Imported", billBy: "project", hourlyRateCents: 15_000 });
+      const taskId = await makeProjectTask(projectId, await makeTask());
+
+      const importedId = await logTime({ projectId, projectTaskId: taskId, seconds: 3600, rateCents: 0, spentOn: "2026-06-10" });
+      await db.update(s.timeEntries).set({ source: "import" }).where(eq(s.timeEntries.id, importedId));
+      const typedId = await logTime({ projectId, projectTaskId: taskId, seconds: 3600, rateCents: 0, spentOn: "2026-09-20" });
+
+      const outcome = await reRateProject(ctx, { projectId });
+
+      expect(outcome.changed, "only the entry typed here").toBe(1);
+      expect(outcome.skipped.imported, "and the import is counted, not passed over").toBe(1);
+      const [imported] = await db.select().from(s.timeEntries).where(eq(s.timeEntries.id, importedId));
+      const [typed] = await db.select().from(s.timeEntries).where(eq(s.timeEntries.id, typedId));
+      expect(imported!.billableRateCents).toBe(0);
+      expect(typed!.billableRateCents).toBe(15_000);
+    });
+
+    it("gives each entry the rate in force on its own day, with the lookups cached", async () => {
+      /*
+        The batch reads each person's rates once and picks the day in memory.
+        A cache keyed too coarsely would hand July's rate to June, so the case
+        that matters is one person, one task, a rate change between two entries.
+      */
+      const ctx = ctxFor("administrator");
+      const clientId = await makeClient("Dated Co");
+      const projectId = await makeProject(clientId, { name: "Dated", billBy: "people" });
+      const taskId = await makeProjectTask(projectId, await makeTask());
+      await db.insert(s.userRates).values([
+        { id: newId(), userId: people.administrator!, kind: "billable", amountCents: 10_000, startsOn: null, endsOn: "2026-06-30" },
+        { id: newId(), userId: people.administrator!, kind: "billable", amountCents: 12_000, startsOn: "2026-07-01", endsOn: null },
+      ]);
+
+      const june = await logTime({ projectId, projectTaskId: taskId, seconds: 3600, rateCents: 0, spentOn: "2026-06-15" });
+      const july = await logTime({ projectId, projectTaskId: taskId, seconds: 3600, rateCents: 0, spentOn: "2026-07-15" });
+
+      await reRateProject(ctx, { projectId });
+
+      const [j] = await db.select().from(s.timeEntries).where(eq(s.timeEntries.id, june));
+      const [k] = await db.select().from(s.timeEntries).where(eq(s.timeEntries.id, july));
+      expect(j!.billableRateCents, "June keeps June's rate").toBe(10_000);
+      expect(k!.billableRateCents, "July gets July's").toBe(12_000);
+    });
+
     it("says which days the change covers, so the screen can", async () => {
       const ctx = ctxFor("administrator");
       const clientId = await makeClient("Span Co");

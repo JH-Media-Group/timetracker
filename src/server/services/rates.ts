@@ -105,8 +105,32 @@ export interface ResolveContext {
  * override, and the person's dated rates. Doing it in five queries would be
  * five round trips on the hot write path.
  */
-export async function resolveForEntry(ctx: Ctx, input: ResolveContext): Promise<ResolvedRates> {
-  const [config] = await ctx.db
+export function resolveForEntry(ctx: Ctx, input: ResolveContext): Promise<ResolvedRates> {
+  return resolveWith(ctx, input);
+}
+
+/**
+ * What one resolution reads, kept for the length of one batch.
+ *
+ * The configuration depends on the project task and the person, and the dated
+ * rates on the person; neither depends on the day, which `resolveRates` picks
+ * from the rates in memory. So a batch over a project needs one read per task
+ * and person rather than two per entry. The re-rate preview made two per entry
+ * and took five seconds on a project with a thousand of them, on every page
+ * load for anybody who manages rates. A cache lives inside one call and is
+ * thrown away with it, so it can never serve a rate somebody has since changed.
+ */
+interface ResolverCache {
+  configs: Map<string, Promise<ResolverConfig | undefined>>;
+  userRates: Map<string, ReturnType<typeof ratesFor>>;
+}
+
+const newResolverCache = (): ResolverCache => ({ configs: new Map(), userRates: new Map() });
+
+type ResolverConfig = Awaited<ReturnType<typeof loadResolverConfig>>[number];
+
+function loadResolverConfig(ctx: Ctx, input: ResolveContext) {
+  return ctx.db
     .select({
       billingType: s.projects.billingType,
       billBy: s.projects.billBy,
@@ -125,10 +149,25 @@ export async function resolveForEntry(ctx: Ctx, input: ResolveContext): Promise<
     )
     .where(and(eq(s.projectTasks.id, input.projectTaskId), eq(s.projectTasks.projectId, input.projectId)))
     .limit(1);
+}
+
+async function resolveWith(ctx: Ctx, input: ResolveContext, cache?: ResolverCache): Promise<ResolvedRates> {
+  const configKey = `${input.projectId}:${input.projectTaskId}:${input.userId}`;
+  let configP = cache?.configs.get(configKey);
+  if (!configP) {
+    configP = loadResolverConfig(ctx, input).then((rows) => rows[0]);
+    cache?.configs.set(configKey, configP);
+  }
+  const config = await configP;
 
   if (!config) throw notFound("That task on that project");
 
-  const userRates = await ratesFor(ctx, input.userId);
+  let ratesP = cache?.userRates.get(input.userId);
+  if (!ratesP) {
+    ratesP = ratesFor(ctx, input.userId);
+    cache?.userRates.set(input.userId, ratesP);
+  }
+  const userRates = await ratesP;
 
   return resolveRates({
     project: {
@@ -451,15 +490,17 @@ export interface ReRateOutcome {
   /** Eligible entries the resolver returned the same numbers for. */
   unchanged: number;
   /** In scope but deliberately untouched, by reason. */
-  skipped: { invoiced: number; billedExternally: number; locked: number; running: number };
+  skipped: { invoiced: number; billedExternally: number; locked: number; running: number; imported: number };
   /** The billable value of the considered entries, before and after. */
   billableCentsBefore: number;
   billableCentsAfter: number;
   /** Hours still resolving to no rate, which re-rating cannot fix. */
   stillUnrated: number;
   /**
-   * Entries carrying a non-zero rate that differs from what the project resolves
-   * to today. Left exactly as recorded, and counted so the screen can say so.
+   * Entries that had a rate missing and also carry a non-zero rate that differs
+   * from what the project resolves to today: the non-zero one is left exactly as
+   * recorded. Entries with nothing missing are not resolved at all, so they are
+   * counted in `unchanged` and not here.
    */
   keptAsRecorded: number;
   /** The earliest and latest day among the entries that change, or null if none do. */
@@ -540,6 +581,7 @@ export async function reRateProject(
       billedExternally: s.timeEntries.billedExternally,
       ratesLockedAt: s.timeEntries.ratesLockedAt,
       timerStartedAt: s.timeEntries.timerStartedAt,
+      source: s.timeEntries.source,
     })
     .from(s.timeEntries)
     .where(
@@ -555,7 +597,7 @@ export async function reRateProject(
     considered: 0,
     changed: 0,
     unchanged: 0,
-    skipped: { invoiced: 0, billedExternally: 0, locked: 0, running: 0 },
+    skipped: { invoiced: 0, billedExternally: 0, locked: 0, running: 0, imported: 0 },
     billableCentsBefore: 0,
     billableCentsAfter: 0,
     stillUnrated: 0,
@@ -570,6 +612,16 @@ export async function reRateProject(
     if (row.billedExternally) { outcome.skipped.billedExternally++; continue; }
     if (row.ratesLockedAt) { outcome.skipped.locked++; continue; }
     if (row.timerStartedAt) { outcome.skipped.running++; continue; }
+    /*
+      Imported history stays as the old system recorded it.
+      A zero there is what Harvest held, and most of that work was invoiced
+      through QuickBooks without being marked so here. Pricing it at today's
+      rate would turn settled history into an unpaid receivable. The first
+      local run of the project-page banner offered exactly that: twenty-four
+      entries back to June, most of them imported at $0. Time entered here is
+      what this action is for.
+    */
+    if (row.source === "import") { outcome.skipped.imported++; continue; }
     eligible.push(row);
   }
   outcome.considered = eligible.length;
@@ -583,13 +635,25 @@ export async function reRateProject(
   let afterCentSeconds = 0;
   const updates: { id: string; billableRateCents: number; costRateCents: number }[] = [];
 
+  const cache = newResolverCache();
+
   for (const row of eligible) {
-    const resolved = await resolveForEntry(ctx, {
-      userId: row.userId,
-      projectId: input.projectId,
-      projectTaskId: row.projectTaskId,
-      spentOn: row.spentOn as IsoDate,
-    });
+    // Nothing missing means nothing to fill, and no reason to resolve at all.
+    // Most of a long project's history is in this state.
+    const missingBillable = row.isBillable && row.billableRateCents === 0;
+    const missingCost = row.costRateCents === 0;
+    if (!missingBillable && !missingCost) {
+      beforeCentSeconds += row.durationSeconds * row.billableRateCents;
+      afterCentSeconds += row.durationSeconds * row.billableRateCents;
+      outcome.unchanged++;
+      continue;
+    }
+
+    const resolved = await resolveWith(
+      ctx,
+      { userId: row.userId, projectId: input.projectId, projectTaskId: row.projectTaskId, spentOn: row.spentOn as IsoDate },
+      cache
+    );
 
     // Fill a zero, never replace a number. See "IT FILLS MISSING RATES" above.
     const billableRateCents =

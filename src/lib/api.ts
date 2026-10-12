@@ -1202,7 +1202,7 @@ export interface ReRateOutcome {
   considered: number;
   changed: number;
   unchanged: number;
-  skipped: { invoiced: number; billedExternally: number; locked: number; running: number };
+  skipped: { invoiced: number; billedExternally: number; locked: number; running: number; imported: number };
   billableCentsBefore: number;
   billableCentsAfter: number;
   stillUnrated: number;
