@@ -9,12 +9,12 @@ import * as api from "@/lib/api";
 import { cn } from "@/lib/cn";
 import { budgetHealth, sumValue } from "@/lib/derive";
 import {
-  addDays, formatDuration, formatHoursUnit, formatMoney, formatMoneyShort, formatPercent,
+  addDays, formatDayShort, formatDuration, formatHoursUnit, formatMoney, formatMoneyShort, formatPercent,
   isoDate, startOfWeek, toDate,
 } from "@/lib/format";
 import type { TimeEntry } from "@/lib/types";
 import {
-  Avatar, Badge, Button, Card, EmptyState, Spinner, Menu, MenuItem, MenuSeparator,
+  Avatar, Badge, Banner, Button, Card, EmptyState, Spinner, Menu, MenuItem, MenuSeparator,
   Meter, Segmented, Skeleton, Tooltip,
 } from "@/components/ui/primitives";
 import { PageBody, PageHeader } from "@/components/app/page-chrome";
@@ -25,97 +25,122 @@ import { InvoiceBadge, Kpi, KpiRow, SectionTitle } from "@/components/app/kpi";
 import { useZonedToday } from "@/lib/use-zoned-today";
 
 /**
- * Re-rating this project's unbilled hours.
+ * Hours on this project that are worth nothing because no rate existed.
  *
  * An entry keeps the rates it was written with, so setting an hourly rate on a
  * project changes nothing already logged. That is the rule and it is the right
- * rule. What was missing was its documented exception: every Example Client 07 hour
- * imported from Harvest carried a rate of zero, so the project read $0
- * uninvoiced with 876 entries behind it and nothing in the product could put it
- * right (t-9Uli4l, t-zNfxik).
+ * rule, and it is also how a client project reached the end of a month with
+ * weeks of its time recorded at $0: the project had no rate while people
+ * logged time against it, an administrator then set one, and the report and
+ * the invoice both kept showing the old zeros (t-bWUyUa, t-l4ORjw, t-JNWQHG).
  *
- * It asks before it acts, and asks with the real computation: the preview is
- * the same server call with `dryRun`, so the figure shown is the figure that
- * lands. Anything already invoiced or billed in QuickBooks is refused by the
- * server and reported here rather than passed over quietly.
+ * This used to be a link at the bottom of a KPI card, which nobody pressed
+ * because nobody knew there was anything to press. So it checks on its own,
+ * with the real computation (the same server call with `dryRun`, so the figure
+ * shown is the figure that lands), and only speaks when there is something to
+ * say. It fills missing rates and never replaces one, so imported history
+ * priced in Harvest cannot be re-priced from here.
+ *
+ * Two things to say, and they are different:
+ *
+ *   No rate at all. The project bills by project rate and has none, so every
+ *   billable hour logged here is being recorded at $0 right now. The fix is a
+ *   setting, so the banner points at the editor.
+ *
+ *   A rate exists and some hours predate it. The fix is to apply it, so the
+ *   banner offers that, with the count, the dates and the money.
  */
-function ReRateRow({ projectId }: { projectId: string }) {
+function MissingRateBanner({ project }: { project: { id: string; billingType: string; billBy: string; hourlyRateCents?: number } }) {
   const can = useCan();
   const qc = useQueryClient();
   const toast = useToast();
-  const [preview, setPreview] = React.useState<api.ReRateOutcome | null>(null);
+  const router = useRouter();
+  const [dismissed, setDismissed] = React.useState(false);
 
-  const look = useMutation({
-    mutationFn: () => api.reRateProject(projectId, { dryRun: true }),
-    onSuccess: setPreview,
-    onError: (e: unknown) =>
-      toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not check the rates." }),
+  const bills = project.billingType === "time_and_materials";
+  const mayFix = can("rates:manage");
+  // The rate only reaches somebody who may see billable money, so its absence
+  // means nothing to anybody else and must not be read as "no rate".
+  const noProjectRate =
+    bills && project.billBy === "project" && can("rates:view_billable") && !project.hourlyRateCents;
+
+  const { data: preview } = useQuery({
+    queryKey: ["re-rate-preview", project.id],
+    queryFn: () => api.reRateProject(project.id, { dryRun: true }),
+    enabled: bills && mayFix,
+    staleTime: 60_000,
   });
 
   const apply = useMutation({
-    mutationFn: () => api.reRateProject(projectId),
+    mutationFn: () => api.reRateProject(project.id),
     onSuccess: (result) => {
-      setPreview(null);
-      qc.invalidateQueries({ queryKey: ["project"] });
-      qc.invalidateQueries({ queryKey: ["summary"] });
+      qc.invalidateQueries({ queryKey: ["re-rate-preview", project.id] });
+      qc.invalidateQueries({ queryKey: ["project-summary", project.id] });
       qc.invalidateQueries({ queryKey: ["time"] });
       qc.invalidateQueries({ queryKey: ["uninvoiced"] });
       toast.push({
         tone: "success",
-        title: `Re-rated ${result.changed} ${result.changed === 1 ? "entry" : "entries"}, now worth ${formatMoney(result.billableCentsAfter)}.`,
+        title: `Applied the rate to ${result.changed} ${result.changed === 1 ? "entry" : "entries"}, adding ${formatMoney(result.billableCentsAfter - result.billableCentsBefore)}.`,
       });
     },
     onError: (e: unknown) =>
-      toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not re-rate those hours." }),
+      toast.push({ tone: "danger", title: e instanceof Error ? e.message : "Could not apply the rate." }),
   });
 
-  if (!can("rates:manage")) return null;
+  if (!bills || !mayFix || dismissed) return null;
 
-  if (!preview) {
+  if (noProjectRate) {
     return (
-      <button
-        className="text-base text-link underline disabled:opacity-60"
-        disabled={look.isPending}
-        onClick={() => look.mutate()}
-      >
-        {look.isPending ? "Checking rates..." : "Re-rate unbilled hours"}
-      </button>
+      <div className="mb-4">
+        <Banner
+          variant="warning"
+          title="This project has no hourly rate."
+          action={
+            can("project:manage") ? (
+              <Button size="sm" variant="secondary" onClick={() => router.push(`/projects/${project.id}/edit`)}>
+                Set a rate
+              </Button>
+            ) : undefined
+          }
+        >
+          It bills by project rate, so billable time logged here is being recorded at $0
+          {preview && preview.stillUnrated > 0
+            ? ` (${preview.stillUnrated} ${preview.stillUnrated === 1 ? "entry" : "entries"} so far)`
+            : ""}
+          . Once a rate is set, this will offer to apply it to those hours.
+        </Banner>
+      </div>
     );
   }
 
-  const held = preview.skipped.invoiced + preview.skipped.billedExternally + preview.skipped.locked;
+  if (!preview || preview.changed === 0) return null;
+
+  const span =
+    preview.firstChangedOn && preview.lastChangedOn
+      ? preview.firstChangedOn === preview.lastChangedOn
+        ? ` on ${formatDayShort(preview.firstChangedOn)}`
+        : ` between ${formatDayShort(preview.firstChangedOn)} and ${formatDayShort(preview.lastChangedOn)}`
+      : "";
 
   return (
-    <div className="mt-1 rounded-md border border-border bg-bg-muted p-2 text-sm">
-      {preview.changed === 0 ? (
-        <div className="text-ink-secondary">
-          Nothing to re-rate. Every unbilled hour already carries the rate this project resolves to.
-        </div>
-      ) : (
-        <div className="text-ink">
-          {preview.changed} of {preview.considered} unbilled{" "}
-          {preview.considered === 1 ? "entry" : "entries"} would change, from{" "}
-          {formatMoney(preview.billableCentsBefore)} to {formatMoney(preview.billableCentsAfter)}.
-          {preview.stillUnrated > 0 && (
-            <> {preview.stillUnrated} would still have no rate to resolve to.</>
-          )}
-        </div>
-      )}
-      {held > 0 && (
-        <div className="mt-1 text-ink-secondary">
-          {held} already billed or locked, and will not be touched.
-        </div>
-      )}
-      <div className="mt-2 flex gap-2">
-        {preview.changed > 0 && (
+    <div className="mb-4">
+      <Banner
+        variant="warning"
+        title={`${preview.changed} unbilled ${preview.changed === 1 ? "entry was" : "entries were"} recorded without a rate${span}.`}
+        onDismiss={() => setDismissed(true)}
+        action={
           <Button size="sm" variant="primary" loading={apply.isPending} onClick={() => apply.mutate()}>
-            Re-rate {preview.changed}
+            Apply rate
           </Button>
-        )}
-        <Button size="sm" variant="ghost" onClick={() => setPreview(null)}>
-          {preview.changed > 0 ? "Cancel" : "Close"}
-        </Button>
-      </div>
+        }
+      >
+        Applying the rate this project uses now makes them worth {formatMoney(preview.billableCentsAfter - preview.billableCentsBefore)}.
+        Rates already on other entries stay as they were recorded
+        {preview.stillUnrated > 0
+          ? `, and ${preview.stillUnrated} would still have no rate to take`
+          : ""}
+        .
+      </Banner>
     </div>
   );
 }
@@ -210,9 +235,24 @@ export default function ProjectDetailPage() {
     return buckets;
   }, [entries, today]);
 
+  /*
+    What the progress line measures, decided once and used by the chart, its
+    axis, its tooltip and its label alike.
+
+    Billable value unless the budget is in hours, and always hours for somebody
+    who cannot see money. The second clause is a fix: other people's entries
+    reach that person without a rate (only their own carry one), so the value
+    line summed their own work and called it the project's. And the label now
+    says which it is, because "Project progress"
+    over a value line read as an hours chart, and a project whose hours went up
+    while its value did not (no rate, t-JNWQHG) looked broken rather than
+    unpriced.
+  */
+  const progressInHours = project?.budgetBy === "project_hours" || !showsMoney;
+
   const cumulative = React.useMemo(() => {
     let acc = 0;
-    const useHours = project?.budgetBy === "project_hours";
+    const useHours = progressInHours;
     return weekly.map((w, i) => {
       acc += useHours ? w.seconds : w.centSeconds;
       return {
@@ -221,7 +261,7 @@ export default function ProjectDetailPage() {
         partial: i === weekly.length - 1,
       };
     });
-  }, [weekly, project]);
+  }, [weekly, progressInHours]);
 
   const byTask = React.useMemo(() => {
     const m = new Map<string, TimeEntry[]>();
@@ -311,16 +351,24 @@ export default function ProjectDetailPage() {
       />
 
       <PageBody className="pt-5">
+        <MissingRateBanner project={project} />
+
         {/* Chart card */}
         <Card className="mb-4" padded={false}>
           <div className="flex items-center justify-between border-b border-border px-4 py-3">
             <Segmented
               value={chart} onChange={setChart} aria-label="Chart"
-              options={[{ value: "progress", label: "Project progress" }, { value: "hours", label: "Hours per week" }]}
+              options={[
+                { value: "progress", label: progressInHours ? "Hours to date" : "Billable value to date" },
+                { value: "hours", label: "Hours per week" },
+              ]}
             />
             <Legend items={
               chart === "progress"
-                ? [{ label: "Tracked", color: "var(--viz-1)" }, ...(b?.budget ? [{ label: "Over budget", color: "var(--danger)" }] : [])]
+                ? [
+                    { label: progressInHours ? "Hours, cumulative" : "Billable value, cumulative", color: "var(--viz-1)" },
+                    ...(b?.budget && (b.kind === "hours") === progressInHours ? [{ label: "Over budget", color: "var(--danger)" }] : []),
+                  ]
                 : [{ label: "Hours", color: "var(--viz-1)" }]
             } />
           </div>
@@ -330,19 +378,21 @@ export default function ProjectDetailPage() {
             ) : chart === "progress" ? (
               <LineChart
                 data={cumulative}
-                ariaLabel={`Cumulative ${project.budgetBy === "project_hours" ? "hours" : "billable value"} for ${project.name}.`}
-                format={(v) => (project.budgetBy === "project_hours" ? v.toFixed(0) : formatMoneyShort(v * 100))}
-                threshold={b?.budget ? {
+                ariaLabel={`Cumulative ${progressInHours ? "hours" : "billable value"} for ${project.name}.`}
+                format={(v) => (progressInHours ? v.toFixed(0) : formatMoneyShort(v * 100))}
+                // Only when the budget is in the line's own unit. A fee budget
+                // drawn across an hours line marks a meaningless height.
+                threshold={b?.budget && (b.kind === "hours") === progressInHours ? {
                   value: b.kind === "hours" ? b.budget / 3600 : b.budget / 100,
                   label: `Budget: ${b.kind === "hours" ? formatHoursUnit(b.budget) : formatMoney(b.budget)}`,
                 } : undefined}
                 tipRows={(p, i, prev) => ({
                   title: `Week of ${p.label}`,
                   rows: [
-                    { color: "var(--viz-1)", label: "Cumulative", value: project.budgetBy === "project_hours" ? `${p.value.toFixed(2)} hrs` : formatMoney(p.value * 100) },
+                    { color: "var(--viz-1)", label: "Cumulative", value: progressInHours ? `${p.value.toFixed(2)} hrs` : formatMoney(p.value * 100) },
                     ...(prev ? [{ label: "This week", value: `+${(p.value - prev.value).toFixed(2)}` }] : []),
                   ],
-                  foot: b?.budget ? {
+                  foot: b?.budget && (b.kind === "hours") === progressInHours ? {
                     label: p.value > (b.kind === "hours" ? b.budget / 3600 : b.budget / 100) ? "Over budget" : "Budget remaining",
                     value: b.kind === "hours"
                       ? `${(b.budget / 3600 - p.value).toFixed(2)} hrs`
@@ -436,7 +486,6 @@ export default function ProjectDetailPage() {
               <KpiRow label="Billed ahead" value={formatMoney(summary!.overbilledCents)} />
             )}
             <Link href={`/invoices/new?client=${project.clientId}`} className="text-base text-link underline">New invoice</Link>
-            <ReRateRow projectId={project.id} />
           </Kpi>
           )}
         </div>

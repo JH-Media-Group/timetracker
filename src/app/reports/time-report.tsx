@@ -9,7 +9,6 @@
  */
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
 import * as api from "@/lib/api";
@@ -22,6 +21,7 @@ import { Kpi, KpiHelpLabel } from "@/components/app/kpi";
 import { useApp, useCan } from "@/components/app/providers";
 import { useUrlState, type Period } from "@/components/app/page-chrome";
 import type { GridRow } from "@/components/ui/grid";
+import { EntryDrilldown, type DrillTarget } from "./entry-drilldown";
 
 type GroupBy = "client" | "project" | "task" | "person";
 
@@ -33,7 +33,6 @@ interface Row {
 }
 
 export function TimeReport({ period }: { period: Period }) {
-  const router = useRouter();
   const { params, set } = useUrlState();
   const can = useCan();
 
@@ -117,7 +116,10 @@ export function TimeReport({ period }: { period: Period }) {
     },
     {
       colId: "share", headerName: "Share", width: 180, sortable: true,
-      valueGetter: (p: { data?: Row }) => p.data?.share ?? 0,
+      // Nothing on the totals row. Custom renderers never run there, so the
+      // getter's fallback of 0 was printed bare under "Share" (t-7nyUE8).
+      valueGetter: (p: { data?: Row; node?: { rowPinned?: string | null } | null }) =>
+        p.node?.rowPinned ? null : p.data?.share ?? 0,
       cellRenderer: (p: { data?: Row; value: number }) => p.data && (
         <span className="tly-meter-row flex w-full min-w-0 flex-1 items-center gap-2">
           <span className="tly-meter min-w-8 flex-1"><Meter segments={[{ value: p.value, tone: "billable" }]} /></span>
@@ -139,11 +141,16 @@ export function TimeReport({ period }: { period: Period }) {
     total: totals.total, amount: totals.amount,
   }), [totals]);
 
-  const open = (r: Row) => {
-    if (groupBy === "client") router.push(`/clients/${r.id}`);
-    else if (groupBy === "project") router.push(`/projects/${r.id}`);
-    else if (groupBy === "person") router.push(`/team/${r.id}`);
-  };
+  /*
+    A row opens the entries behind it (t-7nyUE8).
+
+    It used to navigate away to the client, project or person page, and a task
+    row did nothing at all, so there was no way to see what a sum was made of
+    without leaving the report and rebuilding its filter. The page each row used
+    to open is a link inside the breakdown, one click further.
+  */
+  const [drill, setDrill] = React.useState<DrillTarget | null>(null);
+  const open = (r: Row) => setDrill({ dimension: groupBy, id: r.id, name: r.name });
 
   return (
     <>
@@ -203,7 +210,7 @@ export function TimeReport({ period }: { period: Period }) {
         loading={loading}
         totals={gridTotals}
         height={560}
-        onRowOpen={groupBy === "task" ? undefined : open}
+        onRowOpen={open}
         filters={
           <>
           {/* Who and what this is scoped to, and how to get out of it. */}
@@ -244,6 +251,14 @@ export function TimeReport({ period }: { period: Period }) {
           />
           </>
         }
+      />
+
+      <EntryDrilldown
+        target={drill}
+        from={period.from}
+        to={period.to}
+        scope={{ userId, projectId }}
+        onClose={() => setDrill(null)}
       />
     </>
   );

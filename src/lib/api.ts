@@ -1206,15 +1206,20 @@ export interface ReRateOutcome {
   billableCentsBefore: number;
   billableCentsAfter: number;
   stillUnrated: number;
+  /** Entries already carrying a different non-zero rate, left as recorded. */
+  keptAsRecorded: number;
+  firstChangedOn: string | null;
+  lastChangedOn: string | null;
 }
 
 /**
- * Re-resolve the rate snapshots on a project's unbilled hours.
+ * Fill the missing rate snapshots on a project's unbilled hours.
  *
  * An entry keeps the rates it was written with, which is why setting a project
  * rate does not change what has already been logged. This is the documented
- * exception, and until now it existed only in the documentation: hours imported
- * from Harvest with no rate were stuck at zero for good (t-zNfxik, t-9Uli4l).
+ * exception: hours recorded with no rate, from a Harvest import or from before
+ * the project had one, get the rate the project resolves to now. A rate that is
+ * already there is never replaced (t-bWUyUa).
  *
  * Pass `dryRun` to ask what it would do without doing it.
  */

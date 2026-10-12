@@ -224,7 +224,16 @@ describe("sendDueReminders", () => {
     const tzCtx = createCtx({ actor: systemActor(await actorUser()), db, now: () => evening });
 
     const { id } = await seedInvoice({ dueDaysAgo: 0 });
-    await db.update(s.invoices).set({ dueDate: "2026-08-14" }).where(eq(s.invoices.id, id));
+    /*
+      The issue date moves with the due date. `seedInvoice` dates the invoice
+      from the real calendar, so pinning only the due date worked until real
+      time passed the pinned day, and from then on the pair broke
+      `invoices_dates_ordered` and the test failed for a reason unrelated to
+      what it tests. The clock here was fixed; the data it ran on was not.
+    */
+    await db.update(s.invoices)
+      .set({ issueDate: "2026-07-15", dueDate: "2026-08-14" })
+      .where(eq(s.invoices.id, id));
 
     const report = await sendDueReminders(tzCtx);
     expect(report.sent, "due today for the business, so not chased").toBe(0);

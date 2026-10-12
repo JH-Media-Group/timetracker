@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { ProjectPicker, TaskSelect, defaultTaskFor, pushRecent } from "./project-picker";
-import { useApp } from "./providers";
+import { useApp, useCan } from "./providers";
 import {
   elapsedMinutes, formatClockTime, formatDuration, implausibleSpanWarning,
   minutesOfDay, parseDuration, resolveClockTime,
@@ -69,6 +69,7 @@ export function EntryForm({
   const qc = useQueryClient();
   const toast = useToast();
   const { projectById, taskById, settings, me, userById } = useApp();
+  const can = useCan();
   /*
     The zone the entry belongs to, which is the owner's, not the editor's.
     Whoever is typing may not be the person the time is for: a manager
@@ -176,9 +177,19 @@ export function EntryForm({
     mutationFn: async (opts: { start?: boolean }) => {
       if (!projectId || !taskId) throw new Error("Choose a project and a task.");
       const { start: startMin, end: endMin } = readTimes(startText, endText);
+      /*
+        The billable flag goes only when somebody changed it.
+
+        This sent `!nonBillable` on every save, so an untouched checkbox meant
+        "billable" rather than "whatever this task is". The server's own
+        default, which reads the task and the project, never got a say, and on a
+        non-billable project, where this form hides the checkbox entirely, every
+        entry still arrived marked billable.
+      */
+      const initialNonBillable = entry ? !entry.isBillable : false;
       const base = {
         projectId, taskId, spentOn, notes: notes.trim() || undefined,
-        isBillable: !nonBillable,
+        ...(nonBillable !== initialNonBillable ? { isBillable: !nonBillable } : {}),
       };
       const clock = timeEntryClockValues({
         existing: entry,
@@ -322,6 +333,26 @@ export function EntryForm({
           <Checkbox checked={nonBillable} onCheckedChange={setNonBillable} aria-label="Non-billable" />
           Non-billable
         </label>
+      )}
+
+      {/*
+        Said here, while the time is being logged, rather than discovered on a
+        report weeks later. One project took a month of time at $0 before
+        anybody noticed it had no rate (t-bWUyUa).
+
+        Only to somebody who can see billable rates: the project's rate does not
+        reach anybody else, so its absence would be a false alarm for them.
+      */}
+      {project
+        && project.billingType === "time_and_materials"
+        && project.billBy === "project"
+        && !project.hourlyRateCents
+        && !nonBillable
+        && can("rates:view_billable") && (
+        <div className="text-sm text-warning" role="status">
+          This project has no hourly rate yet, so this time will be recorded at $0.
+          Set a rate on the project and it will offer to apply it to these hours.
+        </div>
       )}
 
       {/*

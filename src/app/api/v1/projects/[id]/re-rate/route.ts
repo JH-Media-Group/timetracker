@@ -6,9 +6,9 @@ import { reRateProject } from "@/server/services/rates";
 /**
  * POST /api/v1/projects/:id/re-rate
  *
- * Re-resolves the rate snapshots on a project's unbilled hours. This is the
- * "explicit re-rate action" the schema comment and the PRD have both referred
- * to since the beginning, and which nothing implemented.
+ * Fills the missing rate snapshots on a project's unbilled hours, and never
+ * replaces one that is already there. This is the "explicit re-rate action"
+ * the schema comment and the PRD have both referred to since the beginning.
  *
  * `dryRun` answers what it would do without writing, so the screen can show the
  * money before anybody commits to it.

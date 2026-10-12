@@ -50,6 +50,8 @@ async function logTime(opts: {
   invoiceId?: string;
   billedExternally?: boolean;
   ratesLockedAt?: Date;
+  isBillable?: boolean;
+  costRateCents?: number;
 }) {
   const id = newId();
   await db.insert(s.timeEntries).values({
@@ -59,9 +61,9 @@ async function logTime(opts: {
     projectTaskId: opts.projectTaskId,
     spentOn: opts.spentOn,
     durationSeconds: opts.seconds,
-    isBillable: true,
+    isBillable: opts.isBillable ?? true,
     billableRateCents: opts.rateCents,
-    costRateCents: 0,
+    costRateCents: opts.costRateCents ?? 0,
     invoiceId: opts.invoiceId ?? null,
     billedExternally: opts.billedExternally ?? false,
     ratesLockedAt: opts.ratesLockedAt ?? null,
@@ -256,6 +258,130 @@ describe("re-rating a project's unbilled hours", () => {
     expect(after.entries).toEqual([
       { id: entryId, billableRateCents: 9_000, costRateCents: 0 },
     ]);
+  });
+
+  /*
+    IT FILLS MISSING RATES. IT NEVER REPRICES.
+
+    After the Harvest migration "unbilled" stopped meaning unbilled: most of the
+    history was invoiced through QuickBooks and carries neither an invoice nor
+    the billed-outside flag. The first version re-resolved every one of those
+    and wrote the answer, so pressing the button on a long-running project
+    re-priced years of billed work at today's rate and rewrote its cost too.
+  */
+  describe("never replaces a rate that is already there", () => {
+    it("leaves history priced at an old rate exactly as it was recorded", async () => {
+      const ctx = ctxFor("administrator");
+      const clientId = await makeClient("History Co");
+      const projectId = await makeProject(clientId, {
+        name: "History", billBy: "project", hourlyRateCents: 15_000,
+      });
+      const taskId = await makeProjectTask(projectId, await makeTask());
+
+      // Billed in QuickBooks at the old rate, and not flagged as such here.
+      const oldId = await logTime({
+        projectId, projectTaskId: taskId, seconds: 3600, rateCents: 10_500, spentOn: "2025-03-02",
+      });
+      const missingId = await logTime({
+        projectId, projectTaskId: taskId, seconds: 3600, rateCents: 0, spentOn: "2026-09-20",
+      });
+
+      const outcome = await reRateProject(ctx, { projectId });
+
+      expect(outcome.changed, "only the entry with no rate").toBe(1);
+      expect(outcome.keptAsRecorded, "and the other is reported, not passed over").toBe(1);
+      const [old] = await db.select().from(s.timeEntries).where(eq(s.timeEntries.id, oldId));
+      expect(old!.billableRateCents, "history keeps the price it was billed at").toBe(10_500);
+      const [filled] = await db.select().from(s.timeEntries).where(eq(s.timeEntries.id, missingId));
+      expect(filled!.billableRateCents).toBe(15_000);
+    });
+
+    it("does not rewrite a cost rate", async () => {
+      // A raise in March must not change what January cost. The snapshot rule
+      // exists for exactly this, and the first version broke it.
+      const ctx = ctxFor("administrator");
+      const clientId = await makeClient("Cost Co");
+      const projectId = await makeProject(clientId, {
+        name: "Cost", billBy: "project", hourlyRateCents: 12_000,
+      });
+      const taskId = await makeProjectTask(projectId, await makeTask());
+      await db.insert(s.userRates).values({
+        id: newId(), userId: people.administrator!, kind: "cost", amountCents: 9_000,
+        startsOn: null, endsOn: null,
+      });
+
+      const entryId = await logTime({
+        projectId, projectTaskId: taskId, seconds: 3600, rateCents: 0,
+        costRateCents: 4_000, spentOn: "2026-01-15",
+      });
+
+      await reRateProject(ctx, { projectId });
+
+      const [row] = await db.select().from(s.timeEntries).where(eq(s.timeEntries.id, entryId));
+      expect(row!.billableRateCents, "the missing billable rate is filled").toBe(12_000);
+      expect(row!.costRateCents, "the recorded cost is not").toBe(4_000);
+    });
+
+    it("still fills a cost rate that was never recorded", async () => {
+      // The import that motivated the action lost both rates. Filling a zero
+      // is the job; it is only replacing a number that is ruled out.
+      const ctx = ctxFor("administrator");
+      const clientId = await makeClient("Both Co");
+      const projectId = await makeProject(clientId, {
+        name: "Both", billBy: "project", hourlyRateCents: 12_000,
+      });
+      const taskId = await makeProjectTask(projectId, await makeTask());
+      await db.insert(s.userRates).values({
+        id: newId(), userId: people.administrator!, kind: "cost", amountCents: 9_000,
+        startsOn: null, endsOn: null,
+      });
+      const entryId = await logTime({
+        projectId, projectTaskId: taskId, seconds: 3600, rateCents: 0, spentOn: "2026-01-15",
+      });
+
+      await reRateProject(ctx, { projectId });
+
+      const [row] = await db.select().from(s.timeEntries).where(eq(s.timeEntries.id, entryId));
+      expect(row!.costRateCents).toBe(9_000);
+    });
+
+    it("never puts a price on time marked non-billable", async () => {
+      // The resolver answers for the task, not for the entry, so it returns the
+      // project rate for a non-billable entry on a billable task.
+      const ctx = ctxFor("administrator");
+      const clientId = await makeClient("Internal Co");
+      const projectId = await makeProject(clientId, {
+        name: "Internal", billBy: "project", hourlyRateCents: 12_000,
+      });
+      const taskId = await makeProjectTask(projectId, await makeTask());
+      const entryId = await logTime({
+        projectId, projectTaskId: taskId, seconds: 3600, rateCents: 0,
+        isBillable: false, spentOn: "2026-09-02",
+      });
+
+      const outcome = await reRateProject(ctx, { projectId });
+
+      expect(outcome.changed).toBe(0);
+      const [row] = await db.select().from(s.timeEntries).where(eq(s.timeEntries.id, entryId));
+      expect(row!.billableRateCents).toBe(0);
+    });
+
+    it("says which days the change covers, so the screen can", async () => {
+      const ctx = ctxFor("administrator");
+      const clientId = await makeClient("Span Co");
+      const projectId = await makeProject(clientId, {
+        name: "Span", billBy: "project", hourlyRateCents: 10_500,
+      });
+      const taskId = await makeProjectTask(projectId, await makeTask());
+      for (const day of ["2026-09-30", "2026-09-14", "2026-09-21"]) {
+        await logTime({ projectId, projectTaskId: taskId, seconds: 3600, rateCents: 0, spentOn: day });
+      }
+
+      const preview = await reRateProject(ctx, { projectId, dryRun: true });
+
+      expect(preview.firstChangedOn).toBe("2026-09-14");
+      expect(preview.lastChangedOn).toBe("2026-09-30");
+    });
   });
 
   it("refuses somebody who may not manage rates", async () => {

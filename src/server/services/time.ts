@@ -367,7 +367,14 @@ export async function createTimeEntry(ctx: Ctx, input: CreateTimeEntryInput): Pr
 
     // A task can be billable at a zero rate (the rate is simply missing), so
     // billability comes from the task, not from whether a rate was found.
-    const isBillable = input.isBillable ?? (await taskIsBillable(tx, projectTaskId));
+    //
+    // A non-billable project holds no billable time, whatever the request says.
+    // The entry editor sent `isBillable: true` on every save, including on
+    // projects where it hides the checkbox, so internal time arrived billable
+    // at $0 and read as unpriced client work in every report.
+    const isBillable = (await projectIsNonBillable(tx, input.projectId))
+      ? false
+      : input.isBillable ?? (await taskIsBillable(tx, projectTaskId));
 
     if (settings.requireNotes === "always" && !notes) {
       throw validationFailed({ notes: ["This account requires a note on every entry."] });
@@ -420,13 +427,33 @@ export async function createTimeEntry(ctx: Ctx, input: CreateTimeEntryInput): Pr
   });
 }
 
+/**
+ * Whether new time on this task is billable by default.
+ *
+ * The project has a say as well as the task. This read the task flag alone, so
+ * a project set to non-billable still produced billable entries whenever its
+ * tasks had kept the default, priced at $0 because the resolver knew better.
+ * Those are the "billable at zero" hours that made internal work look like
+ * unpriced client work in every report.
+ */
 async function taskIsBillable(ctx: Ctx, projectTaskId: string): Promise<boolean> {
   const [row] = await ctx.db
-    .select({ isBillable: s.projectTasks.isBillable })
+    .select({ isBillable: s.projectTasks.isBillable, billingType: s.projects.billingType })
     .from(s.projectTasks)
+    .innerJoin(s.projects, eq(s.projects.id, s.projectTasks.projectId))
     .where(eq(s.projectTasks.id, projectTaskId))
     .limit(1);
-  return row?.isBillable ?? false;
+  if (!row) return false;
+  return row.isBillable && row.billingType !== "non_billable";
+}
+
+async function projectIsNonBillable(ctx: Ctx, projectId: string): Promise<boolean> {
+  const [row] = await ctx.db
+    .select({ billingType: s.projects.billingType })
+    .from(s.projects)
+    .where(eq(s.projects.id, projectId))
+    .limit(1);
+  return row?.billingType === "non_billable";
 }
 
 /* --------------------------------------------------------------- updating */
@@ -458,6 +485,14 @@ export async function updateTimeEntry(ctx: Ctx, id: string, input: UpdateTimeEnt
       projectTaskId = await projectTaskFor(tx, projectId, taskId);
       patch.projectId = projectId;
       patch.projectTaskId = projectTaskId;
+
+      // Moving time onto non-billable work makes it non-billable, unless the
+      // request says otherwise. Keeping the old flag left it "billable" at $0.
+      // Only ever removes the flag: moving onto billable work does not add one
+      // to an entry somebody had deliberately marked non-billable.
+      if (input.isBillable === undefined && !(await taskIsBillable(tx, projectTaskId))) {
+        patch.isBillable = false;
+      }
     }
 
     if (input.spentOn !== undefined) patch.spentOn = spentOn;
@@ -491,6 +526,8 @@ export async function updateTimeEntry(ctx: Ctx, id: string, input: UpdateTimeEnt
     if (input.endedAt !== undefined) patch.endedAt = input.endedAt ? new Date(input.endedAt) : null;
     if (input.notes !== undefined) patch.notes = input.notes?.trim() || null;
     if (input.isBillable !== undefined) patch.isBillable = input.isBillable;
+    // Same rule as creating: a non-billable project holds no billable time.
+    if (patch.isBillable === true && (await projectIsNonBillable(tx, projectId))) patch.isBillable = false;
 
     // Re-resolve rates only when something the rate depends on has moved. An
     // edit to the note must not silently reprice work at today's rate.
@@ -507,7 +544,7 @@ export async function updateTimeEntry(ctx: Ctx, id: string, input: UpdateTimeEnt
         projectTaskId,
         spentOn,
       });
-      const billable = input.isBillable ?? before.isBillable;
+      const billable = input.isBillable ?? (patch.isBillable as boolean | undefined) ?? before.isBillable;
       patch.billableRateCents = billable ? rates.billableRateCents : 0;
       patch.costRateCents = rates.costRateCents;
     }

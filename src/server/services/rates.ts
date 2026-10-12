@@ -457,6 +457,14 @@ export interface ReRateOutcome {
   billableCentsAfter: number;
   /** Hours still resolving to no rate, which re-rating cannot fix. */
   stillUnrated: number;
+  /**
+   * Entries carrying a non-zero rate that differs from what the project resolves
+   * to today. Left exactly as recorded, and counted so the screen can say so.
+   */
+  keptAsRecorded: number;
+  /** The earliest and latest day among the entries that change, or null if none do. */
+  firstChangedOn: IsoDate | null;
+  lastChangedOn: IsoDate | null;
 }
 
 /**
@@ -486,8 +494,24 @@ export interface ReRateOutcome {
  * not change everything I selected" is exactly the thing an operator has to be
  * told (the lesson from `markBilledExternally`).
  *
- * It re-resolves cost as well as billable. Both are snapshots taken by the same
+ * It fills cost as well as billable. Both are snapshots taken by the same
  * function at the same moment, and an import that lost one usually lost both.
+ *
+ * IT FILLS MISSING RATES. IT NEVER REPRICES.
+ *
+ * The first version re-resolved every unbilled entry and wrote whatever came
+ * back, which was safe only while "unbilled" meant what it says. After the
+ * Harvest migration it does not: most of that history was invoiced through
+ * QuickBooks and is flagged neither invoiced nor billed outside, so pressing the
+ * button on a long-running project re-priced years of billed work at today's
+ * rate, and rewrote its cost rates too, which is the March raise rewriting
+ * January that the snapshot rule exists to prevent.
+ *
+ * So a snapshot that is already non-zero is left exactly as recorded, billable
+ * and cost alike, and counted in `keptAsRecorded`. Only a zero is filled, and a
+ * billable rate is only filled on an entry that is itself billable: the
+ * resolver answers for the task, not the entry, and would otherwise put a price
+ * on time somebody had deliberately marked non-billable.
  */
 export async function reRateProject(
   ctx: Ctx,
@@ -509,6 +533,7 @@ export async function reRateProject(
       projectTaskId: s.timeEntries.projectTaskId,
       spentOn: s.timeEntries.spentOn,
       durationSeconds: s.timeEntries.durationSeconds,
+      isBillable: s.timeEntries.isBillable,
       billableRateCents: s.timeEntries.billableRateCents,
       costRateCents: s.timeEntries.costRateCents,
       invoiceId: s.timeEntries.invoiceId,
@@ -534,6 +559,9 @@ export async function reRateProject(
     billableCentsBefore: 0,
     billableCentsAfter: 0,
     stillUnrated: 0,
+    keptAsRecorded: 0,
+    firstChangedOn: null,
+    lastChangedOn: null,
   };
 
   const eligible: typeof rows = [];
@@ -563,24 +591,30 @@ export async function reRateProject(
       spentOn: row.spentOn as IsoDate,
     });
 
-    beforeCentSeconds += row.durationSeconds * row.billableRateCents;
-    afterCentSeconds += row.durationSeconds * resolved.billableRateCents;
-    if (resolved.rateMissing) outcome.stillUnrated++;
+    // Fill a zero, never replace a number. See "IT FILLS MISSING RATES" above.
+    const billableRateCents =
+      row.billableRateCents === 0 && row.isBillable ? resolved.billableRateCents : row.billableRateCents;
+    const costRateCents = row.costRateCents === 0 ? resolved.costRateCents : row.costRateCents;
 
-    if (
-      resolved.billableRateCents === row.billableRateCents &&
-      resolved.costRateCents === row.costRateCents
-    ) {
+    beforeCentSeconds += row.durationSeconds * row.billableRateCents;
+    afterCentSeconds += row.durationSeconds * billableRateCents;
+    if (row.isBillable && row.billableRateCents === 0 && resolved.rateMissing) outcome.stillUnrated++;
+
+    const differsFromToday =
+      (row.isBillable && row.billableRateCents !== 0 && row.billableRateCents !== resolved.billableRateCents) ||
+      (row.costRateCents !== 0 && row.costRateCents !== resolved.costRateCents);
+    if (differsFromToday) outcome.keptAsRecorded++;
+
+    if (billableRateCents === row.billableRateCents && costRateCents === row.costRateCents) {
       outcome.unchanged++;
       continue;
     }
 
     outcome.changed++;
-    updates.push({
-      id: row.id,
-      billableRateCents: resolved.billableRateCents,
-      costRateCents: resolved.costRateCents,
-    });
+    const day = row.spentOn as IsoDate;
+    if (!outcome.firstChangedOn || day < outcome.firstChangedOn) outcome.firstChangedOn = day;
+    if (!outcome.lastChangedOn || day > outcome.lastChangedOn) outcome.lastChangedOn = day;
+    updates.push({ id: row.id, billableRateCents, costRateCents });
   }
 
   outcome.billableCentsBefore = Math.round(beforeCentSeconds / 3600);

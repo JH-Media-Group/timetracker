@@ -120,6 +120,83 @@ afterAll(async () => {
   await closeDb();
 });
 
+/* ======================================================== non-billable work */
+
+/*
+  A non-billable project holds no billable time, whatever the request says.
+
+  It held plenty. The entry editor sent `isBillable: true` on every save,
+  including on projects where it hides the checkbox, and the server's default
+  read the task flag alone, which on the internal projects had been left on. So
+  internal work arrived billable at $0 and read as unpriced client work in every
+  report, across a dozen projects when it was counted.
+*/
+describe("a non-billable project", () => {
+  let internalId: string;
+
+  beforeEach(async () => {
+    internalId = newId();
+    await db.insert(s.projects).values({
+      id: internalId, clientId, name: "Internal", billingType: "non_billable", billBy: "none",
+    });
+    // The task left billable, which is the state the real projects were in.
+    await db.insert(s.projectTasks).values({
+      id: newId(), projectId: internalId, taskId: designTaskId, isBillable: true,
+    });
+    await db.insert(s.projectMembers).values({ id: newId(), projectId: internalId, userId: alice, isManager: true });
+  });
+
+  it("records new time as non-billable by default", async () => {
+    const ctx = ctxFor(alice, "administrator");
+    const { entry } = await createTimeEntry(ctx, {
+      projectId: internalId, taskId: designTaskId, spentOn: TODAY, durationSeconds: 3600,
+    });
+    expect(entry.isBillable).toBe(false);
+    expect(entry.billableRateCents).toBe(0);
+  });
+
+  it("refuses a request that asks for billable time anyway", async () => {
+    // Exactly what the editor sent on every save.
+    const ctx = ctxFor(alice, "administrator");
+    const { entry } = await createTimeEntry(ctx, {
+      projectId: internalId, taskId: designTaskId, spentOn: TODAY, durationSeconds: 3600, isBillable: true,
+    });
+    expect(entry.isBillable).toBe(false);
+  });
+
+  it("makes time moved onto it non-billable", async () => {
+    const ctx = ctxFor(alice, "administrator");
+    const { entry } = await createTimeEntry(ctx, {
+      projectId, taskId: designTaskId, spentOn: TODAY, durationSeconds: 3600,
+    });
+    expect(entry.isBillable, "billable where it started").toBe(true);
+
+    const moved = await updateTimeEntry(ctx, entry.id, { projectId: internalId, taskId: designTaskId });
+    expect(moved.isBillable).toBe(false);
+    expect(moved.billableRateCents).toBe(0);
+  });
+
+  it("will not be made billable by an edit", async () => {
+    const ctx = ctxFor(alice, "administrator");
+    const { entry } = await createTimeEntry(ctx, {
+      projectId: internalId, taskId: designTaskId, spentOn: TODAY, durationSeconds: 3600,
+    });
+    const edited = await updateTimeEntry(ctx, entry.id, { isBillable: true });
+    expect(edited.isBillable).toBe(false);
+  });
+
+  it("does not turn non-billable time billable when it moves onto billable work", async () => {
+    // The move rule only ever removes the flag. Adding it is a decision about
+    // money, and a person makes that one, not a side effect of moving a row.
+    const ctx = ctxFor(alice, "administrator");
+    const { entry } = await createTimeEntry(ctx, {
+      projectId: internalId, taskId: designTaskId, spentOn: TODAY, durationSeconds: 3600,
+    });
+    const moved = await updateTimeEntry(ctx, entry.id, { projectId, taskId: designTaskId });
+    expect(moved.isBillable).toBe(false);
+  });
+});
+
 /* =============================================================== creating */
 
 describe("creating an entry", () => {
