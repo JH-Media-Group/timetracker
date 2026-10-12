@@ -4,7 +4,7 @@
 
 **Staging deployed:** 2026-08-24
 
-**Staging last updated:** 2026-09-11 17:39 UTC
+**Staging last updated:** 2026-10-12 16:28 UTC
 
 **Production droplet:** `165.245.130.130`
 
@@ -19,6 +19,68 @@ restart unrelated services.
 The repeatable operating procedure now lives in
 `docs/DEPLOYMENT-RUNBOOK.md`. This file retains the deployment evidence and
 the broader shared-server maintenance plan.
+
+## Staging update: rates fill, never reprice, 2026-10-12
+
+Tally staging now runs source commit `c5ffabe` as `tally:c5ffabe` (image ID
+`sha256:ffdc079c965b877ea4a44713ae9b12f85eaaebd2d22e3957a8873ca5e438ecd7`).
+
+The release fixes the code behind four teammate tickets that shared one cause:
+project rates were never carried over from the old system, so time logged here
+saved at $0. The data was corrected before the release, as its own change with
+its own backups; this section covers the release.
+
+Update evidence:
+
+- The exact pushed source passed 67 test files and 982 tests and TypeScript.
+  The re-rate guard and both non-billable guards are mutation-tested. The
+  Linux production Docker build compiled cleanly.
+- Since the deployed `0ce1e90` the only risk-path change is `package.json`
+  (two script entries). No Drizzle, Compose, Dockerfile, ops, systemd or schema
+  change.
+- The transferred 101,561,856-byte image tar has SHA-256
+  `c530b687caf474eaf14ea4d15c044aaa4d4855a3ac8445ed24ccc0264eaea467`, verified
+  for exact size and hash on the server, with the loaded image ID matching the
+  local build.
+- Preflight recorded 17 containers with zero restarts and no OOM events, 70 GB
+  free disk, 2.2 GB available memory, load 0.06, and public listeners of 22, 80
+  and 443 plus loopback DNS.
+- An isolated, unproxied candidate reached healthy state, returned 200 from
+  liveness and database readiness, kept every live security and resource
+  control, published no host port, and was removed before the live update.
+- No schema changes. All manual migrations, including `0001_constraints.sql`,
+  reported already applied, which confirms the line-ending explanation for its
+  re-apply in the previous release.
+- The pre-update dump is `/var/backups/tally/tally-20261012T162543Z.dump`,
+  SHA-256 `db987acd84a8062737410674a3183db05d071f7ebd1bc522a7cd374a123a4958`.
+- The post-update dump is `/var/backups/tally/tally-20261012T162944Z.dump`,
+  SHA-256 `e4052eba778309423c8ddd6e5052063de47f90b9dc65807d83cd4a09cdf6cf03`.
+- Both dumps passed 329-line catalog checks and complete owner-preserving
+  scratch restores reconciling users, projects, time entries, running timers,
+  invoices, 10 Drizzle and five manual migrations and the `tally_staging`
+  owner. Both scratch databases were dropped and confirmed gone.
+- The environment file changed by exactly one line, proven by identical
+  normalized SHA-256 values.
+- Web and MCP were replaced separately with `--no-deps`; web was proven healthy
+  while MCP still ran `tally:0ce1e90`. Both now run the exact local image ID
+  with zero restarts, no OOM events, read-only root filesystems and their
+  original limits.
+- External liveness, readiness and both OAuth discovery documents return 200,
+  MCP GET returns 405 and an unauthenticated POST 401 with the
+  protected-resource challenge, and the security headers remain present.
+- Database counts before and after are identical. Compose and Caddy hashes are
+  unchanged, the container diff shows only the two Tally lines, nothing is
+  unhealthy, listeners are unchanged, all four timers are active, a manual mail
+  run succeeded, neither log has an error line since the deployment, and root
+  SSH remains enabled.
+- The new screens were not checked in a browser during the release: the
+  browser connection was unavailable. The tickets carry a visual check for a
+  reviewer.
+
+Rollback and evidence material, including the data correction's statement
+hash and backups, is under `/opt/tally/artifacts/deploy-c5ffabe`. The previous
+`tally:0ce1e90` image remains loaded. This application-only update requires no
+database restore for rollback.
 
 ## Staging update: the invite dialog and twelve rounds of review, 2026-09-11
 
