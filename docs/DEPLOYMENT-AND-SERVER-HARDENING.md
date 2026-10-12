@@ -4,7 +4,7 @@
 
 **Staging deployed:** 2026-08-24
 
-**Staging last updated:** 2026-10-12 16:28 UTC
+**Staging last updated:** 2026-10-12 17:33 UTC
 
 **Production droplet:** `165.245.130.130`
 
@@ -19,6 +19,45 @@ restart unrelated services.
 The repeatable operating procedure now lives in
 `docs/DEPLOYMENT-RUNBOOK.md`. This file retains the deployment evidence and
 the broader shared-server maintenance plan.
+
+## Staging update: rate check speed and imported history, 2026-10-12
+
+Tally staging now runs source commit `85ec973` as `tally:85ec973` (image ID
+`sha256:2c3c6fd1210bf4f1989a87d854d727615539f5ec925f447492ba7f052e4498f7`),
+an hour after `c5ffabe`. The follow-up came from running the released image
+locally against a restored staging backup and driving it headlessly: the
+project-page rate check took about five seconds per load on large projects,
+the banner outlived the apply that cleared it, and it offered to price
+imported $0 history. All three are fixed; the check now takes about 50 ms on
+the same data.
+
+Update evidence, by the same runbook as the release above:
+
+- 67 test files and 984 tests passed, TypeScript clean, Linux production
+  Docker build clean. The day-dependent rate cache and the imported-history
+  guard are mutation-tested.
+- The transferred 101,562,880-byte tar has SHA-256
+  `ec097122fab86547d450ab877bd1744295c417405a3b4da5d34ba6fc43bc5dfa`, matched on
+  the server, with the loaded image ID matching the local build.
+- Pre-update dump `/var/backups/tally/tally-20261012T172908Z.dump`, SHA-256
+  `5d6130e5143eed15a75687e80e0db63fe9990213698311482a545feefac251e5`; post-update
+  dump `/var/backups/tally/tally-20261012T173240Z.dump`, SHA-256
+  `224a3de627a04367d88c95ec645546b4f97f391a1e4f1c21776a4143c6a71d3d`. Both passed
+  329-line catalog checks and owner-preserving scratch restores matching live
+  counts; both scratch databases were dropped.
+- An isolated candidate was healthy and ready before the live update, and
+  migrations stayed at 10 Drizzle and five manual.
+- The environment file changed by one line, proven by identical normalized
+  hashes. Web then MCP were replaced with `--no-deps`; both run the exact image
+  with zero restarts and no OOM events.
+- Readiness, OAuth discovery, MCP 405 and 401 behaviour and security headers
+  are as before. Counts are identical before and after, unrelated containers
+  unchanged, nothing unhealthy, listeners unchanged, Compose and Caddy hashes
+  unchanged, four timers active, a mail run succeeded, no log errors, and root
+  SSH remains enabled.
+
+Evidence is under `/opt/tally/artifacts/deploy-85ec973`. The previous
+`tally:c5ffabe` image remains loaded for rollback.
 
 ## Staging update: rates fill, never reprice, 2026-10-12
 
