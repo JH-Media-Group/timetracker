@@ -136,7 +136,7 @@ describe("the time report", () => {
     expect(byClient.totals.nonBillableSeconds).toBe(1800);
   });
 
-  it("sums the rows to the totals exactly", async () => {
+  it("matches the grand total when there is one rounded group", async () => {
     const ctx = ctxFor(admin, "administrator");
     for (let i = 0; i < 20; i += 1) {
       await addEntry(admin, ptTm, tmProject, { seconds: 100 + i, billableRate: 12345, costRate: 6789 });
@@ -145,6 +145,45 @@ describe("the time report", () => {
     const report = await timeReport(ctx, { from: "2026-08-01", to: "2026-08-31", groupBy: "project" });
     const rowSum = report.rows.reduce((a, r) => a + r.billableCents, 0);
     expect(rowSum).toBe(report.totals.billableCents);
+  });
+
+  it.each([false, true])("rounds the full total once across fractional-cent groups (separate clients: %s)", async (separateClients) => {
+    const otherClient = separateClients ? newId() : clientId;
+    if (separateClients) await db.insert(s.clients).values({ id: otherClient, name: "Other Client" });
+    const otherProject = newId();
+    const otherTask = newId();
+    const otherProjectTask = newId();
+    await db.insert(s.projects).values({ id: otherProject, clientId: otherClient, name: "Other Project", billingType: "time_and_materials" });
+    await db.insert(s.tasks).values({ id: otherTask, name: "Other Task" });
+    await db.insert(s.projectTasks).values({ id: otherProjectTask, projectId: otherProject, taskId: otherTask, isBillable: true });
+    await addEntry(admin, ptTm, tmProject, { seconds: 1, billableRate: 1800, costRate: 0 });
+    await addEntry(member, otherProjectTask, otherProject, { spentOn: "2026-08-13", seconds: 1, billableRate: 1800, costRate: 0 });
+
+    // Each entry is half a cent. The complete result is one cent, even when
+    // the selected dimension puts the entries into independently rounded rows.
+    for (const groupBy of ["client", "project", "task", "user", "day"] as const) {
+      const report = await timeReport(ctxFor(admin, "administrator"), { from: "2026-08-01", to: "2026-08-31", groupBy });
+      expect(report.totals).toEqual({ totalSeconds: 2, billableSeconds: 2, nonBillableSeconds: 0, billableCents: 1 });
+      expect(report.rows.every((r) => r.billableCents === 1)).toBe(true);
+    }
+
+    const period = { from: "2026-08-01", to: "2026-08-31" };
+    for (const filter of [{ userId: admin }, { projectId: tmProject }, { clientId: otherClient }]) {
+      const report = await timeReport(ctxFor(admin, "administrator"), { ...period, ...filter, groupBy: "user" });
+      expect(report.totals.billableCents).toBe(1);
+      expect(report.totals.totalSeconds).toBe("clientId" in filter && !separateClients ? 2 : 1);
+    }
+
+    const own = await timeReport(ctxFor(member, "member"), { ...period, groupBy: "day" });
+    expect(own.totals.totalSeconds).toBe(1);
+    expect(own.totals.billableCents).toBe(0);
+    expect(own.rows.every((r) => r.billableCents === 0)).toBe(true);
+  });
+
+  it("returns zero totals when there are no matching groups", async () => {
+    const report = await timeReport(ctxFor(admin, "administrator"), { from: "2026-08-01", to: "2026-08-31", groupBy: "user" });
+    expect(report.rows).toEqual([]);
+    expect(report.totals).toEqual({ totalSeconds: 0, billableSeconds: 0, nonBillableSeconds: 0, billableCents: 0 });
   });
 
   it("divides once, at the end, rather than per row", async () => {

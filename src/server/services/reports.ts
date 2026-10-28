@@ -121,6 +121,9 @@ export async function timeReport(
       billableSeconds: sql<string>`COALESCE(SUM(CASE WHEN ${s.timeEntries.isBillable} THEN ${s.timeEntries.durationSeconds} ELSE 0 END), 0)::text`,
       // Sum the products, divide once. See the file header.
       billableCents: sql<string>`COALESCE(ROUND(SUM(${s.timeEntries.durationSeconds}::bigint * ${s.timeEntries.billableRateCents})::numeric / 3600), 0)::text`,
+      // The window sums unrounded group products within this same scoped query.
+      // Summing rounded row values makes the grand total depend on the grouping.
+      totalBillableCents: sql<string>`COALESCE(ROUND(SUM(SUM(${s.timeEntries.durationSeconds}::bigint * ${s.timeEntries.billableRateCents})) OVER () / 3600), 0)::text`,
     })
     .from(s.timeEntries)
     .innerJoin(s.projects, eq(s.projects.id, s.timeEntries.projectId))
@@ -149,7 +152,7 @@ export async function timeReport(
   // Member could divide value by hours and read their own billable rate to the
   // cent, which is exactly what their profile says they cannot see.
   const showsMoney = canSeeBillable(ctx);
-  const billableCents = showsMoney ? parsed.reduce((a, r) => a + r.billableCents, 0) : 0;
+  const billableCents = showsMoney ? toNumber(rows[0]?.totalBillableCents, "totalBillableCents") : 0;
 
   // Weekly buckets for the chart, from one extra grouped query rather than by
   // re-reading every entry.
