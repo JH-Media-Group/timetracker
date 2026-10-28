@@ -4,7 +4,7 @@
 
 **Staging deployed:** 2026-08-24
 
-**Staging last updated:** 2026-10-28 01:00 UTC
+**Staging last updated:** 2026-10-28 01:23 UTC
 
 **Production droplet:** `165.245.130.130`
 
@@ -19,6 +19,75 @@ restart unrelated services.
 The repeatable operating procedure now lives in
 `docs/DEPLOYMENT-RUNBOOK.md`. This file retains the deployment evidence and
 the broader shared-server maintenance plan.
+
+## Staging update: grouping-independent time-report totals, 2026-10-28
+
+Tally staging runs source commit `affae49ee72be6006a3ee8295422fbcf33b3f530`
+as `tally:affae49`, image ID
+`sha256:6395d981d3cef0fb925d8e74f97c51f4fc5bc507f4ed30f179f31f328599eb62`.
+The update completed at 01:23 UTC on October 28 (October 27 locally).
+The subsequent documentation-only commit is separate from the application image.
+
+This fixes `t-PaBDg3`. The time report previously summed independently rounded
+group values for its grand total, allowing the total to change when grouping
+changed. A SQL window now sums the unrounded products within the same scoped
+query and rounds the full total once. Group rows keep their independent rounding,
+so their displayed sum may differ slightly from the correctly rounded grand
+total. Money visibility, filters, response shape and stored records are unchanged.
+
+Release evidence:
+
+- The two fractional-cent regressions failed against the original code, then
+  all 24 report tests passed. The exact merged source passed 69 files and 1,024
+  tests, TypeScript, palette checks and a clean-archive Linux production build.
+  Tests cover all five service groupings, project/client/user filters, member
+  money masking and empty results.
+- Codex's independent adversarial review found no concrete issues. Claude's
+  fresh review attempt was blocked by the account usage limit; that limitation
+  was disclosed and no completed Claude review is claimed for this patch.
+- The 101,608,960-byte image transfer matched SHA-256
+  `a66c07ff8744f21ee1628ab41ce1c5fbf8f9f0aa8b7c2c4bbd9721014a2bd6ec`
+  on the server. The loaded image matches the local build and runs as `node`.
+- Pre-update dump `/var/backups/tally/tally-20261028T011553Z.dump`, SHA-256
+  `387794814faa7b402184ed6e86eaa59cf1e1e396161cc27f63b5b553d49667b6`;
+  post-update dump `/var/backups/tally/tally-20261028T012337Z.dump`, SHA-256
+  `a50bc3f6fb2b8c961c19bb802453bd7e607fc8fc5d940b92b5b09c0debc6610d`.
+  Both passed 329-line catalog checks and full owner-preserving scratch restores
+  with matching counts; both exact scratch databases were removed.
+- The isolated, unproxied candidate passed health and database readiness with
+  the live limits, no published port and no production alias. Migrations were
+  a no-op with ten Drizzle and five manual records and unchanged ledger rows;
+  base profiles were already current. Database counts are unchanged.
+- Only the environment image line changed, proven by normalized comparison.
+  Web was replaced and verified before MCP, both using `--no-deps`. Both are
+  healthy on the exact new image, with no restarts or OOM events. Original
+  limits and isolation are preserved.
+- Live liveness, readiness and OAuth discovery return 200; MCP GET returns
+  405 and unauthenticated POST returns 401 with the resource challenge.
+  Security headers, environment/Compose permissions, listeners, all four timers
+  and root SSH are preserved. Compose and Caddy hashes are unchanged, host and
+  container Caddyfile hashes agree, unrelated container images/start times/
+  restarts/OOM state are unchanged, and recent application logs have no errors.
+- Authenticated read-only browser checks compared Client, Project, Task and
+  Person grouping for the same custom dates. Every summary KPI, pinned total
+  and freshly downloaded CSV grand total matched the independent unrounded
+  database aggregate. Person grouping also passed a full refresh, and no browser
+  console errors were captured. No live business records were changed for QA.
+- The scheduled mail run at 01:25:21 UTC succeeded after the new web became
+  healthy, with `--no-reminders` retained. Its result, log and queue counts are
+  saved in the protected evidence bundle.
+
+Protected server evidence is `/opt/tally/artifacts/deploy-affae49`; private
+browser/CSV artifacts remain outside Git. The prior `tally:ac5b3d0` image and
+configuration are retained for application-only rollback. No schema change,
+historical-data backfill or invoice rewrite was applied.
+
+The remaining audit findings are tracked separately: capped list-page aggregates
+(`t-pAwUtQ`), destination-date validation for entry moves (`t-SFiXCS`), clearing
+editor notes (`t-rW27Ea`), a billing-classification decision (`t-AbnZpo`), and the
+explicitly separate QuickBooks integration backlog (`t-U_LBU1`). The old
+`t-cWM-yo` day-view report is an incomplete draft needing reproduction; it is not
+evidence of a currently reproduced failure.
 
 ## Staging update: timers, custom report dates and historical snapshots, 2026-10-28
 
