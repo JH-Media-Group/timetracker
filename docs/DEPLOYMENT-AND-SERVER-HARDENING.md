@@ -4,7 +4,7 @@
 
 **Staging deployed:** 2026-08-24
 
-**Staging last updated:** 2026-10-12 17:33 UTC
+**Staging last updated:** 2026-10-28 01:00 UTC
 
 **Production droplet:** `165.245.130.130`
 
@@ -19,6 +19,74 @@ restart unrelated services.
 The repeatable operating procedure now lives in
 `docs/DEPLOYMENT-RUNBOOK.md`. This file retains the deployment evidence and
 the broader shared-server maintenance plan.
+
+## Staging update: timers, custom report dates and historical snapshots, 2026-10-28
+
+Tally staging runs source commit `ac5b3d08a2722d8c5a588b47d25dc4cf2a3fdd50`
+as `tally:ac5b3d0`, image ID
+`sha256:97000a230dad28a5c304f832c11382a9d5795950b7ec4e57ea758c5ebd021db5`.
+The deployment completed at 01:00 UTC on October 28 (October 27 locally).
+The application revision is distinct from the subsequent documentation-only
+commit recording this evidence.
+
+The release fixes retrospective timer elapsed time, preserves running timer
+edits, adds inclusive custom report ranges with URL persistence, retrieves all
+drilldown pages for grids and CSV, and preserves historical rate snapshots on
+note edits. The five working Toado tickets are `t-BR2arf`, `t-y7KLD1`,
+`t-CGYdX5`, `t-S5guAF` and `t-W23yB1`. QuickBooks integration remains separate
+backlog work.
+
+Verification and deployment evidence:
+
+- The exact merged and pushed source passed 69 test files and 1,021 tests,
+  TypeScript and palette validation. The production image was built locally
+  from a clean Git archive of that commit, excluding local operational data
+  and environment files.
+- Earlier production-build browser and API checks used fictional fixtures:
+  retrospective create/refresh/edit/stop, manual duration, teammate timer
+  isolation, report/tab date persistence, matching drilldown and CSV totals,
+  person rate saving, historical rate preservation and invoice preview grouping.
+  Project-chart units were inspected in source. These checks do not establish
+  acceptance of any specific real business record. No live business-data test
+  mutation was performed.
+- Codex completed iterative adversarial reviews and final rechecks. Claude
+  completed two rounds and the actionable findings were addressed. A final
+  Claude recheck was unavailable because of the account usage limit; this
+  limitation was disclosed before deployment authorization.
+- The 101,606,400-byte transfer archive matched SHA-256
+  `2b2ef60567e5cfaa49254dd945fb2e7f6ca458895629a1c83e6ec691127b6a6f`
+  on the server. The loaded image ID matches the local build and runs as `node`.
+- Pre-update dump `/var/backups/tally/tally-20261028T005437Z.dump`, SHA-256
+  `492b7c51c52edfbe027d8feb27cae1eecef65de021b276e4962db7389c890a0b`;
+  post-update dump `/var/backups/tally/tally-20261028T010023Z.dump`, SHA-256
+  `321fe87f7f416ae9f25e72445fd3d0cb23deadf7b3c03f45b14581d28da5f352`.
+  Both passed 329-line catalog checks and full scratch restores with matching
+  user, project, active-entry, running-timer, invoice and migration counts and
+  the original database owner. Both exact scratch databases were removed.
+- An unproxied candidate with the live runtime controls and no host port or
+  production alias passed liveness, database readiness and Docker health before
+  replacement. The migration runner was a no-op: ten Drizzle and five manual
+  migrations, unchanged ledger rows and counts, base profiles up to date.
+- Only the environment image line changed, proven by normalized hashes. Web
+  was replaced with `--no-deps` and proved healthy and ready while MCP remained
+  on the old image, then MCP was replaced separately. Both use the exact new
+  image with zero restarts and no OOM events; original limits and isolation
+  are preserved.
+- Public liveness, readiness and both OAuth discovery documents return 200.
+  MCP GET returns 405 and unauthenticated POST returns 401 with the protected
+  resource challenge. Sign-in security headers remain present. Logs contain no
+  deployment error, database counts are unchanged, and mail states are captured.
+- Every unrelated container retained its image, start time, restart count and
+  OOM state. No container is unhealthy. Listeners, Compose and Caddy hashes
+  are unchanged, host/container Caddyfile hashes agree, all four timers are
+  active, environment and Compose remain mode 0600, and root SSH remains enabled.
+  The scheduled mail run at 01:00:07 UTC succeeded with `--no-reminders` retained.
+
+Protected server evidence is `/opt/tally/artifacts/deploy-ac5b3d0`, directory
+mode 0700 and files mode 0600. The previous `tally:85ec973` image and saved
+configuration remain available for application-only rollback. No schema change,
+historical time correction, rate backfill or invoice rewrite was part of this
+release.
 
 ## Staging update: rate check speed and imported history, 2026-10-12
 
