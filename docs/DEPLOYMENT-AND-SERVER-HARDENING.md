@@ -49,6 +49,19 @@ Verification and deployment evidence:
   Project-chart units were inspected in source. These checks do not establish
   acceptance of any specific real business record. No live business-data test
   mutation was performed.
+- After the owner signed in, authenticated read-only browser checks passed on
+  the deployed site: reversed custom dates were rejected, valid dates survived
+  refresh and all four tabs, Task-to-Profitability cleared incompatible grouping,
+  client and person drilldown hours matched their report rows, and a fresh CSV
+  contained all nine columns with matching row hours and monetary totals. Team
+  and Invoicing loaded their real report data; no browser console errors were
+  captured. Timer and rate write workflows remain verified on fictional local
+  fixtures rather than through mutations of live business records.
+- This browser pass also found a pre-existing one-cent grand-total difference
+  when changing the time-report grouping. The unchanged report service sums
+  rounded group amounts instead of rounding the complete aggregate once.
+  Separate follow-up `t-PaBDg3` records the evidence and a fictional regression
+  fixture. This release does not claim that grouping-wide rounding issue fixed.
 - Codex completed iterative adversarial reviews and final rechecks. Claude
   completed two rounds and the actionable findings were addressed. A final
   Claude recheck was unavailable because of the account usage limit; this
