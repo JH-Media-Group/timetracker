@@ -13,11 +13,8 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { ChevronLeft, ChevronRight, Calendar as CalIcon, Check } from "lucide-react";
 import { cn } from "@/lib/cn";
-import { Button, Popover, PopoverContent, PopoverTrigger, Segmented } from "@/components/ui/primitives";
-import {
-  addDays, addMonths, endOfMonth, formatDayLong, formatMonthYear, formatWeekRange,
-  isoDate, startOfMonth, startOfWeek, toDate,
-} from "@/lib/format";
+import { Button, Field, Input, Popover, PopoverContent, PopoverTrigger, Segmented } from "@/components/ui/primitives";
+import { dateRangeError, isCalendarDate, readPeriod, resolvePeriod, stepPeriod, periodUrlPatch, type CalendarGranularity, type DateRange, type Granularity } from "@/lib/period";
 
 /* ------------------------------------------------------------ URL state */
 
@@ -91,48 +88,8 @@ export function PageBody({ children, className }: { children: React.ReactNode; c
 
 /* -------------------------------------------------------- period picker */
 
-export type Granularity = "day" | "week" | "month" | "quarter" | "year" | "all";
-
-export interface Period { granularity: Granularity; from: string; to: string; label: string }
-
-export function resolvePeriod(granularity: Granularity, anchor: Date): Period {
-  switch (granularity) {
-    case "day":
-      return { granularity, from: isoDate(anchor), to: isoDate(anchor), label: formatDayLong(anchor) };
-    case "week": {
-      const s = startOfWeek(anchor);
-      return { granularity, from: isoDate(s), to: isoDate(addDays(s, 6)), label: formatWeekRange(s) };
-    }
-    case "month": {
-      const s = startOfMonth(anchor);
-      return { granularity, from: isoDate(s), to: isoDate(endOfMonth(anchor)), label: formatMonthYear(anchor) };
-    }
-    case "quarter": {
-      const q = Math.floor(anchor.getMonth() / 3);
-      const s = new Date(anchor.getFullYear(), q * 3, 1);
-      const e = new Date(anchor.getFullYear(), q * 3 + 3, 0);
-      return { granularity, from: isoDate(s), to: isoDate(e), label: `Q${q + 1} ${anchor.getFullYear()}` };
-    }
-    case "year": {
-      const s = new Date(anchor.getFullYear(), 0, 1);
-      const e = new Date(anchor.getFullYear(), 11, 31);
-      return { granularity, from: isoDate(s), to: isoDate(e), label: String(anchor.getFullYear()) };
-    }
-    default:
-      return { granularity: "all", from: "1970-01-01", to: "2999-12-31", label: "All time" };
-  }
-}
-
-export function stepPeriod(granularity: Granularity, anchor: Date, dir: -1 | 1): Date {
-  switch (granularity) {
-    case "day": return addDays(anchor, dir);
-    case "week": return addDays(anchor, 7 * dir);
-    case "month": return addMonths(anchor, dir);
-    case "quarter": return addMonths(anchor, 3 * dir);
-    case "year": return addMonths(anchor, 12 * dir);
-    default: return anchor;
-  }
-}
+export { resolvePeriod, stepPeriod } from "@/lib/period";
+export type { Granularity, Period } from "@/lib/period";
 
 const GRANULARITIES: { value: Granularity; label: string }[] = [
   { value: "day", label: "Day" }, { value: "week", label: "Week" },
@@ -141,16 +98,24 @@ const GRANULARITIES: { value: Granularity; label: string }[] = [
 ];
 
 export function PeriodPicker({
-  granularity, anchor, onChange, allowed,
+  granularity, anchor, onChange, allowed, custom,
 }: {
   granularity: Granularity; anchor: Date;
   onChange: (g: Granularity, anchor: Date) => void;
   allowed?: Granularity[];
+  custom?: DateRange & { onChange: (range: DateRange) => void };
 }) {
   const [open, setOpen] = React.useState(false);
-  const period = resolvePeriod(granularity, anchor);
+  const [editing, setEditing] = React.useState(false);
+  const [range, setRange] = React.useState<DateRange>({ from: "", to: "" });
+  const changeRange = (field: keyof DateRange, value: string) => setRange((r) => ({ ...r, [field]: value }));
+  const rangeId = React.useId();
+  const rangeStartRef = React.useRef<HTMLInputElement>(null);
+  React.useEffect(() => { if (editing) rangeStartRef.current?.focus(); }, [editing]);
+  const rangeError = dateRangeError(range);
+  const period = resolvePeriod(granularity, anchor, custom);
   const options = allowed ? GRANULARITIES.filter((g) => allowed.includes(g.value)) : GRANULARITIES;
-  const stepless = granularity === "all";
+  const stepless = granularity === "all" || granularity === "custom";
 
   return (
     <div className="flex items-center gap-1">
@@ -159,7 +124,10 @@ export function PeriodPicker({
         <ChevronLeft className="size-4" />
       </Button>
 
-      <Popover open={open} onOpenChange={setOpen}>
+      <Popover open={open} onOpenChange={(value) => {
+        setOpen(value);
+        if (value) { setEditing(false); setRange({ from: period.from, to: period.to }); }
+      }}>
         <PopoverTrigger asChild>
           <Button variant="secondary" size="sm" className="gap-2 font-normal">
             <CalIcon className="size-3.5 text-ink-tertiary" aria-hidden />
@@ -171,6 +139,7 @@ export function PeriodPicker({
           {options.map((g) => (
             <button
               key={g.value}
+              aria-pressed={g.value === granularity}
               onClick={() => { onChange(g.value, anchor); setOpen(false); }}
               className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-base hover:bg-surface-hover"
             >
@@ -178,9 +147,40 @@ export function PeriodPicker({
               {g.value === granularity && <Check className="ml-auto size-4" strokeWidth={3} />}
             </button>
           ))}
+          {custom && (
+            <>
+              <button type="button"
+                aria-pressed={granularity === "custom"}
+                aria-expanded={editing} aria-controls={editing ? `${rangeId}-fields` : undefined}
+                onClick={() => setEditing(true)}
+                className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-base hover:bg-surface-hover">
+                Custom range
+                {granularity === "custom" && <Check className="ml-auto size-4" strokeWidth={3} />}
+              </button>
+              {editing && (
+                <div id={`${rangeId}-fields`} className="flex flex-col gap-2 border-t border-border p-2">
+                  <Field label="Start date" htmlFor={`${rangeId}-from`}>
+                    <Input ref={rangeStartRef} id={`${rangeId}-from`} type="date" min="1000-01-01" max="9999-12-31"
+                      aria-invalid={!isCalendarDate(range.from)} aria-describedby={rangeError ? `${rangeId}-error` : undefined}
+                      value={range.from} onChange={(e) => changeRange("from", e.target.value)} />
+                  </Field>
+                  <Field label="End date" htmlFor={`${rangeId}-to`}>
+                    <Input id={`${rangeId}-to`} type="date" min={range.from || "1000-01-01"} max="9999-12-31"
+                      aria-invalid={!isCalendarDate(range.to) || range.from > range.to} aria-describedby={rangeError ? `${rangeId}-error` : undefined}
+                      value={range.to} onChange={(e) => changeRange("to", e.target.value)} />
+                  </Field>
+                  {rangeError && <div id={`${rangeId}-error`} className="text-sm text-danger" role="alert">{rangeError}</div>}
+                  <Button type="button" size="sm" disabled={!!rangeError}
+                    onClick={() => { custom.onChange(range); setOpen(false); }}>
+                    Apply range
+                  </Button>
+                </div>
+              )}
+            </>
+          )}
           <div className="my-1.5 h-px bg-border" />
           <button
-            onClick={() => { onChange(granularity, new Date()); setOpen(false); }}
+            onClick={() => { onChange(granularity === "custom" ? "month" : granularity, new Date()); setOpen(false); }}
             className="flex w-full items-center rounded-md px-2 py-1.5 text-base hover:bg-surface-hover"
           >
             Jump to today
@@ -197,14 +197,12 @@ export function PeriodPicker({
 }
 
 /** Reads the period from the URL, so every filtered view is shareable. */
-export function usePeriod(defaultGranularity: Granularity = "week", allowed?: Granularity[]) {
+export function usePeriod(defaultGranularity: CalendarGranularity = "week", allowed?: Granularity[]) {
   const { params, set } = useUrlState();
-  const g = (params.get("g") as Granularity) || defaultGranularity;
-  const dateParam = params.get("date");
-  const anchor = dateParam ? toDate(dateParam) : new Date();
-  const period = resolvePeriod(g, anchor);
-  const onChange = (ng: Granularity, na: Date) => set({ g: ng, date: isoDate(na) });
-  return { granularity: g, anchor, period, onChange, allowed };
+  const selection = readPeriod(params, defaultGranularity, allowed);
+  const onChange = (ng: Granularity, na: Date) => set(periodUrlPatch(ng, na));
+  const onCustomChange = (range: DateRange) => set(periodUrlPatch("custom", selection.anchor, range));
+  return { ...selection, onChange, onCustomChange, allowed };
 }
 
 export { Segmented };

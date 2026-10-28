@@ -11,6 +11,7 @@ import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import { and, eq, isNull } from "drizzle-orm";
 import { closeDb, db, resetDb, s } from "./helpers";
 import { newId } from "@/server/db/ids";
+import { liveSeconds } from "@/lib/derive";
 import { syncBaseProfiles } from "@/server/auth/profiles";
 import { createCtx, type Actor, type Ctx } from "@/server/ctx";
 import type { Capability } from "@/server/auth/capabilities";
@@ -452,6 +453,63 @@ describe("timers", () => {
     });
 
     expect(entry.startedAt).toBe(`${TODAY}T14:30:00.000Z`);
+    expect(entry.durationSeconds).toBe(30 * 60);
+    expect(entry.timerStartedAt).toBe(`${TODAY}T15:00:00.000Z`);
+  });
+
+  it("counts retrospective time immediately, after refresh and when stopped (t-BR2arf)", async () => {
+    const ctx = ctxFor(alice, "administrator");
+    const { entry } = await createTimeEntry(ctx, {
+      projectId, taskId: designTaskId, start: true,
+      startedAt: `${TODAY}T14:43:00Z`, durationSeconds: 9999,
+    });
+    expect(liveSeconds({ ...entry, timerStartedAt: entry.timerStartedAt ?? undefined }, ctx.now().getTime())).toBe(17 * 60);
+    expect((await runningEntry(ctx))?.durationSeconds).toBe(17 * 60);
+
+    const later = { ...ctx, now: () => at(`${TODAY}T15:05:00Z`) };
+    const stopped = await stopTimer(later);
+    expect(stopped?.durationSeconds).toBe(22 * 60);
+    expect(stopped?.startedAt).toBe(`${TODAY}T14:43:00.000Z`);
+    expect(stopped?.timerStartedAt).toBeNull();
+  });
+
+  it("does not double count retrospective time when its start is edited again", async () => {
+    const ctx = ctxFor(alice, "administrator");
+    const { entry } = await createTimeEntry(ctx, {
+      projectId, taskId: designTaskId, start: true, startedAt: `${TODAY}T14:43:00Z`,
+    });
+    const updated = await updateTimeEntry(ctx, entry.id, { startedAt: `${TODAY}T14:30:00Z` });
+    expect(updated.durationSeconds).toBe(30 * 60);
+    expect((await stopTimer(ctx))?.durationSeconds).toBe(30 * 60);
+  });
+
+  it("refuses more than 24 retrospective hours without stopping the previous timer", async () => {
+    const ctx = ctxFor(alice, "administrator");
+    const { entry } = await createTimeEntry(ctx, { projectId, taskId: designTaskId, start: true });
+    await expect(createTimeEntry(ctx, {
+      projectId, taskId: designTaskId, start: true, startedAt: "1900-01-01T00:00:00Z",
+    })).rejects.toThrow(/24 hours/);
+    expect((await runningEntry(ctx))?.id).toBe(entry.id);
+    await expect(updateTimeEntry(ctx, entry.id, { startedAt: "1900-01-01T00:00:00Z" })).rejects.toThrow(/24 hours/);
+    expect((await runningEntry(ctx))?.durationSeconds).toBe(0);
+    expect((await runningEntry(ctx))?.startedAt).toBe(entry.startedAt);
+    expect((await runningEntry(ctx))?.timerStartedAt).toBe(entry.timerStartedAt);
+  });
+
+  it("accepts exactly 24 retrospective hours and refuses 24 hours plus one second", async () => {
+    const ctx = ctxFor(alice, "administrator");
+    const { entry } = await createTimeEntry(ctx, { projectId, taskId: designTaskId, start: true, startedAt: "2026-08-13T15:00:00Z" });
+    expect(entry.durationSeconds).toBe(86400);
+    await expect(createTimeEntry(ctx, { projectId, taskId: designTaskId, start: true, startedAt: "2026-08-13T14:59:59Z" }))
+      .rejects.toMatchObject({ code: "validation_failed" });
+    expect((await runningEntry(ctx))?.id).toBe(entry.id);
+  });
+
+  it("refuses a future start edit without losing the running timer's time", async () => {
+    const ctx = ctxFor(alice, "administrator");
+    const { entry } = await createTimeEntry(ctx, { projectId, taskId: designTaskId, start: true, startedAt: `${TODAY}T14:43:00Z` });
+    await expect(updateTimeEntry(ctx, entry.id, { startedAt: `${TODAY}T15:01:00Z` })).rejects.toMatchObject({ code: "validation_failed" });
+    expect(await runningEntry(ctx)).toMatchObject({ durationSeconds: 1020, startedAt: entry.startedAt, timerStartedAt: entry.timerStartedAt });
   });
 
   it("stops a timer whose start was moved into the future after it began", async () => {
@@ -507,6 +565,18 @@ describe("editing", () => {
 
     const edited = await updateTimeEntry(ctx, entry.id, { notes: "Changed my mind about the note" });
     expect(edited.billableRateCents).toBe(15000);
+  });
+
+  it("preserves rate snapshots when an editor resends unchanged project, task and date", async () => {
+    const ctx = ctxFor(alice, "administrator");
+    const { entry } = await createTimeEntry(ctx, { projectId, taskId: designTaskId, spentOn: TODAY, durationSeconds: 3600 });
+    await db.update(s.userRates).set({ amountCents: 99999 }).where(eq(s.userRates.userId, alice));
+    const edited = await updateTimeEntry(ctx, entry.id, {
+      notes: "A note edit must not reprice history", projectId, taskId: designTaskId, spentOn: TODAY, isBillable: entry.isBillable,
+    });
+    expect(edited.billableRateCents).toBe(entry.billableRateCents);
+    expect(edited.costRateCents).toBe(entry.costRateCents);
+    expect(edited.isBillable).toBe(entry.isBillable);
   });
 
   it("refuses to edit an entry on a sent invoice", async () => {

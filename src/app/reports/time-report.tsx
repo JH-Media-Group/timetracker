@@ -52,7 +52,9 @@ export function TimeReport({ period }: { period: Period }) {
    * one-row table. Scoped to somebody, the useful default is what they worked
    * on, so the link needs no grouping of its own.
    */
-  const groupBy = (params.get("by") as GroupBy) || (userId ? "project" : "client");
+  const requestedGroup = params.get("by");
+  const groupBy: GroupBy = requestedGroup === "client" || requestedGroup === "project" || requestedGroup === "task" || requestedGroup === "person"
+    ? requestedGroup : userId ? "project" : "client";
   // The server calls the fourth dimension "user"; the button says "person",
   // because that is the word somebody would use.
   const dimension = groupBy === "person" ? "user" : groupBy;

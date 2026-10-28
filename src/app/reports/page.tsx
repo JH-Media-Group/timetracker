@@ -29,7 +29,7 @@ export type ReportKey = "time" | "profitability" | "team" | "invoicing";
 export default function ReportsPage() {
   const { params, set } = useUrlState();
   const can = useCan();
-  const { granularity, anchor, period, onChange } = usePeriod("month", ["week", "month", "quarter", "year", "all"]);
+  const { granularity, anchor, period, error: periodError, onChange, onCustomChange } = usePeriod("month", ["week", "month", "quarter", "year", "all", "custom"]);
 
   const report = (params.get("r") as ReportKey) || "time";
 
@@ -49,7 +49,7 @@ export default function ReportsPage() {
       <PageHeader title="Reports">
         <Tabs
           value={allowed}
-          onValueChange={(v) => set({ r: v === "time" ? null : v })}
+          onValueChange={(v) => set({ r: v === "time" ? null : v, by: null })}
           tabs={tabs}
         />
       </PageHeader>
@@ -61,11 +61,14 @@ export default function ReportsPage() {
             anchor={anchor}
             onChange={onChange}
             allowed={["week", "month", "quarter", "year", "all"]}
+            custom={{ from: period.from, to: period.to, onChange: onCustomChange }}
           />
-          <span className="text-base text-ink-secondary">{period.from} to {period.to}</span>
+          {granularity !== "custom" && <span className="text-base text-ink-secondary">{period.from} to {period.to}</span>}
         </div>
 
-        {tabs.length === 0 ? (
+        {periodError ? (
+          <EmptyState title="Invalid date range">{periodError}</EmptyState>
+        ) : tabs.length === 0 ? (
           <EmptyState title="No reports available.">Your permissions do not include any reports.</EmptyState>
         ) : allowed === "time" ? (
           <TimeReport period={period} />

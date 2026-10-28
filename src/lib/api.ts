@@ -130,7 +130,7 @@ function toSignIn() {
 async function request<T>(
   method: string,
   path: string,
-  options: { query?: Query; body?: unknown; idempotencyKey?: string } = {}
+  options: { query?: Query; body?: unknown; idempotencyKey?: string; signal?: AbortSignal } = {}
 ): Promise<{ data: T; meta?: Record<string, unknown> }> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (options.body !== undefined) headers["Content-Type"] = "application/json";
@@ -143,6 +143,7 @@ async function request<T>(
       headers,
       credentials: "same-origin",
       cache: "no-store",
+      signal: options.signal,
       body: options.body === undefined ? undefined : JSON.stringify(options.body),
     });
   } catch (cause) {
@@ -712,6 +713,34 @@ export async function listTimeEntries(q: TimeQuery = {}): Promise<TimeEntryView[
     user_id: q.userId, project_id: q.projectId, client_id: q.clientId, task_id: q.taskId,
   });
   return rows.map(fromTimeEntry);
+}
+
+/** Fetch every page only for views that explicitly need a complete breakdown. */
+export async function listAllTimeEntries(q: TimeQuery = {}, signal?: AbortSignal): Promise<TimeEntryView[]> {
+  const rows: TimeEntryView[] = [];
+  const ids = new Set<string>();
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  do {
+    const page = await request<TimeEntryWire[]>("GET", "/time-entries", { signal, query: {
+      from: q.from, to: q.to,
+      user_id: q.userId, project_id: q.projectId, client_id: q.clientId, task_id: q.taskId,
+      cursor,
+    } });
+    for (const entry of page.data) {
+      if (ids.has(entry.id)) throw new Error("Time entries changed while loading. Refresh and try again.");
+      ids.add(entry.id);
+      rows.push(fromTimeEntry(entry));
+    }
+    if (!page.meta?.hasMore) return rows;
+    const next = page.meta.nextCursor;
+    if (typeof next !== "string" || !next || cursors.has(next) || page.data.length === 0) {
+      throw new Error("Could not load every time entry. Refresh and try again.");
+    }
+    cursors.add(next);
+    cursor = next;
+  } while (cursor);
+  return rows;
 }
 
 export async function getRunningEntry(userId?: ID): Promise<TimeEntryView | null> {

@@ -21,7 +21,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
 import * as api from "@/lib/api";
 import { formatDayShort } from "@/lib/format";
-import { Dialog, DialogContent } from "@/components/ui/primitives";
+import { Button, Dialog, DialogContent, EmptyState } from "@/components/ui/primitives";
 import { DataGrid } from "@/components/app/data-grid";
 import { useApp, useCan } from "@/components/app/providers";
 import type { GridRow } from "@/components/ui/grid";
@@ -72,9 +72,9 @@ export function EntryDrilldown({
     };
   }, [target, from, to, scope.userId, scope.projectId]);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isFetching, error, refetch } = useQuery({
     queryKey: ["time", "drilldown", query],
-    queryFn: () => api.listTimeEntries(query!),
+    queryFn: ({ signal }) => api.listAllTimeEntries(query!, signal),
     enabled: !!query,
   });
 
@@ -149,7 +149,12 @@ export function EntryDrilldown({
               </Link>
             </div>
           )}
-          <DataGrid<Row>
+          {error ? (
+            <EmptyState title="Could not load all time entries"
+              action={<Button type="button" variant="secondary" size="sm" loading={isFetching} onClick={() => void refetch()}>Try again</Button>}>
+              The breakdown and export are unavailable until every entry loads.
+            </EmptyState>
+          ) : <DataGrid<Row>
             label={`Time entries for ${target.name}`}
             tableId="report-time-drilldown"
             rows={rows}
@@ -158,7 +163,7 @@ export function EntryDrilldown({
             totals={totals}
             height={480}
             density="compact"
-          />
+          />}
         </DialogContent>
       )}
     </Dialog>

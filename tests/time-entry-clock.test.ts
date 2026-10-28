@@ -2,6 +2,32 @@ import { describe, expect, it } from "vitest";
 import { timeEntryClockValues } from "@/lib/time-entry-clock";
 
 describe("timeEntryClockValues", () => {
+  it.each(["2026-08-25", "2026-08-24"])("preserves a running clock and its seconds during a note or date edit (%s)", (spentOn) => {
+    expect(timeEntryClockValues({
+      existing: { spentOn: "2026-08-25", durationSeconds: 1021, timerStartedAt: "2026-08-25T13:00:00Z" },
+      initialStartMinutes: 8 * 60 + 43, spentOn,
+      startMinutes: 8 * 60 + 43, endMinutes: null, durationSeconds: 1020,
+      timezone: "America/New_York",
+    })).toEqual({});
+  });
+
+  it("lets only an explicit start edit rebase a running clock", () => {
+    expect(timeEntryClockValues({
+      existing: { spentOn: "2026-08-25", durationSeconds: 1021, timerStartedAt: "2026-08-25T13:00:00Z" },
+      initialStartMinutes: 8 * 60 + 43, spentOn: "2026-08-25",
+      startMinutes: 8 * 60 + 30, endMinutes: null, durationSeconds: 1020,
+      timezone: "America/New_York",
+    })).toEqual({ startedAt: "2026-08-25T12:30:00.000Z" });
+  });
+
+  it("uses a running timer's actual start day when its booking date has moved", () => {
+    expect(timeEntryClockValues({
+      existing: { spentOn: "2026-08-24", startedAt: "2026-08-25T12:43:00Z", durationSeconds: 1021, timerStartedAt: "2026-08-25T13:00:00Z" },
+      initialStartMinutes: 8 * 60 + 43, spentOn: "2026-08-23",
+      startMinutes: 8 * 60 + 30, endMinutes: null, durationSeconds: 1020,
+      timezone: "America/New_York",
+    })).toEqual({ startedAt: "2026-08-25T12:30:00.000Z" });
+  });
   it("does not rewrite a running timer during an unrelated edit", () => {
     expect(timeEntryClockValues({
       existing: { spentOn: "2026-08-25", durationSeconds: 0 },

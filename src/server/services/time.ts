@@ -78,7 +78,7 @@ export async function listTimeEntries(ctx: Ctx, q: TimeQuery = {}): Promise<Time
     .innerJoin(s.projectTasks, eq(s.projectTasks.id, s.timeEntries.projectTaskId))
     .leftJoin(s.invoices, eq(s.invoices.id, s.timeEntries.invoiceId))
     .where(conditionsFor(ctx, q))
-    .orderBy(desc(s.timeEntries.spentOn), asc(s.timeEntries.startedAt), asc(s.timeEntries.createdAt))
+    .orderBy(desc(s.timeEntries.spentOn), asc(s.timeEntries.startedAt), asc(s.timeEntries.createdAt), asc(s.timeEntries.id))
     .limit(Math.min(q.limit ?? 5000, 10000))
     .offset(q.offset ?? 0);
 
@@ -303,6 +303,16 @@ function timerStartInstant(requested: string | null | undefined, now: Date): Dat
   return asked > now ? now : asked;
 }
 
+/** Match the entry API's 24-hour limit before banking a retrospective span. */
+function retrospectiveSeconds(start: Date, now: Date): number {
+  const seconds = Math.max(0, Math.round((now.getTime() - start.getTime()) / 1000));
+  if (seconds > 24 * 3600) {
+    const detail = "A running timer must start within the last 24 hours.";
+    throw validationFailed({ startedAt: [detail] }, detail);
+  }
+  return seconds;
+}
+
 export async function createTimeEntry(ctx: Ctx, input: CreateTimeEntryInput): Promise<CreateResult> {
   const targetUserId = input.userId ?? ctx.actor.userId;
   const own = targetUserId === ctx.actor.userId;
@@ -390,6 +400,12 @@ export async function createTimeEntry(ctx: Ctx, input: CreateTimeEntryInput): Pr
 
     const id = newId();
     const now = tx.now();
+    const timerStart = input.start ? timerStartInstant(input.startedAt, now) : null;
+    // Bank retrospective time once, then accrue the live segment from now.
+    // Keeping only the earlier visible start silently lost that time (t-BR2arf).
+    const durationSeconds = timerStart
+      ? retrospectiveSeconds(timerStart, now)
+      : Math.max(0, Math.round(input.durationSeconds ?? 0));
 
     await tx.db.insert(s.timeEntries).values({
       id,
@@ -397,9 +413,9 @@ export async function createTimeEntry(ctx: Ctx, input: CreateTimeEntryInput): Pr
       projectId: input.projectId,
       projectTaskId,
       spentOn,
-      startedAt: input.start ? timerStartInstant(input.startedAt, now) : input.startedAt ? new Date(input.startedAt) : null,
+      startedAt: timerStart ?? (input.startedAt ? new Date(input.startedAt) : null),
       endedAt: input.endedAt ? new Date(input.endedAt) : null,
-      durationSeconds: input.start ? 0 : Math.max(0, Math.round(input.durationSeconds ?? 0)),
+      durationSeconds,
       timerStartedAt: input.start ? now : null,
       notes,
       isBillable,
@@ -415,7 +431,7 @@ export async function createTimeEntry(ctx: Ctx, input: CreateTimeEntryInput): Pr
       entityType: "time_entry",
       entityId: id,
       entityLabel: project.name,
-      after: { spentOn, projectId: input.projectId, durationSeconds: input.durationSeconds ?? 0 },
+      after: { spentOn, projectId: input.projectId, durationSeconds },
       override: lock.requiresOverride,
     });
     tx.emit({
@@ -490,7 +506,7 @@ export async function updateTimeEntry(ctx: Ctx, id: string, input: UpdateTimeEnt
       // request says otherwise. Keeping the old flag left it "billable" at $0.
       // Only ever removes the flag: moving onto billable work does not add one
       // to an entry somebody had deliberately marked non-billable.
-      if (input.isBillable === undefined && !(await taskIsBillable(tx, projectTaskId))) {
+      if (projectTaskId !== before.projectTaskId && input.isBillable === undefined && !(await taskIsBillable(tx, projectTaskId))) {
         patch.isBillable = false;
       }
     }
@@ -516,10 +532,11 @@ export async function updateTimeEntry(ctx: Ctx, id: string, input: UpdateTimeEnt
         moving a start later without needing a negative banked duration.
       */
       if (before.timerStartedAt && startedAt) {
-        patch.durationSeconds = Math.max(
-          0,
-          Math.round((updatedAt.getTime() - startedAt.getTime()) / 1000)
-        );
+        if (startedAt > updatedAt) {
+          const detail = "A running timer's start cannot be in the future.";
+          throw validationFailed({ startedAt: [detail] }, detail);
+        }
+        patch.durationSeconds = retrospectiveSeconds(startedAt, updatedAt);
         patch.timerStartedAt = updatedAt;
       }
     }
@@ -532,10 +549,10 @@ export async function updateTimeEntry(ctx: Ctx, id: string, input: UpdateTimeEnt
     // Re-resolve rates only when something the rate depends on has moved. An
     // edit to the note must not silently reprice work at today's rate.
     const rateInputsChanged =
-      input.projectId !== undefined ||
-      input.taskId !== undefined ||
-      input.spentOn !== undefined ||
-      input.isBillable !== undefined;
+      projectId !== before.projectId ||
+      projectTaskId !== before.projectTaskId ||
+      spentOn !== before.spentOn ||
+      (input.isBillable !== undefined && input.isBillable !== before.isBillable);
 
     if (rateInputsChanged && before.ratesLockedAt == null) {
       const rates = await resolveForEntry(tx, {

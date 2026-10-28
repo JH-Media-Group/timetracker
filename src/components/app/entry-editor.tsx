@@ -177,6 +177,7 @@ export function EntryForm({
     mutationFn: async (opts: { start?: boolean }) => {
       if (!projectId || !taskId) throw new Error("Choose a project and a task.");
       const { start: startMin, end: endMin } = readTimes(startText, endText);
+      if (entry?.timerStartedAt && startMin == null) throw new Error("Enter a valid start time for this running timer.");
       /*
         The billable flag goes only when somebody changed it.
 
@@ -219,6 +220,9 @@ export function EntryForm({
         */
         return api.updateTimeEntry(entry.id, {
           ...base,
+          projectId: projectId === entry.projectId ? undefined : projectId,
+          taskId: taskId === entry.taskId ? undefined : taskId,
+          spentOn: spentOn === entry.spentOn ? undefined : spentOn,
           ...clock,
         });
       }
@@ -302,7 +306,7 @@ export function EntryForm({
                   syncFromTimes(e.target.value, endText);
                 }} />
               <span className="text-ink-tertiary">to</span>
-              <Input className="w-[92px]" placeholder="End" value={endText}
+              <Input className="w-[92px]" placeholder="End" value={endText} disabled={!!entry?.timerStartedAt}
                 onChange={(e) => {
                   setEndText(e.target.value);
                   syncFromTimes(startText, e.target.value);
@@ -315,7 +319,9 @@ export function EntryForm({
               <span className="text-ink-tertiary">=</span>
             </>
           )}
-          <Input className="w-[92px]" align="right" placeholder="0:00" value={durationText}
+          <Input className="w-[92px]" align="right" placeholder="0:00"
+            aria-label="Duration" disabled={!!entry?.timerStartedAt}
+            value={entry?.timerStartedAt ? "Running" : durationText}
             onChange={(e) => setDurationText(e.target.value)}
             onBlur={(e) => {
               const s = parseDuration(e.target.value);
@@ -323,6 +329,11 @@ export function EntryForm({
               if (startEndMode) syncFromDuration(e.target.value);
             }} />
         </div>
+        {entry?.timerStartedAt && (
+          <div className="mt-1.5 text-sm text-ink-secondary">
+            {startEndMode ? "Elapsed time continues in the timesheet. Edit the start time to adjust it." : "Stop this timer before editing its duration."}
+          </div>
+        )}
         {spanWarning && !error && (
           <div className="mt-1.5 text-sm text-warning" role="status">{spanWarning}</div>
         )}

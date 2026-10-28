@@ -36,7 +36,7 @@ export function ProfitabilityReport({ period }: { period: Period }) {
   const router = useRouter();
   const { params, set } = useUrlState();
 
-  const groupBy = (params.get("by") as GroupBy) || "project";
+  const groupBy: GroupBy = params.get("by") === "client" ? "client" : "project";
 
   const { data } = useQuery({
     queryKey: ["report", "profitability", period.from, period.to, groupBy],

@@ -1,7 +1,8 @@
 import type { TimeEntry } from "@/lib/types";
 import { crossesMidnight, instantAt, nextIsoDay } from "@/lib/format";
+import { dayIn } from "@/domain/calendar";
 
-type ExistingClock = Pick<TimeEntry, "spentOn" | "durationSeconds">;
+type ExistingClock = Pick<TimeEntry, "spentOn" | "durationSeconds"> & Partial<Pick<TimeEntry, "timerStartedAt" | "startedAt">>;
 
 export interface TimeEntryClockInput {
   existing?: ExistingClock;
@@ -34,9 +35,11 @@ export function timeEntryClockValues(input: TimeEntryClockInput): TimeEntryClock
   const endChanged = input.endMinutes !== (input.initialEndMinutes ?? null);
   const clockChanged = !input.existing || input.spentOn !== input.existing.spentOn || startChanged || endChanged;
 
+  const clockDate = input.existing?.timerStartedAt && input.existing.startedAt
+    ? dayIn(input.timezone, new Date(input.existing.startedAt)) : input.spentOn;
   const startedAt = input.startMinutes == null
     ? undefined
-    : instantAt(input.spentOn, input.startMinutes, input.timezone);
+    : instantAt(clockDate, input.startMinutes, input.timezone);
   const endedAt = input.endMinutes == null
     ? undefined
     : instantAt(
@@ -46,6 +49,13 @@ export function timeEntryClockValues(input: TimeEntryClockInput): TimeEntryClock
         input.endMinutes,
         input.timezone
       );
+
+  // A running duration is banked time plus a live segment, not the rounded
+  // duration printed by the form. Only a changed start may rebase that clock.
+  // Moving its booking date alone must not add or remove a day of elapsed time.
+  if (input.existing?.timerStartedAt) {
+    return startChanged && startedAt ? { startedAt } : {};
+  }
 
   const seconds = clockChanged && startedAt && endedAt
     ? Math.max(0, Math.round((Date.parse(endedAt) - Date.parse(startedAt)) / 1000))
