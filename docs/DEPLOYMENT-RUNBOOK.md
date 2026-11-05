@@ -51,6 +51,14 @@ The current deployed release and its evidence are recorded at the top of
     run -T ... < /dev/null`. `-T` disables the pseudo-terminal but does not
     detach standard input, so omitting the redirection can still let the
     one-off container consume the remaining deployment script.
+13. Run any remote step longer than one or two commands as a script: write it
+    locally, `scp` it into `/opt/tally/artifacts/deploy-<sha>/`, and run it with
+    `bash`. Inline commands sent from PowerShell break in two ways that have
+    both happened: a quote PowerShell consumes leaves the remote shell with an
+    unterminated string, and `$(...)` or `| grep` inside the double-quoted
+    argument is evaluated on the Windows side, so part of the command never
+    reaches the server. After any such failure, check what actually changed
+    before retrying.
 
 ## 1. Establish the release
 
@@ -64,6 +72,12 @@ git rev-parse HEAD
 git rev-parse origin/main
 git diff --name-status <currently-deployed-sha>..HEAD
 ```
+
+The deployed sha may not exist. Repository history was rewritten on
+2026-09-10, and commits from before it (for example `cb82dab`) are gone. If
+`git diff` cannot find the deployed sha, diff against the most recent recorded
+deployment that still exists in history, which is a superset of the deployed
+tree, and say so in the evidence section.
 
 Stop if the release contains an unexpected migration, Compose, Caddy, systemd,
 Dockerfile, or operational-script change. Review those changes as their own
@@ -100,7 +114,10 @@ Before any write, verify all of the following:
 - The four Tally systemd timers are active.
 - Staging mail still contains `--no-reminders`.
 - `sshd -T` reports `permitrootlogin yes`.
-- The current database counts and number of running timers are recorded.
+- The current database counts and number of running timers are recorded. A
+  running timer is `timer_started_at IS NOT NULL AND deleted_at IS NULL`. Do
+  not use `ended_at IS NULL`: imported duration-only entries have no clock
+  times, so that query counts well over a thousand "running" timers.
 
 Do not continue if an unrelated service is unhealthy, disk pressure is high,
 the backup timer is failed, the current Tally release is unhealthy, or the
@@ -177,6 +194,16 @@ Require all of the following before continuing:
 
 Remove only the exact candidate container and confirm it is gone.
 
+For a release that changes screens, also drive the image before it goes live.
+Restore a recent dump into a local scratch database (`tally_mirror` in the
+local `tally-postgres` container) and run the image locally with
+`NODE_ENV=production`, `TRUST_PROXY=0`, a fresh `SESSION_SECRET`, and an
+`https://` `APP_URL` behind a throwaway local TLS proxy, because production
+refuses a plain-HTTP `APP_URL`. Then drive it with a browser or Playwright,
+using a local-only test account created in the scratch copy. This found three
+defects in October that the full test suite had not. Delete the scratch
+database, the dump, the test credentials and the certificate afterwards.
+
 ## 6. Validate and run migrations
 
 Override `TALLY_IMAGE` in the remote shell and validate the fully resolved
@@ -193,6 +220,13 @@ Record migration counts before and after. For a schema-neutral release they
 must not change. For a release with migrations, confirm the exact expected
 increase and that the previous application image remains compatible before
 live replacement.
+
+A manual migration can report `(changed, re-applying)` with no change to the
+file in Git. That is a line-ending difference between checkouts changing its
+stored hash, which happened to `0001_constraints.sql` on 2026-09-11. The
+statements in those files are idempotent and run in a transaction, so this is
+safe, but confirm in Git that the file really did not change before
+accepting it, and note it in the evidence.
 
 ## 7. Change only the image tag
 
@@ -290,3 +324,29 @@ Update all three locations after a successful deployment:
 
 Commit and push the documentation separately. That documentation-only commit
 is not the deployed image revision, so record both values clearly.
+
+Keep business data out of all three Git-tracked records: client names,
+personnel, dollar figures and reconciliation outputs belong in the protected
+server bundle only (`docs/REPOSITORY-DATA-POLICY.md`).
+
+## 12. Data changes outside a release
+
+A correction to staging data (an import, a rate fill, a billing setting) is
+not an image deployment, but it carries the same risk to money and gets the
+same discipline:
+
+1. Write the change as one reviewable SQL file, inside `BEGIN` and `COMMIT`,
+   guarded so a second run changes nothing, and writing an `audit_log` row
+   with `actor_kind = 'system'` that says what changed and why.
+2. If the SQL names ids, generate it against a restored copy of staging, never
+   against the local development database, whose ids differ.
+3. Run the backup unit and record the new dump.
+4. `scp` the file to `/opt/tally/artifacts/`, mode 0600, and compare its
+   SHA-256 with the local copy.
+5. Run a variant with `COMMIT` replaced by `ROLLBACK` against the live database
+   with `ON_ERROR_STOP=1`, and confirm the row counts match the preview.
+6. Run the real file, verify the result with a read-only query, and confirm
+   readiness still returns 200.
+7. Run the backup unit again.
+8. Append the statement's SHA-256, the row counts and both backup names to the
+   current deployment bundle's `release.txt`.
