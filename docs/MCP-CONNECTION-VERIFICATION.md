@@ -17,7 +17,7 @@ This document distinguishes implementation from deployment and client acceptance
 - [x] Production-image HTTPS API and MCP transport verification.
 - [ ] Production-image browser interaction verification.
 - [ ] Actual Claude Code, Claude Desktop and Codex client acceptance.
-- [ ] Separately authorized deployment and scoped live verification.
+- [x] Separately authorized deployment and scoped live bearer verification.
 
 ## Required scenarios
 
@@ -95,6 +95,35 @@ be confirmed in the exact installed version during acceptance.
 - Browser-test automation was rejected by automatic approval review with
   `blocked by policy`. The computer-use fallback had no available browser host.
   Rendering, narrow/desktop layouts and keyboard interactions remain unverified.
-- No commit, push, production migration or deployment was performed. Migration
-  0010 was applied only to test databases. Mixed-version image rehearsal and
-  live actual-client acceptance remain release gates.
+- This initial local pass preceded the authorized deployment below.
+
+## Deployment evidence, November 5, 2026 (America/Cancun)
+
+Source `98cf2032e96634fd6a421534d715a500099deddc` was committed, fast-forwarded
+to main and pushed. Both live services now run `tally:98cf203`, built from a
+clean archive of that exact commit. The full 1,068-test suite passed again.
+
+Before rollout, the old image issued OAuth and PAT credentials against its old
+schema in an isolated fictional database. After migration, both credentials
+passed initialization, listing, projects and 20 timer reads with new web plus
+old MCP, then with both new services. New OAuth and PAT flows also passed on
+the exact release image, including PKCE exchange and revocation.
+
+The pre- and post-deploy backups passed full owner-preserving scratch restores.
+Migration 0010 added one migration record without changing business counts.
+The candidate passed readiness before live replacement. Web and MCP were
+replaced separately with `--no-deps`. Existing public URL and proxy settings
+were already correct; only the environment image tag changed.
+
+Live verification used the existing bearer credential configured in Claude,
+without copying it into logs or Git. Initialization, tool listing,
+`tally_projects_mine`, 20 consecutive `tally_timer_current` reads and all three
+rollup routes passed. No business records were written. This is real HTTPS SDK
+verification using that credential, not a claim of interactive Claude use.
+
+The browser host was still unavailable on the deployment turn. Jason authorized
+deployment after the pending browser and client acceptance checks were
+disclosed. Actual Claude Code/Desktop sign-in and tool use, Codex tool use,
+and browser layout/keyboard acceptance remain open. Live browser OAuth consent
+was not exercised; OAuth was exercised against the exact local release image.
+See DEPLOYMENT-AND-SERVER-HARDENING.md for operational evidence and rollback.

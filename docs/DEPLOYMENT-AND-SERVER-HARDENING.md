@@ -4,7 +4,7 @@
 
 **Staging deployed:** 2026-08-24
 
-**Staging last updated:** 2026-10-28 01:23 UTC
+**Staging last updated:** 2026-11-06 00:24 UTC (November 5 in America/Cancun)
 
 **Production droplet:** `165.245.130.130`
 
@@ -19,6 +19,73 @@ restart unrelated services.
 The repeatable operating procedure now lives in
 `docs/DEPLOYMENT-RUNBOOK.md`. This file retains the deployment evidence and
 the broader shared-server maintenance plan.
+
+## Staging update: MCP connections and time-entry fixes, November 5, 2026
+
+Source `98cf2032e96634fd6a421534d715a500099deddc` is deployed as
+`tally:98cf203`, image ID
+`sha256:6b5132067a7a72669d1971c5c380d356c47928f15df42fb843a95cbd913ced59`.
+The image configuration digest is
+`sha256:44e67f7f15368053be9cce50480ebc9914d8af0ba25f4bd8352f28809d43708d`.
+Deployment completed at approximately 00:24 UTC on November 6, which is
+November 5 locally. The following documentation commit is not the image source.
+
+This release implements TALLY-86 through TALLY-90 and the three code fixes
+`t-rW27Ea`, `t-SFiXCS`, and `t-pAwUtQ`. It preserves optional PAT access and
+adds URL-first OAuth setup, exact callback preservation, scoped connection
+lifecycle and useful upstream error handling. It also fixes clearing notes,
+checks moved entries against destination-date rules, and replaces capped list
+totals with scoped SQL aggregates. QuickBooks remains a separate planning epic.
+
+Release evidence:
+
+- The exact source passed 76 files and 1,068 tests again, TypeScript, palette
+  checks and a clean-archive Linux production build. Seven deliberate
+  regressions were detected, restored and retested. Iterative independent
+  Codex and Claude reviews resolved all material findings.
+- Legacy OAuth and PAT credentials were issued by the old image against the
+  old schema in a fictional local database. They passed after migration with
+  new web plus old MCP, then both new services. Newly issued credentials passed
+  real HTTPS PKCE, MCP initialization, tools, project and 20 timer reads,
+  rollup routes and revocation against the exact release image.
+- The 101,635,584-byte transfer matched SHA-256
+  `c237ddbf266849f002b28cdc427f1c0e21de0f0c3941ecc12809c55146209fda`
+  locally and remotely. The image runs as `node` with its healthcheck intact.
+- Pre-update backup `/var/backups/tally/tally-20261106T002155Z.dump`, SHA-256
+  `2967d6c331ab2a605136e8914705dd5b0662aa658ac6d5b74d0fe0434b00ca72`,
+  and post-update backup `/var/backups/tally/tally-20261106T002433Z.dump`, SHA-256
+  `190b0aa8fca09171c0486e6e02f1c5cf3f5e0982408b78054a55150faa81877e`,
+  passed catalog validation and full owner-preserving scratch restores with
+  matching counts. Both exact scratch databases were removed.
+- An isolated candidate passed health and readiness against the live database
+  with the same resource and security controls and no published port or live
+  alias. Migration 0010 added three nullable OAuth binding columns and one
+  foreign key. The Drizzle ledger increased by one; manual migration and
+  business counts stayed unchanged, and the old services remained healthy.
+- Only the environment image line changed, proven by normalized comparison.
+  Existing public URL and trusted proxy settings were already correct. Web
+  was verified before MCP replacement, using `--no-deps` for each service.
+  Both services are healthy with zero restarts and no OOM event.
+- Live MCP initialization, tool listing, projects and 20 consecutive timer
+  reads passed using the existing bearer credential configured in Claude.
+  All three scoped rollup API routes passed. Verification made no business
+  writes and saved no returned records to Git.
+- Liveness/readiness, OAuth discovery, MCP 405/401 challenge behavior and
+  security headers passed. Compose/Caddy hashes, listeners, service isolation,
+  unrelated container identities/images/start times/restarts and root SSH
+  remained unchanged. Combined stdout/stderr logs had no error markers. All
+  four timers remain active; the scheduled mail job succeeded after rollout
+  with `--no-reminders` still configured.
+- Browser automation remained unavailable. The owner authorized deployment
+  after that limitation was disclosed. Browser interaction, live OAuth consent
+  and actual Claude/Codex client acceptance remain open in TALLY-91, separately
+  from the completed deployment. No claim of those checks passing is made.
+
+Protected evidence and rollback files are under
+`/opt/tally/artifacts/deploy-98cf203`. The previous `tally:affae49` image and
+configuration remain available. Keep the additive schema if rolling back the
+image; rollback restores the old MCP defects and removes the new audience
+checks. No shared service was restarted or proxy reloaded.
 
 ## Staging update: grouping-independent time-report totals, 2026-10-28
 
