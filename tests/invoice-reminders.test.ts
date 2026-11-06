@@ -180,7 +180,8 @@ beforeEach(async () => {
   */
   const [existing] = await db.select({ id: s.settings.id }).from(s.settings).limit(1);
   if (existing) {
-    await db.update(s.settings).set({ invoiceMessages: {} });
+    // The timezone scenario must not inherit another test file's UTC fixture.
+    await db.update(s.settings).set({ invoiceMessages: {}, timezone: "America/New_York" });
   } else {
     await db.insert(s.settings).values({
       id: 1,

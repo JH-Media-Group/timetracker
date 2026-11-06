@@ -1,11 +1,9 @@
 # MCP connector
 
-**Status: implemented locally, with TALLY-68 adversarial-review remediation complete and awaiting independent re-review plus the watched staging deployment.** Written
-and reviewed on 2026-08-23, then implemented against TALLY-61 through TALLY-67.
-The deployment adds the MCP process, OAuth endpoints, migrations, Tally-only
-timers, and a verified nightly dump; none is active until the deployment runs.
-The largest was that it had nothing at all on untrusted content, which is now
-section 6.5 and is the most likely way this connector causes harm.
+**Status (2026-11-05):** the original connector and OAuth server are deployed.
+TALLY-86 is a local follow-up implementation for URL-based connection,
+interoperability and the two confirmed HTTP failures. Deployment and real-client
+acceptance remain separate gates. See [MCP connection verification](MCP-CONNECTION-VERIFICATION.md).
 
 Authority over the MCP surface, its authentication, its authorization, and its
 change log. Everything else defers to docs/BACKEND_PRD.md, which this does not
@@ -107,7 +105,7 @@ mostly connecting what is there.**
 copies it, and runs the one `claude mcp add` command the screen shows them. For
 eleven people who all have a laptop, that is the entire connection story.
 
-**Phase B: OAuth 2.1 with PKCE and dynamic client registration.** The client
+**Browser sign-in: OAuth with S256 PKCE and dynamic client registration.** The client
 discovers the authorization server, registers itself, opens a browser, the
 person approves a consent screen naming the scopes, and a token comes back
 without anybody copying anything. This is what makes a phone work.
@@ -792,7 +790,7 @@ the deploy keeps an `.env.bak-<sha>`. **Do not pipe `docker save` through a
 PowerShell pipeline**; it corrupts the stream. Write the tar, copy the tar.
 
 **The MCP service uses the same immutable image**, as a second service in the
-existing compose project. It receives only `TALLY_API_BASE_URL`, not the web
+existing compose project. It receives `TALLY_API_BASE_URL` and `TALLY_PUBLIC_URL`, not the web
 environment file or database credentials. Caddy sends `/mcp` to port 3201 and
 all other paths to the web container.
 
@@ -801,3 +799,44 @@ isolated one-shot services for mail, recurring invoices, housekeeping, and a
 nightly custom-format PostgreSQL dump. Installation and the first scratch
 restore remain deployment steps, because the shared droplet must not be changed
 outside the watched rollout.
+
+## TALLY-86 connection contract (2026-11-05)
+
+Settings / Security now leads with the MCP URL and browser sign-in. PATs remain
+an optional supported path. Both paths use the same API authorization rules.
+The MCP process has no database access and never forwards browser cookies.
+
+Token introspection has its own 600-per-minute per-token bucket. Interactive
+auth remains 10 per 15 minutes. Every MCP POST validates the token afresh;
+revocation, disabled users and changed capabilities are checked on every call.
+Introspection throttling is HTTP 429 with Retry-After, not a generic 500.
+Read transport failures are reported as API unavailable. Interrupted writes
+report outcome_unknown because the write may have committed; check Tally before
+retrying and preserve any original idempotency key. No automatic write retries.
+
+Discovery derives scopes from the shared registry. The initial challenge asks
+for tally.read. The person can explicitly select additional documented scopes
+at consent, including Log time for GUI clients. Only requested tally.read is
+selected initially; sensitive and write scopes always require a deliberate
+selection. Expanding an existing credential requires a new consent flow. The
+financial scope is advertised and explicitly labelled. Missing resource on old
+clients defaults to this Tally MCP resource; a different resource is rejected.
+Missing scope defaults to tally.read. Response type must be code and the PKCE
+method must be S256. New OAuth tokens store client and resource identity.
+
+HTTPS callbacks must match the registered URI exactly. For native IP-loopback
+HTTP callbacks only the port can vary. Exchanges match the actual authorized
+redirect exactly. Successful and declined callbacks include the issuer and
+round-trip state. A changed signed-in account requires a fresh consent review.
+Consent is isolated from the app bootstrap and third-party capture widget;
+expired session cookies are cleared before returning to sign-in.
+
+Access expires after 90 days and is renewed by interactive reauthorization.
+No refresh token is issued. Each credential can be revoked from Settings.
+Pre-migration tokens retain their existing expiry, scopes and revocation rules.
+They cannot be safely classified by label, so null client/resource means a PAT
+or legacy token. No label-based backfill or bulk revocation is performed.
+
+Migration 0010 adds nullable columns and a client foreign key without modifying
+existing data. The old image ignores the added columns; see the runbook for
+mixed-version rehearsal and the limits of reverting to the old OAuth behavior.

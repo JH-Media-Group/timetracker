@@ -16,7 +16,7 @@
 import { env } from "@/server/env";
 import { AppError } from "@/server/errors";
 
-export type RouteClass = "read" | "write" | "report" | "export" | "email" | "auth";
+export type RouteClass = "read" | "write" | "report" | "export" | "email" | "auth" | "token" | "oauthRegister" | "oauthExchange";
 
 interface Limit {
   points: number;
@@ -30,6 +30,12 @@ const LIMITS: Record<RouteClass, Limit> = {
   export: { points: 10, windowMs: 60_000 },
   email: { points: 30, windowMs: 3_600_000 },
   auth: { points: 10, windowMs: 900_000 },
+  // Valid credentials are checked on every MCP request, including discovery
+  // and notifications. Keep this separate from interactive sign-in attempts.
+  token: { points: 600, windowMs: 60_000 },
+  // Public client setup cannot exhaust the password sign-in bucket.
+  oauthRegister: { points: 10, windowMs: 900_000 },
+  oauthExchange: { points: 120, windowMs: 60_000 },
 };
 
 export interface RateResult {

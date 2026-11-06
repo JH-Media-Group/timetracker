@@ -71,6 +71,13 @@
       "when": 1787538545640,
       "tag": "0009_perpetual_doctor_octopus",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1793913946623,
+      "tag": "0010_great_captain_britain",
+      "breakpoints": true
     }
   ]
 }

@@ -115,6 +115,12 @@ export function middleware(req: NextRequest) {
 
   if (req.cookies.has(SESSION_COOKIE)) return withPolicy(req);
 
+  // A header is not authentication. Let the API validate it, including bad
+  // credentials, rather than requiring a browser cookie from MCP clients.
+  if (pathname.startsWith("/api/v1/") && req.headers.has("authorization")) {
+    return withPolicy(req);
+  }
+
   // API calls get a problem document; a redirect to HTML would be parsed as
   // JSON by the client and produce a confusing error.
   if (pathname.startsWith("/api/")) {
@@ -133,7 +139,7 @@ export function middleware(req: NextRequest) {
 
   const signin = new URL("/signin", req.url);
   // Round-trip where they were going, so signing in lands them there.
-  if (pathname !== "/") signin.searchParams.set("next", pathname + req.nextUrl.search);
+  if (pathname !== "/") signin.searchParams.set("next", pathname + new URL(req.url).search);
   return withPolicy(req, NextResponse.redirect(signin));
 }
 

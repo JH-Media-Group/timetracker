@@ -6,9 +6,9 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
 import { Plus, Download, Upload } from "lucide-react";
 import * as api from "@/lib/api";
-import { projectBudget, sumValue } from "@/lib/derive";
+import { projectBudgetFromTotals } from "@/lib/derive";
 import { formatDuration, formatHoursUnit, formatMoney, formatPercent } from "@/lib/format";
-import type { Project, TimeEntry } from "@/lib/types";
+import type { Project } from "@/lib/types";
 import { Badge, Button, EmptyState, Meter, Select } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { PageBody, PageHeader, Toolbar, useUrlState } from "@/components/app/page-chrome";
@@ -38,16 +38,14 @@ export default function ProjectsPage() {
   const status = (params.get("status") as Status) || "active";
   const clientFilter = params.get("client") || "";
 
-  const { data: entries = [], isLoading } = useQuery({
-    queryKey: ["time", "all"],
-    queryFn: () => api.listTimeEntries({}),
+  const { data: rollups = [], isLoading } = useQuery({
+    queryKey: ["time", "rollups", "project"],
+    queryFn: () => api.getTimeRollups("project"),
   });
 
   const byProject = React.useMemo(() => {
-    const m = new Map<string, TimeEntry[]>();
-    for (const e of entries) { const l = m.get(e.projectId); if (l) l.push(e); else m.set(e.projectId, [e]); }
-    return m;
-  }, [entries]);
+    return new Map(rollups.map((row) => [row.id, row]));
+  }, [rollups]);
 
   const counts = React.useMemo(() => ({
     active: projects.filter((p) => !p.archivedAt).length,
@@ -75,9 +73,9 @@ export default function ProjectsPage() {
     for (const [client, list2] of [...groups.entries()].sort((a, b) => a[0].localeCompare(b[0]))) {
       out.push({ _id: `g-${client}`, _kind: "group", _group: { label: client } } as GridRow<Row>);
       for (const p of list2.sort((a, b) => a.name.localeCompare(b.name))) {
-        const mine = byProject.get(p.id) ?? [];
-        const b = projectBudget(p, mine);
-        const costs = sumValue(mine, (e) => e.durationSeconds, (e) => e.costRateCents ?? 0);
+        const mine = byProject.get(p.id) ?? { seconds: 0, billableCents: 0, costCents: 0 };
+        const b = projectBudgetFromTotals(p, mine);
+        const costs = mine.costCents ?? 0;
         out.push({
           _id: p.id, _kind: "data", id: p.id, name: p.name, client,
           type: p.billingType === "fixed_fee" ? "Fixed Fee" : p.billingType === "non_billable" ? "Non-Billable" : "Time & Materials",

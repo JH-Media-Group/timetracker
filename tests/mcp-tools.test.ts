@@ -24,7 +24,7 @@ describe("MCP is an unprivileged HTTP client", () => {
       expect(file.source, file.name).not.toMatch(/DATABASE_URL|SESSION_SECRET/);
     }
   });
-  it("validates every bearer through token-info", () => expect(readFileSync(join(root, "index.ts"), "utf8")).toContain('api.get<TokenInfo>("/auth/token-info")'));
+  it("validates every bearer through token-info", () => expect(readFileSync(join(root, "http.ts"), "utf8")).toContain('api.get<TokenInfo>("/auth/token-info")'));
   it("forwards the bearer and hashes it before using it as a cache key", () => {
     const api = readFileSync(join(root, "api-client.ts"), "utf8");
     expect(api).toContain("authorization: `Bearer ${this.bearer}`");

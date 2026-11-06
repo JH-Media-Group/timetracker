@@ -77,7 +77,7 @@ describe("OAuth authorization code with PKCE", () => {
   it("registers, requires consent, and mints exactly the consented scopes", async () => {
     const client = await registerOAuthClient(ctx(), { client_name: "Test MCP", redirect_uris: ["http://127.0.0.1:4567/callback"] });
     const verifier = "v".repeat(64), codeChallenge = createHash("sha256").update(verifier).digest("base64url");
-    const approval = await approveOAuth(ctx(), { clientId: client.client_id, redirectUri: client.redirect_uris[0]!, scope: "tally.read tally.time.write", codeChallenge, state: "state-1", approved: true });
+    const approval = await approveOAuth(ctx(), { clientId: client.client_id, redirectUri: client.redirect_uris[0]!, scope: "tally.read tally.time.write", selectedScopes: ["tally.read", "tally.time.write"], codeChallenge, state: "state-1", approved: true });
     const redirect = new URL(approval.redirectTo), code = redirect.searchParams.get("code")!;
     expect(redirect.searchParams.get("state")).toBe("state-1");
     const token = await exchangeOAuthCode(ctx(), { code, clientId: client.client_id, redirectUri: client.redirect_uris[0]!, codeVerifier: verifier });
@@ -101,7 +101,7 @@ describe("OAuth authorization code with PKCE", () => {
     const client = await registerOAuthClient(asToken, { redirect_uris: ["http://127.0.0.1:4567/callback"] });
     const verifier = "w".repeat(64), codeChallenge = createHash("sha256").update(verifier).digest("base64url");
     await expect(
-      approveOAuth(asToken, { clientId: client.client_id, redirectUri: client.redirect_uris[0]!, scope: "tally.admin", codeChallenge, approved: true })
+      approveOAuth(asToken, { clientId: client.client_id, redirectUri: client.redirect_uris[0]!, scope: "tally.admin", selectedScopes: ["tally.admin"], codeChallenge, approved: true })
     ).rejects.toThrow(/signed in/i);
 
     // No code to exchange, so no wider token exists to be resolved.
@@ -110,7 +110,7 @@ describe("OAuth authorization code with PKCE", () => {
   });
   it("declining creates no authorization code or token", async () => {
     const client = await registerOAuthClient(ctx(), { redirect_uris: ["http://localhost:9876/cb"] });
-    const result = await approveOAuth(ctx(), { clientId: client.client_id, redirectUri: client.redirect_uris[0]!, scope: "tally.read", codeChallenge: "x".repeat(43), approved: false });
+    const result = await approveOAuth(ctx(), { clientId: client.client_id, redirectUri: client.redirect_uris[0]!, scope: "tally.read", selectedScopes: [], codeChallenge: "x".repeat(43), approved: false });
     expect(new URL(result.redirectTo).searchParams.get("error")).toBe("access_denied");
     expect(await db.select().from(s.oauthAuthorizationCodes)).toHaveLength(0);
   });

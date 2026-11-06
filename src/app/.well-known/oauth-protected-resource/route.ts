@@ -1,3 +1,3 @@
 import { NextResponse } from "next/server";
-import { env } from "@/server/env";
-export const GET = async () => NextResponse.json({ resource: `${env.APP_URL.replace(/\/$/, "")}/mcp`, authorization_servers: [env.APP_URL], scopes_supported: ["tally.read", "tally.time.write", "tally.expenses", "tally.approvals", "tally.admin"] }, { headers: { "cache-control": "public, max-age=3600" } });
+import { protectedResourceMetadata } from "@/server/auth/oauth-metadata";
+export const GET = async () => NextResponse.json(protectedResourceMetadata(), { headers: { "cache-control": "public, max-age=3600" } });

@@ -78,20 +78,28 @@ export function projectBudget(project: Project, entries: TimeEntry[], monthOnly?
     ? entries.filter((e) => e.spentOn >= monthOnly.from && e.spentOn <= monthOnly.to)
     : entries;
 
+  return projectBudgetFromTotals(project, {
+    seconds: scoped.reduce((a, e) => a + e.durationSeconds, 0),
+    billableCents: sumValue(scoped, (e) => e.durationSeconds, (e) => e.billableRateCents ?? 0),
+  });
+}
+
+export function projectBudgetFromTotals(project: Project, totals: { seconds: number; billableCents: number }): BudgetView {
+
   // The project's own alert threshold, not a constant (TALLY-37).
   const alertPercent = project.budgetAlertPercent ?? null;
 
   if (project.budgetBy === "project_hours" && project.budgetSeconds) {
-    const spent = scoped.reduce((a, e) => a + e.durationSeconds, 0);
+    const spent = totals.seconds;
     const pct = spent / project.budgetSeconds;
     return { kind: "hours", budget: project.budgetSeconds, spent, remaining: project.budgetSeconds - spent, percentUsed: pct, health: budgetHealth(pct, alertPercent), resetsMonthly: project.budgetResetsMonthly };
   }
   if (project.budgetBy === "project_fees" && project.budgetFeeCents) {
-    const spent = sumValue(scoped, (e) => e.durationSeconds, (e) => e.billableRateCents ?? 0);
+    const spent = totals.billableCents;
     const pct = spent / project.budgetFeeCents;
     return { kind: "fees", budget: project.budgetFeeCents, spent, remaining: project.budgetFeeCents - spent, percentUsed: pct, health: budgetHealth(pct, alertPercent), resetsMonthly: project.budgetResetsMonthly };
   }
-  const spent = sumValue(scoped, (e) => e.durationSeconds, (e) => e.billableRateCents ?? 0);
+  const spent = totals.billableCents;
   return { kind: "none", budget: null, spent, remaining: null, percentUsed: null, health: "none", resetsMonthly: false };
 }
 

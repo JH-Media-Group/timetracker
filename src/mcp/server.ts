@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import { requestContext } from "./context.js";
-import { TallyApiError } from "./api-client.js";
+import { TallyApiError, TallyApiUnavailable } from "./api-client.js";
 
 const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/);
 const id = z.string().uuid();
@@ -12,6 +12,10 @@ function output(value: unknown): ToolResult { return { content: [{ type: "text",
 async function safe(run: () => Promise<unknown>): Promise<ToolResult> {
   try { return output(await run()); }
   catch (error) {
+    if (error instanceof TallyApiUnavailable) return { ...output({ error: {
+      code: error.outcomeUnknown ? "outcome_unknown" : "api_unavailable", detail: error.message,
+      ...(error.outcomeUnknown ? {} : { retry_after_seconds: 5 }),
+    } }), isError: true };
     if (error instanceof TallyApiError) return { ...output({ error: { code: error.problem.code ?? error.problem.title ?? "api_error", detail: error.message, fields: error.problem.fieldErrors, retry_after_seconds: error.problem.retryAfter } }), isError: true };
     throw error;
   }

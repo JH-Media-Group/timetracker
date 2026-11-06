@@ -37,7 +37,7 @@ import {
   type Ctx,
   type DomainEvent,
 } from "./ctx";
-import { resolveSession } from "./auth/session";
+import { resolveSession, clearedCookieOptions } from "./auth/session";
 import { resolveBearer } from "./auth/api-key";
 import { enforce, type RouteClass } from "./auth/rate-limit";
 import { db } from "./db/client";
@@ -45,6 +45,11 @@ import * as s from "./db/schema";
 import { newId } from "./db/ids";
 import { env } from "./env";
 import type { Capability } from "./auth/capabilities";
+import { isReadOnlyToken } from "@/lib/api-token-scopes";
+
+class InvalidSessionError extends AppError {
+  constructor() { super("unauthenticated", "Sign in to continue."); }
+}
 
 export interface Meta {
   total?: number;
@@ -93,6 +98,7 @@ export interface RouteOptions {
   /** Return the handler's value without the Tally envelope for standard protocol endpoints such as OAuth. */
   rawResponse?: boolean;
   oauthErrors?: boolean;
+  successStatus?: number;
 }
 
 const MUTATING = new Set(["POST", "PATCH", "PUT", "DELETE"]);
@@ -110,8 +116,7 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
     try {
       const ctx = options.public ? publicCtx(req, requestId) : await authenticatedCtx(req, requestId);
 
-      const writeScopes = new Set(["tally.time.write", "tally.expenses", "tally.approvals", "tally.admin"]);
-      const tokenReadOnly = ctx.actor.tokenScopes !== undefined && !ctx.actor.tokenScopes.some((scope) => writeScopes.has(scope));
+      const tokenReadOnly = ctx.actor.tokenScopes !== undefined && isReadOnlyToken(ctx.actor.tokenScopes);
       if (mutating && tokenReadOnly) throw forbidden("This token is read only.");
 
       // Cross-site write protection.
@@ -127,7 +132,7 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
 
       // Rate limit before anything expensive happens.
       const bucket = options.rateLimit ?? (mutating ? "write" : "read");
-      // Authenticated API tokens key on the user. The publicCtx "api" actor
+      // Authenticated API tokens key on their prefix. The publicCtx "api" actor
       // (no real user) still keys on IP.
       const actorKey = ctx.actor.tokenPrefix
         ? `token:${ctx.actor.tokenPrefix}`
@@ -196,6 +201,7 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
       }
 
       const response = NextResponse.json(options.rawResponse ? body.data : body, {
+        status: options.successStatus ?? 200,
         headers: {
           "Cache-Control": options.cacheControl ?? "private, no-store",
           "X-Request-Id": requestId,
@@ -235,6 +241,7 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
       }
       if (options.oauthErrors) {
         const oauth = error as { name?: string; oauthCode?: string; message?: string };
+        if (oauth.name === "OAuthError" && oauth.oauthCode === "temporarily_unavailable") return NextResponse.json({ error: oauth.oauthCode, error_description: oauth.message }, { status: 503, headers: { "Cache-Control": "no-store", "Retry-After": "3600", "X-Request-Id": requestId } });
         if (oauth.name === "OAuthError" && oauth.oauthCode) return NextResponse.json({ error: oauth.oauthCode, error_description: oauth.message }, { status: 400, headers: { "Cache-Control": "no-store", "X-Request-Id": requestId } });
         if (error instanceof AppError && error.code === "rate_limited") return NextResponse.json({ error: "temporarily_unavailable", error_description: "Too many requests." }, { status: 429, headers: { "Cache-Control": "no-store", "Retry-After": String(error.meta?.retry_after_seconds ?? 60), "X-Request-Id": requestId } });
         if (error instanceof AppError && error.code === "idempotency_key_reused") return NextResponse.json({ error: "invalid_request", error_description: "The idempotency key cannot be reused for this OAuth request." }, { status: 400, headers: { "Cache-Control": "no-store", "X-Request-Id": requestId } });
@@ -242,7 +249,14 @@ export function route<T>(handler: Handler<T>, options: RouteOptions = {}) {
         console.error(`[${requestId}] OAuth endpoint failed`);
         return NextResponse.json({ error: "server_error", error_description: "The authorization server could not complete the request." }, { status: 500, headers: { "Cache-Control": "no-store", "X-Request-Id": requestId } });
       }
-      return problemResponse(error, requestId);
+      const oauthFailure = error as { name?: string; oauthCode?: string; message?: string };
+      const response = problemResponse(oauthFailure.name === "OAuthError"
+        ? new AppError("validation_failed", oauthFailure.message ?? "Invalid authorization request.")
+        : error, requestId);
+      if (error instanceof InvalidSessionError) {
+        response.cookies.set(clearedCookieOptions());
+      }
+      return response;
     }
   };
 }
@@ -304,7 +318,7 @@ async function authenticatedCtx(req: NextRequest, requestId: string): Promise<Ct
   // If it is present and invalid, refuse it. Falling through to a cookie would
   // let a broken or revoked bearer silently act with the browser session.
   const authHeader = req.headers.get("authorization");
-  if (authHeader) {
+  if (authHeader !== null) {
     const resolved = await resolveBearer(authHeader);
     if (resolved) {
       return createCtx({
@@ -322,7 +336,7 @@ async function authenticatedCtx(req: NextRequest, requestId: string): Promise<Ct
   }
 
   const actor = await resolveSession(req);
-  if (!actor) throw unauthenticated();
+  if (!actor) throw new InvalidSessionError();
   return createCtx({
     actor,
     request: { requestId, ip: clientIp(req), userAgent: req.headers.get("user-agent") },

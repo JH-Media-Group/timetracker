@@ -99,6 +99,12 @@ async function main() {
       `status ${theirs.status}, ${Array.isArray(theirs.body) ? theirs.body.length : "-"} rows`
     );
 
+    for (const group of ["project", "client", "task"]) {
+      const rollups = await asMember(`/api/v1/time-entries/rollups?group_by=${group}`);
+      check(`a Member's ${group} rollup succeeds without exposing costs`,
+        rollups.status === 200 && Array.isArray(rollups.body) && rollups.body.every((row: Record<string, unknown>) => row.costCents === undefined));
+    }
+
     /* ---------------------------------------------------------- expenses */
     const expenses = (await asMember("/api/v1/expenses")).body as { userId: string }[];
     check(

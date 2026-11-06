@@ -13,7 +13,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
 import { Plus } from "lucide-react";
 import * as api from "@/lib/api";
-import type { Task, TimeEntry } from "@/lib/types";
+import type { Task } from "@/lib/types";
 import {
   Badge, Button, Checkbox, Dialog, DialogContent, EmptyState, Field, Input, Select,
 } from "@/components/ui/primitives";
@@ -39,15 +39,13 @@ export default function TasksPage() {
   const status = params.get("status") || "active";
   const [creating, setCreating] = React.useState(false);
 
-  const { data: entries = [], isLoading } = useQuery({
-    queryKey: ["time", "all"], queryFn: () => api.listTimeEntries({}),
+  const { data: rollups = [], isLoading } = useQuery({
+    queryKey: ["time", "rollups", "task"], queryFn: () => api.getTimeRollups("task"),
   });
 
   const secondsByTask = React.useMemo(() => {
-    const m = new Map<string, number>();
-    for (const e of entries as TimeEntry[]) m.set(e.taskId, (m.get(e.taskId) ?? 0) + e.durationSeconds);
-    return m;
-  }, [entries]);
+    return new Map(rollups.map((row) => [row.id, row.seconds]));
+  }, [rollups]);
 
   const projectsByTask = React.useMemo(() => {
     const m = new Map<string, number>();

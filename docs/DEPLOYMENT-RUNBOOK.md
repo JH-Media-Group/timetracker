@@ -241,6 +241,18 @@ service uses only `tally:<sha>`, then atomically move the candidate over
 
 ## 8. Replace web, then MCP
 
+Before replacing either service, inspect the effective live Compose environment
+without printing secrets. MCP must receive `TALLY_PUBLIC_URL=https://tally.jhmediagroup.com`
+as a public origin, plus its internal `TALLY_API_BASE_URL`. It now refuses to
+start without the public origin or with a non-HTTPS production origin. Do not
+assume the live `/opt/tally/compose.yml` matches the repository example.
+The web deployment behind Caddy must use `TRUST_PROXY=1`; verify Caddy replaces
+untrusted forwarded headers and the web port has no direct public listener.
+OAuth registration/exchange limits need this trusted client address. A local
+no-proxy setup may use `0`, which conservatively shares an unknown-IP bucket.
+If live configuration differs, review that concrete configuration change before
+the release. Do not disable the limits or blindly enable proxy trust.
+
 Replace only web:
 
 ```bash
@@ -261,6 +273,32 @@ docker compose --env-file /opt/tally/.env -f /opt/tally/compose.yml up -d --no-d
 Require MCP Docker health, internal GET 405, external GET 405, and an
 unauthenticated POST 401 with the protected-resource challenge. Confirm web
 remained healthy throughout.
+Follow the challenge's resource_metadata URL and confirm the document's resource
+is exactly `https://tally.jhmediagroup.com/mcp` and its authorization server matches
+the public issuer. No internal container hostname may appear in discovery.
+
+### MCP functional gate
+
+Health and discovery alone do not prove a working connector. Before a release
+is accepted, use a scoped credential held outside Git/logs and initialize the
+actual HTTP MCP client, list tools, then call `tally_projects_mine` and
+`tally_timer_current`. Run at least 20 sequential reads and repeat for OAuth
+and PAT credentials. Check 429 and Retry-After under controlled local quota
+exhaustion. Never reset live quotas or disable authentication to pass a check.
+Record sanitized client version, credential type and pass/fail evidence in the
+protected deployment bundle. Do not save returned business data in Git.
+
+For OAuth/schema changes, rehearse new web with old MCP, then both new, using
+fictional local data. Migration 0010 is additive: old code can still read its
+existing columns and ignores OAuth client/resource columns. Rolling back web
+also restores the old interoperability and throttling defects and removes the
+new audience checks. Retain the schema on image rollback, document the reduced
+behavior, and do not claim the connector is fixed until the new image is restored.
+Prove pre-existing PAT and OAuth credential compatibility in the rehearsal.
+
+GET 405 is valid for the current POST-only transport. If transport methods ever
+change, update the healthcheck, deployment-artifact tests and this runbook in
+the same change. Caddy stays untouched for an application-only release.
 
 ## 9. Post-deploy verification
 

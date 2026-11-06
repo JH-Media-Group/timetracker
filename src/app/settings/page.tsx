@@ -15,6 +15,7 @@ import {
   Building2, Boxes, Copy, Download, KeyRound, Plug, Plus, Receipt, SlidersHorizontal, Trash2, Users,
 } from "lucide-react";
 import * as api from "@/lib/api";
+import { McpConnectionCard } from "@/components/app/mcp-connection";
 import { cn } from "@/lib/cn";
 import { formatMoney } from "@/lib/format";
 import { SCOPE_LABELS, TOKEN_SCOPES } from "@/lib/api-token-scopes";
@@ -624,6 +625,7 @@ function SecuritySection() {
         </p>
       </Card>
 
+      <McpConnectionCard />
       <ApiTokensCard />
     </div>
   );
@@ -632,6 +634,8 @@ function SecuritySection() {
 /* -------------------------------------------------------------- API tokens */
 
 function ApiTokensCard() {
+  const [mcpUrl, setMcpUrl] = React.useState("");
+  React.useEffect(() => { setMcpUrl(`${window.location.origin}/mcp`); }, []);
   const toast = useToast();
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = React.useState(false);
@@ -679,14 +683,14 @@ function ApiTokensCard() {
   return (
     <Card>
       <div className="flex items-center justify-between">
-        <SectionTitle>API tokens</SectionTitle>
+        <SectionTitle>Connections and personal tokens</SectionTitle>
         <Button variant="ghost" size="sm" onClick={() => { setShowCreate(true); setNewToken(null); }}>
           <Plus className="size-3.5" />Create token
         </Button>
       </div>
       <p className="mb-3 text-base text-ink-secondary">
-        Tokens let scripts and MCP clients act as you. Each token has a 90-day
-        default expiry and can be revoked at any time.
+        Review or revoke access below. Personal tokens are an optional advanced
+        setup for scripts and clients that accept them. Each has a 90-day default expiry.
       </p>
 
       {newToken && (
@@ -703,7 +707,7 @@ function ApiTokensCard() {
             </Button>
           </div>
           <code className="mt-2 block break-all rounded bg-surface-secondary px-2 py-1 text-xs">
-            claude mcp add --transport http tally https://tally.jhmediagroup.com/mcp --header Authorization:&quot;Bearer {newToken}&quot;
+            claude mcp add --transport http tally {mcpUrl} --header Authorization:&quot;Bearer {newToken}&quot;
           </code>
         </div>
       )}
@@ -743,6 +747,8 @@ function ApiTokensCard() {
             <div key={t.id} className="flex items-center justify-between rounded px-2 py-1.5 hover:bg-surface-secondary">
               <div>
                 <span className="text-sm font-medium text-ink-primary">{t.label}</span>
+                <span className="ml-2 text-xs text-ink-secondary">{t.oauthClientId ? "Connected application" : "Personal or legacy token"}</span>
+                {t.oauthClientId && <p className="break-all text-xs text-ink-secondary">Registered callbacks: {t.callbackHosts.join(", ") || "Unknown"}. App name is not verified.</p>}
                 <span className="ml-2 text-xs text-ink-tertiary">tally_{t.prefix}_...</span>
                 {t.lastUsedAt && (
                   <span className="ml-2 text-xs text-ink-tertiary">
@@ -751,13 +757,15 @@ function ApiTokensCard() {
                 )}
                 {t.expiresAt && (
                   <span className="ml-2 text-xs text-ink-tertiary">
-                    Expires {new Date(t.expiresAt).toLocaleDateString()}
+                    {new Date(t.expiresAt).getTime() <= Date.now() ? "Expired" : "Expires"} {new Date(t.expiresAt).toLocaleDateString()}
                   </span>
                 )}
+                <p className="mt-1 text-xs text-ink-secondary">{t.scopes.map((scope) => SCOPE_LABELS[scope as keyof typeof SCOPE_LABELS]?.title ?? scope).join(", ") || "No permissions"}</p>
               </div>
               <Button
                 variant="danger-ghost"
                 size="sm"
+                aria-label={`Revoke ${t.label}`}
                 loading={revoke.isPending}
                 onClick={() => {
                   if (window.confirm(`Revoke "${t.label}"? Any script using it will stop working immediately.`)) {

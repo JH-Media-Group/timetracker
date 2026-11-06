@@ -14,9 +14,8 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ColDef } from "ag-grid-community";
 import { Plus } from "lucide-react";
 import * as api from "@/lib/api";
-import { ValueAccumulator } from "@/lib/derive";
 import { formatMoney } from "@/lib/format";
-import type { Client, Invoice, TimeEntry } from "@/lib/types";
+import type { Client, Invoice } from "@/lib/types";
 import { TERM_LABEL } from "@/lib/labels";
 import { Badge, Button, EmptyState, Select } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
@@ -51,31 +50,16 @@ export default function ClientsPage() {
 
   const status = params.get("status") || "active";
 
-  const { data: entries = [], isLoading: loadingTime } = useQuery({
-    queryKey: ["time", "all"], queryFn: () => api.listTimeEntries({}),
+  const { data: rollups = [], isLoading: loadingTime } = useQuery({
+    queryKey: ["time", "rollups", "client"], queryFn: () => api.getTimeRollups("client"),
   });
   const { data: invoices = [], isLoading: loadingInv } = useQuery({
     queryKey: ["invoices"], queryFn: api.listInvoices,
   });
 
   const uninvoicedByClient = React.useMemo(() => {
-    const projectClient = new Map(projects.map((p) => [p.id, p.clientId]));
-    const acc = new Map<string, ValueAccumulator>();
-    for (const e of entries as TimeEntry[]) {
-      if (!e.isBillable || e.invoiceId || e.billedExternally) continue;
-      const clientId = projectClient.get(e.projectId);
-      if (!clientId) continue;
-      let bucket = acc.get(clientId);
-      if (!bucket) { bucket = new ValueAccumulator(); acc.set(clientId, bucket); }
-      bucket.add(e.durationSeconds, e.billableRateCents ?? 0);
-    }
-    // Divided once per client, at the end. Rounding each entry and adding the
-    // results would put this column a few cents away from the invoice built
-    // from the same hours.
-    const m = new Map<string, number>();
-    for (const [clientId, bucket] of acc) m.set(clientId, bucket.cents);
-    return m;
-  }, [entries, projects]);
+    return new Map(rollups.map((row) => [row.id, row.uninvoicedCents]));
+  }, [rollups]);
 
   const outstandingByClient = React.useMemo(() => {
     const m = new Map<string, number>();

@@ -32,6 +32,9 @@ coverage
 *.log
 
 # Local-only.
+.tmp
+.probe-*
+scripts/.probe-*
 docker/compose.dev.yml
 docs
 design system

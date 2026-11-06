@@ -15,7 +15,8 @@
  * Plain data in `lib/` so the edge middleware, a server component and three
  * client components can all read the same array.
  */
-export const ANONYMOUS_PAGES = ["/signin", "/set-password", "/forgot-password"] as const;
+// Consent owns its session recovery and must never load the capture widget.
+export const ANONYMOUS_PAGES = ["/signin", "/set-password", "/forgot-password", "/oauth/authorize"] as const;
 
 export type AnonymousPage = (typeof ANONYMOUS_PAGES)[number];
 

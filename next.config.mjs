@@ -34,6 +34,9 @@ const securityHeaders = [
 
 const nextConfig = {
   reactStrictMode: true,
+  // Next 15 normalizes loopback strings inside query values when the public
+  // host is not loopback. OAuth redirect_uri and state must remain byte-exact.
+  skipMiddlewareUrlNormalize: true,
   eslint: { ignoreDuringBuilds: true },
   // The version banner is free reconnaissance.
   poweredByHeader: false,

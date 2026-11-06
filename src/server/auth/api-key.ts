@@ -28,8 +28,7 @@ const TOKEN_RE = /^tally_([A-Za-z0-9]{8})_([A-Za-z0-9_-]+)$/;
  * Resolves a Bearer token from an Authorization header to an actor.
  *
  * Returns null for any malformed, missing, or unrecognised token. The caller
- * (http.ts) falls through to session auth when this returns null, so a bad
- * token is not an error here, just "not this auth method".
+ * refuses an invalid Authorization header even when a session cookie exists.
  */
 export async function resolveBearer(
   authHeader: string

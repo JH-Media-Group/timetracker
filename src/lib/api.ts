@@ -37,6 +37,7 @@ import type {
   FieldLabels, InvoiceAppearance, InvoiceDefaults,
 } from "@/domain/invoice-config";
 import { startOfWeek } from "./format";
+import type { TimeRollup, TimeRollupGroup } from "./time-rollups";
 
 const BASE = "/api/v1";
 
@@ -705,6 +706,10 @@ export async function updateSettings(input: Partial<Settings>): Promise<Settings
 
 export interface TimeQuery {
   from?: string; to?: string; userId?: ID; projectId?: ID; clientId?: ID; taskId?: ID;
+}
+
+export function getTimeRollups(group: TimeRollupGroup): Promise<TimeRollup[]> {
+  return get("/time-entries/rollups", { group_by: group });
 }
 
 export async function listTimeEntries(q: TimeQuery = {}): Promise<TimeEntryView[]> {
@@ -1867,6 +1872,9 @@ export interface ApiTokenView {
   id: string;
   label: string;
   prefix: string;
+  oauthClientId: string | null;
+  resource: string | null;
+  callbackHosts: string[];
   scopes: string[];
   lastUsedAt: string | null;
   expiresAt: string | null;
@@ -1874,7 +1882,7 @@ export interface ApiTokenView {
   createdAt: string;
 }
 
-export interface CreatedApiTokenView extends ApiTokenView {
+export interface CreatedApiTokenView extends Pick<ApiTokenView, "id" | "label" | "prefix" | "scopes" | "expiresAt"> {
   /** The raw token string. Shown once at creation and never again. */
   token: string;
 }

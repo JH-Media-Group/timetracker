@@ -30,7 +30,7 @@ describe("the anonymous page list", () => {
     way back into an account was to ask an administrator.
   */
   it("holds exactly the pages somebody can reach without a session", () => {
-    expect([...ANONYMOUS_PAGES]).toEqual(["/signin", "/set-password", "/forgot-password"]);
+    expect([...ANONYMOUS_PAGES]).toEqual(["/signin", "/set-password", "/forgot-password", "/oauth/authorize"]);
   });
 
   it("matches exactly, so a lookalike path is not anonymous", () => {

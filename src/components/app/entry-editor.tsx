@@ -26,6 +26,7 @@ import {
 } from "@/lib/format";
 import { dayIn } from "@/domain/calendar";
 import { timeEntryClockValues } from "@/lib/time-entry-clock";
+import { editedTimeEntryNotes } from "@/lib/time-entry-notes";
 
 /* ------------------------------------------------------------------ store */
 
@@ -189,7 +190,7 @@ export function EntryForm({
       */
       const initialNonBillable = entry ? !entry.isBillable : false;
       const base = {
-        projectId, taskId, spentOn, notes: notes.trim() || undefined,
+        projectId, taskId, spentOn, notes: editedTimeEntryNotes(notes, entry),
         ...(nonBillable !== initialNonBillable ? { isBillable: !nonBillable } : {}),
       };
       const clock = timeEntryClockValues({

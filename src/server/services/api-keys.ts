@@ -24,6 +24,7 @@ import type { Actor, Ctx } from "@/server/ctx";
 import { db } from "@/server/db/client";
 import * as s from "@/server/db/schema";
 import { newId } from "@/server/db/ids";
+import { mcpResource } from "@/server/auth/oauth-metadata";
 import { AppError, forbidden, notFound } from "@/server/errors";
 import type { Capability } from "@/server/auth/capabilities";
 export { TOKEN_SCOPES, SCOPE_LABELS, type TokenScope } from "@/lib/api-token-scopes";
@@ -242,6 +243,9 @@ export interface ApiTokenRow {
   expiresAt: Date | null;
   revokedAt: Date | null;
   createdAt: Date;
+  oauthClientId: string | null;
+  resource: string | null;
+  callbackHosts: string[];
 }
 
 /**
@@ -258,12 +262,21 @@ export async function listApiTokens(ctx: Ctx): Promise<ApiTokenRow[]> {
       expiresAt: s.apiTokens.expiresAt,
       revokedAt: s.apiTokens.revokedAt,
       createdAt: s.apiTokens.createdAt,
+      oauthClientId: s.apiTokens.oauthClientId,
+      resource: s.apiTokens.resource,
+      redirectUris: s.oauthClients.redirectUris,
     })
     .from(s.apiTokens)
+    .leftJoin(s.oauthClients, eq(s.oauthClients.clientId, s.apiTokens.oauthClientId))
     .where(eq(s.apiTokens.userId, ctx.actor.userId))
     .orderBy(s.apiTokens.createdAt);
 
-  return rows;
+  return rows.map(({ redirectUris, ...row }) => ({
+    ...row,
+    callbackHosts: [...new Set((redirectUris ?? []).flatMap((uri) => {
+      try { return [new URL(uri).host]; } catch { return []; }
+    }))],
+  }));
 }
 
 /* ---------------------------------------------------------------- revoke */
@@ -344,6 +357,8 @@ export async function resolveApiToken(
   const rows = await db
     .select({
       tokenId: s.apiTokens.id,
+      oauthClientId: s.apiTokens.oauthClientId,
+      resource: s.apiTokens.resource,
       prefix: s.apiTokens.prefix,
       scopes: s.apiTokens.scopes,
       lastUsedAt: s.apiTokens.lastUsedAt,
@@ -373,6 +388,12 @@ export async function resolveApiToken(
 
   const row = rows[0];
   if (!row) return null;
+
+  // New OAuth credentials belong to this Tally resource, including its REST
+  // implementation. Null/null is a PAT or a pre-migration legacy credential;
+  // labels cannot safely distinguish those and are never used for auth.
+  if ((row.oauthClientId !== null || row.resource !== null) &&
+      (!row.oauthClientId || row.resource !== mcpResource())) return null;
 
   // An archived person's tokens are dead, same as their sessions.
   if (row.archivedAt) return null;

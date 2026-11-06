@@ -4,6 +4,13 @@ export interface ApiProblem { title?: string; status?: number; detail?: string; 
 export class TallyApiError extends Error {
   constructor(readonly status: number, readonly problem: ApiProblem) { super(problem.detail ?? problem.title ?? `Tally API returned ${status}`); }
 }
+export class TallyApiUnavailable extends Error {
+  constructor(readonly outcomeUnknown = false) {
+    super(outcomeUnknown
+      ? "The write may have completed. Check Tally before retrying. If retrying an idempotent operation, reuse the original idempotency key."
+      : "Tally is temporarily unavailable. Try again shortly.");
+  }
+}
 type QueryValue = string | number | boolean | null | undefined;
 const MAX_CACHE_ENTRIES = 1024, CACHE_TTL_MS = 60_000, MAX_CACHE_BODY_BYTES = 256_000;
 const etags = new Map<string, { etag: string; value: unknown; expiresAt: number }>();
@@ -27,7 +34,7 @@ export class TallyApi {
   }
   async get<T>(path: string, query: Record<string, QueryValue> = {}): Promise<{ data: T; meta?: Record<string, unknown> }> {
     const url = this.url(path, query), cacheKey = `${this.fingerprint}:${url}`, prior = cached(cacheKey);
-    const response = await fetch(url, { headers: this.headers(prior?.etag) });
+    const response = await this.fetch(url, { headers: this.headers(prior?.etag) });
     if (response.status === 304 && prior) return prior.value as { data: T; meta?: Record<string, unknown> };
     const value = await this.read<T>(response), etag = response.headers.get("etag");
     if (etag) remember(cacheKey, etag, value);
@@ -38,9 +45,29 @@ export class TallyApi {
   delete<T>(path: string, key?: string) { return this.write<T>("DELETE", path, undefined, key); }
   private async write<T>(method: string, path: string, body?: unknown, key?: string) {
     const headers = this.headers(); headers.set("content-type", "application/json"); if (key) headers.set("idempotency-key", key);
-    return this.read<T>(await fetch(this.url(path), { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }));
+    return this.read<T>(await this.fetch(this.url(path), { method, headers, body: body === undefined ? undefined : JSON.stringify(body) }), true);
+  }
+  private async fetch(url: string, init: RequestInit) {
+    try { return await fetch(url, { ...init, signal: AbortSignal.timeout(15_000), redirect: "error" }); }
+    catch { throw new TallyApiUnavailable(init.method !== undefined && init.method !== "GET"); }
   }
   private headers(etag?: string) { const h = new Headers({ authorization: `Bearer ${this.bearer}`, accept: "application/json" }); if (etag) h.set("if-none-match", etag); return h; }
   private url(path: string, query: Record<string, QueryValue> = {}) { const u = new URL(`/api/v1${path.startsWith("/") ? path : `/${path}`}`, this.baseUrl); for (const [k,v] of Object.entries(query)) if (v !== undefined && v !== null) u.searchParams.set(k, String(v)); return u.toString(); }
-  private async read<T>(response: Response): Promise<{ data: T; meta?: Record<string, unknown> }> { const payload = await response.json().catch(() => ({})); if (!response.ok) { const retry = response.headers.get("retry-after"); throw new TallyApiError(response.status, { ...(payload as ApiProblem), retryAfter: retry ? Number(retry) : undefined }); } return payload as { data: T; meta?: Record<string, unknown> }; }
+  private async read<T>(response: Response, write = false): Promise<{ data: T; meta?: Record<string, unknown> }> {
+    let payload: unknown;
+    try { payload = await response.json(); }
+    catch {
+      if (response.ok) throw new TallyApiUnavailable(write);
+      payload = {};
+    }
+    if (!response.ok) {
+      const retry = response.headers.get("retry-after");
+      throw new TallyApiError(response.status, { ...(payload as ApiProblem), retryAfter: retry ? Number(retry) : undefined });
+    }
+    // Void mutations serialize to {}. Reads always carry a data envelope.
+    if (!payload || typeof payload !== "object" || Array.isArray(payload) || (!write && !("data" in payload))) {
+      throw new TallyApiUnavailable(write);
+    }
+    return payload as { data: T; meta?: Record<string, unknown> };
+  }
 }

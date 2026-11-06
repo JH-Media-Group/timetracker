@@ -487,13 +487,30 @@ export interface UpdateTimeEntryInput {
 
 export async function updateTimeEntry(ctx: Ctx, id: string, input: UpdateTimeEntryInput): Promise<TimeEntryDto> {
   return withTransaction(ctx, async (tx) => {
-    const { entry: before, requiresOverride } = await loadEditable(tx, id);
+    const { entry: before, requiresOverride: sourceOverride } = await loadEditable(tx, id);
+    let requiresOverride = sourceOverride;
 
     const updatedAt = tx.now();
     const patch: Record<string, unknown> = { updatedAt, updatedBy: tx.actor.userId };
 
     const projectId = input.projectId ?? before.projectId;
     const spentOn = input.spentOn ?? before.spentOn;
+
+    if (spentOn !== before.spentOn) {
+      const settings = await getSettings(tx);
+      const [owner] = await tx.db.select({ timezone: s.users.timezone }).from(s.users).where(eq(s.users.id, before.userId)).limit(1);
+      if (!owner) throw notFound("That person");
+      if (!settings.allowFutureDates && spentOn > dayIn(owner.timezone, tx.now())) {
+        throw validationFailed({ spentOn: ["This account does not allow time on future dates."] });
+      }
+      const lockContext = await editabilityContextFor(tx, [before.userId]);
+      const destination = canEdit(
+        { spentOn, userId: before.userId, invoiceId: null, invoiceState: null, billedExternally: false },
+        lockContext(before.userId)
+      );
+      if (!destination.editable) throw recordLocked(destination.reasons);
+      requiresOverride ||= destination.requiresOverride;
+    }
 
     let projectTaskId = before.projectTaskId;
     if (input.taskId || input.projectId) {
@@ -545,6 +562,17 @@ export async function updateTimeEntry(ctx: Ctx, id: string, input: UpdateTimeEnt
     if (input.isBillable !== undefined) patch.isBillable = input.isBillable;
     // Same rule as creating: a non-billable project holds no billable time.
     if (patch.isBillable === true && (await projectIsNonBillable(tx, projectId))) patch.isBillable = false;
+
+    const finalBillable = (patch.isBillable as boolean | undefined) ?? before.isBillable;
+    const finalNotes = (input.notes === undefined ? before.notes : input.notes)?.trim() || null;
+    // Legacy blank notes may be replayed by Undo. Validate a real change,
+    // without making unrelated edits depend on a newer note policy.
+    if (finalNotes !== (before.notes?.trim() || null) || finalBillable !== before.isBillable) {
+      const settings = await getSettings(tx);
+      if (!finalNotes && (settings.requireNotes === "always" || (settings.requireNotes === "non_billable" && !finalBillable))) {
+        throw validationFailed({ notes: [settings.requireNotes === "always" ? "This account requires a note on every entry." : "This account requires a note on non-billable time."] });
+      }
+    }
 
     // Re-resolve rates only when something the rate depends on has moved. An
     // edit to the note must not silently reprice work at today's rate.

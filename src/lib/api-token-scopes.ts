@@ -1,5 +1,7 @@
 export const TOKEN_SCOPES = ["tally.read", "tally.financial.read", "tally.time.write", "tally.expenses", "tally.approvals", "tally.admin"] as const;
 export type TokenScope = (typeof TOKEN_SCOPES)[number];
+const WRITE_SCOPES = new Set<string>(["tally.time.write", "tally.expenses", "tally.approvals", "tally.admin"]);
+export const isReadOnlyToken = (scopes: readonly string[]) => !scopes.some((scope) => WRITE_SCOPES.has(scope));
 export const SCOPE_LABELS: Record<TokenScope, { title: string; description: string }> = {
   "tally.read": { title: "Read non-financial records", description: "View the non-financial Tally records you can already see." },
   "tally.financial.read": { title: "Sensitive financial data", description: "View invoices, financial reports, billable rates, payroll cost rates, and audit history allowed by your Tally permissions." },

@@ -92,6 +92,7 @@ const EXEMPT: Record<string, string> = {
   expenses: "service: an expense of your own needs only the floor capability",
   "expenses/[id]": "service: editability depends on whose expense it is",
   "time-entries": "service: your own time needs only the floor capability",
+  "time-entries/rollups": "service: same timeEntryScope and per-field rate visibility as time-entry lists",
   "time-entries/[id]": "service: editability depends on whose entry it is",
   "time-entries/running": "your own running timer",
   "time-entries/[id]/stop": "service: stopping somebody else's needs reach",

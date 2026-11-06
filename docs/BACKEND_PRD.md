@@ -986,6 +986,7 @@ Rules:
 **Time**
 ```
 GET    /time-entries                    ?from&to&user_id&project_id&client_id&task_id&is_billable&invoiced&approved&cursor
+GET    /time-entries/rollups            ?group_by=project|client|task
 POST   /time-entries
 GET    /time-entries/:id
 PATCH  /time-entries/:id
@@ -1000,6 +1001,14 @@ POST   /timesheet/copy-day              { from, to, include_durations }
 PUT    /timesheet/week                  bulk upsert of the week grid, one round trip
 GET    /timesheet/summary               ?from&to&user_id  → per-day totals, capacity, flags
 ```
+
+Rollups return all-time totals per visible project, client or task, without a
+time-entry pagination cap. They compose the same row scope and monetary field
+visibility as the time-entry list: own billable amounts remain visible, other
+people's rates require rate visibility, and costs require cost visibility.
+Uninvoiced totals exclude invoice-linked and externally billed entries. Deleted
+entries are excluded. Money is aggregated before rounding. These summaries use
+the report quota and do not change monthly budget period semantics.
 
 **Expenses**
 ```
