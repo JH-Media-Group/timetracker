@@ -4,7 +4,7 @@
 
 **Staging deployed:** 2026-08-24
 
-**Staging last updated:** 2026-11-06 00:24 UTC (November 5 in America/Cancun)
+**Staging last updated:** 2026-11-06 01:01 UTC (November 5 in America/Cancun)
 
 **Production droplet:** `165.245.130.130`
 
@@ -20,9 +20,62 @@ The repeatable operating procedure now lives in
 `docs/DEPLOYMENT-RUNBOOK.md`. This file retains the deployment evidence and
 the broader shared-server maintenance plan.
 
-## Staging update: MCP connections and time-entry fixes, November 5, 2026
+## Staging hotfix: MCP time writes, November 5, 2026
 
-Source `98cf2032e96634fd6a421534d715a500099deddc` is deployed as
+Source `6411c19a113992fede5efb956e7e36812c981af3` is deployed as
+`tally:6411c19`, image ID
+`sha256:1e6135bc85bdc6ef71ca8e7610942615b4d578ebfa372f4e7a40351825ec9f1f`,
+configuration digest
+`sha256:8b8784769d2fb220069a4905ad3f6286ab1eba53197895a40c7c37fe949d0371`.
+The update completed at approximately 01:01 UTC on November 6, which is still
+November 5 locally. The subsequent documentation commit is separate.
+
+Jason's successful OAuth connection exposed a write path missed by the earlier
+read checks. TALLY-93 changes the unsupported entry source `mcp` to `api`.
+TALLY-94 also fixes missing elapsed duration for clock-only logs and edits,
+including DST, and rejects inconsistent clock ranges.
+
+Release evidence:
+
+- All 76 files and 1,082 tests passed, with typecheck, palette validation and
+  clean-archive Linux build. New real HTTP regressions failed before the fixes.
+  A separate mutation proved the API-actor source default is tested; source
+  was restored byte-for-byte and the restored checks passed. Independent
+  Codex and Claude reviews resolved the material findings.
+- The exact image passed HTTPS OAuth and PAT completed-time writes, clock-only
+  logging, idempotent retry and timer start/stop using fictional fixtures.
+  Persisted source, durations and API audit actor/prefix were checked separately
+  in the isolated database. Scope denial and clock edits are covered by the
+  HTTP suite. Actual production business records were not written for QA.
+- The 101,635,584-byte image transfer matched SHA-256
+  `5004a334f1a4c82cc38067984c104f63bf9df312ec8cc1ee9e9f8e6329a449a9`
+  locally and remotely. Runtime user and healthcheck were verified.
+- Pre-update backup `/var/backups/tally/tally-20261106T005930Z.dump`, SHA-256
+  `8396010254b80148a2f0d0d8b4182b2cb080e3076ba80cb28a19e4b8617ad6d2`,
+  and post-update backup `/var/backups/tally/tally-20261106T010159Z.dump`, SHA-256
+  `3e0ab8492e52d2fc210fdac2fba88375321d45d722755572de38135f7aa954ef`,
+  passed catalog validation and full owner-preserving scratch restore with
+  matching counts. Both exact scratch databases were removed.
+- The isolated candidate passed health/readiness before live replacement.
+  Migration checks were a no-op, with unchanged ledgers and business counts.
+  The strict source constraint was retained. Only the environment image line
+  changed. Web and MCP were separately replaced with `--no-deps` and are
+  healthy on the exact image, with unchanged resource/security limits.
+- Live initialization, tool listing, projects, 20 timer reads and all three
+  rollup routes passed using the existing Claude-configured bearer. Readiness,
+  discovery, challenges and security headers passed. Combined logs showed zero
+  error markers. Unrelated containers, Caddy/Compose hashes, public listeners,
+  timers and effective root SSH stayed unchanged.
+- Real Claude write retry remains a user acceptance check. The earlier browser
+  automation limitation remains; no new browser check is claimed.
+
+Protected evidence and rollback files are under
+`/opt/tally/artifacts/deploy-6411c19`. Keep `tally:98cf203` and its saved
+configuration as the immediate rollback image. This patch has no schema change.
+
+## Earlier staging update: MCP connections and time-entry fixes, November 5, 2026
+
+Source `98cf2032e96634fd6a421534d715a500099deddc` was deployed as
 `tally:98cf203`, image ID
 `sha256:6b5132067a7a72669d1971c5c380d356c47928f15df42fb843a95cbd913ced59`.
 The image configuration digest is

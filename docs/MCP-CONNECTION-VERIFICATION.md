@@ -97,10 +97,46 @@ be confirmed in the exact installed version during acceptance.
   Rendering, narrow/desktop layouts and keyboard interactions remain unverified.
 - This initial local pass preceded the authorized deployment below.
 
-## Deployment evidence, November 5, 2026 (America/Cancun)
+## Connector-write hotfix, November 5, 2026 (America/Cancun)
+
+Current deployed source is `6411c19a113992fede5efb956e7e36812c981af3`,
+image `tally:6411c19`. Jason confirmed successful Claude OAuth connection, then
+reported that logging time failed with `time_entries_source_valid`.
+
+The earlier read-focused checks missed this write defect. TALLY-93 corrects
+the unsupported `mcp` source to `api`, retains the strict database constraint
+and audit attribution, and gives bearer-created timers the same API source.
+TALLY-94 fixes a second existing defect: clock-only logs and clock edits did
+not calculate elapsed duration. The MCP service now derives duration from the
+owner-timezone instants, rejects inconsistent explicit durations or invalid
+ranges, and requires stopping a live timer before a completed clock-range edit.
+
+The new OAuth/PAT HTTP regressions failed against the defects, then passed.
+They cover minimal duration logs, same-day/overnight/DST clocks, range limits,
+clock edits, mismatched duration rejection, timer start/stop, read-only denial,
+idempotent retries, persisted source and audit attribution. The full suite
+passed 76 files and 1,082 tests; typecheck, palette and Linux production build
+passed. Independent Codex and Claude reviews found no remaining release blocker.
+
+Against the exact production image behind local HTTPS, both OAuth and PAT
+logged completed duration and clock-based entries, retried without duplication,
+and started/stopped timers. A separate isolated-database check verified all
+six entries' source, duration and audit records. No production business records
+were created for QA. After deployment, live initialization, tool listing,
+projects, 20 timer reads and three rollup routes passed. Both services are
+healthy, migration checks were a no-op, and both backups passed scratch restore.
+The user's actual Claude time-log retry remains pending.
+
+Known pre-existing follow-ups from review remain outside this patch: generic
+duration/date-only edits may retain old clock fields, the shared clock helper
+does not strictly reject nonexistent spring-forward local times, and permission
+checks before on-behalf timezone lookup can be tightened. These were not
+introduced by the source fix and are recorded with the clock-duration ticket.
+
+## Earlier deployment evidence, November 5, 2026 (America/Cancun)
 
 Source `98cf2032e96634fd6a421534d715a500099deddc` was committed, fast-forwarded
-to main and pushed. Both live services now run `tally:98cf203`, built from a
+to main and pushed. Both live services then ran `tally:98cf203`, built from a
 clean archive of that exact commit. The full 1,068-test suite passed again.
 
 Before rollout, the old image issued OAuth and PAT credentials against its old
