@@ -11,6 +11,10 @@ import { POST as exchange } from "@/app/oauth/token/route";
 import { GET as request } from "@/app/api/v1/oauth/request/route";
 import { POST as consent } from "@/app/api/v1/oauth/authorize/route";
 import { POST as createToken } from "@/app/api/v1/api-tokens/route";
+import { POST as logTime } from "@/app/api/v1/mcp/time-log/route";
+import { POST as createTime } from "@/app/api/v1/time-entries/route";
+import { POST as stopTimer } from "@/app/api/v1/mcp/timer-stop/route";
+import { PATCH as editTime } from "@/app/api/v1/mcp/time/[id]/route";
 
 const routes: Record<string, (req: NextRequest, context: { params: Promise<Record<string, string>> }) => Promise<Response>> = {
   "GET /api/v1/auth/token-info": tokenInfo,
@@ -19,6 +23,9 @@ const routes: Record<string, (req: NextRequest, context: { params: Promise<Recor
   "POST /oauth/register": register, "POST /oauth/token": exchange,
   "GET /api/v1/oauth/request": request, "POST /api/v1/oauth/authorize": consent,
   "POST /api/v1/api-tokens": createToken,
+  "POST /api/v1/mcp/time-log": logTime,
+  "POST /api/v1/time-entries": createTime,
+  "POST /api/v1/mcp/timer-stop": stopTimer,
 };
 
 /** Network bridge only. Middleware, route auth, services and DB are real. */
@@ -37,8 +44,10 @@ export function apiHttpServer() {
       });
       let response: Response = middleware(req);
       if (response.headers.get("x-middleware-next") === "1") {
-        const handler = routes[`${req.method} ${req.nextUrl.pathname}`];
-        response = handler ? await handler(req, { params: Promise.resolve({}) }) : new Response(null, { status: 404 });
+        const edit = req.method === "PATCH" ? /^\/api\/v1\/mcp\/time\/([^/]+)$/.exec(req.nextUrl.pathname) : null;
+        const handler = routes[`${req.method} ${req.nextUrl.pathname}`] ?? (edit ? editTime : undefined);
+        const params: Record<string, string> = edit ? { id: edit[1]! } : {};
+        response = handler ? await handler(req, { params: Promise.resolve(params) }) : new Response(null, { status: 404 });
       }
       outgoing.writeHead(response.status, Object.fromEntries(response.headers));
       outgoing.end(Buffer.from(await response.arrayBuffer()));

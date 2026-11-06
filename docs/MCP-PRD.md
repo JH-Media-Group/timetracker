@@ -373,6 +373,13 @@ instants, and go through `resolveClockTime` in `src/lib/format.ts`, so a bare
 hour resolves the same way it does in the UI and an end before its start is the
 next day. **The tool must not reimplement that**; it is one import.
 
+Clock-only logs and edits derive duration from the resolved instants in the
+entry owner's timezone, including daylight-saving changes. The elapsed range
+must be 1 to 86,400 seconds. If a duration is also supplied, it must match that
+range. Stop a running timer before editing a completed clock range. MCP writes
+use the existing `api` entry source; audit records retain the API actor and
+credential prefix. The database source constraint remains unchanged.
+
 ### 5.2 Managing, which needs reach
 
 The same tools with `user_id` set, plus:

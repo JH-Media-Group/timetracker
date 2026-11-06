@@ -17,21 +17,36 @@ type Input = Record<string, any>;
 const plan = (action: string, type: string, input: Input, id?: string): ConfirmationPlan => ({ action, records: [{ type, id, label: String(input.name ?? input.email ?? id ?? "new record") }], changes: Object.fromEntries(Object.entries(input).filter(([key]) => key !== "confirmationToken")) });
 function confirmed(ctx: Ctx, action: string, type: string, input: Input, id?: string) { return confirmation(ctx, action, { ...input, confirmationToken: undefined }, plan(action, type, input, id), input.confirmationToken); }
 
+function clockDuration(startedAt: string, endedAt: string, requested?: number): number {
+  // Use actual elapsed time, including the owner's daylight-saving offset.
+  const seconds = Math.round((Date.parse(endedAt) - Date.parse(startedAt)) / 1000);
+  if (!Number.isFinite(seconds) || seconds < 1 || seconds > 86400) {
+    throw validationFailed({ endedAt: ["The time range must span between 1 second and 24 hours."] });
+  }
+  if (requested !== undefined && requested !== seconds) {
+    throw validationFailed({ durationSeconds: ["Duration must match the start and end times. Send either a duration or matching clock times."] });
+  }
+  return seconds;
+}
+
 export async function mcpTimeLog(ctx: Ctx, input: Input) {
   if (input.userId && input.userId !== ctx.actor.userId) { const check = await confirmed(ctx, "time.log.other", "time_entry", input, input.userId); if (!check.confirmed) return check; }
   const targetId = input.userId ?? ctx.actor.userId;
   let startedAt: string | undefined, endedAt: string | undefined;
+  let durationSeconds: number | undefined = input.durationSeconds;
+  let spentOn: string | undefined = input.spentOn;
   if (input.startedAt || input.endedAt) {
     if (!input.startedAt || !input.endedAt) throw validationFailed({ startedAt: ["Start and end are required together."] });
     const [owner] = await ctx.db.select({ timezone: s.users.timezone }).from(s.users).where(eq(s.users.id, targetId)).limit(1);
     if (!owner) throw notFound("That person");
     const start = resolveClockTime(input.startedAt), end = resolveClockTime(input.endedAt, { after: start });
     if (start == null || end == null) throw validationFailed({ startedAt: ["Use a clock time such as 9:00am or 17:30."] });
-    const spentOn = input.spentOn ?? new Intl.DateTimeFormat("en-CA", { timeZone: owner.timezone }).format(ctx.now());
+    spentOn ??= new Intl.DateTimeFormat("en-CA", { timeZone: owner.timezone }).format(ctx.now());
     startedAt = instantAt(spentOn, start, owner.timezone);
     endedAt = instantAt(crossesMidnight(start, end) ? nextIsoDay(spentOn) : spentOn, end, owner.timezone);
+    durationSeconds = clockDuration(startedAt, endedAt, durationSeconds);
   }
-  const result = await createTimeEntry(ctx, { userId: input.userId, projectId: input.projectId, taskId: input.taskId, spentOn: input.spentOn, durationSeconds: input.durationSeconds, startedAt, endedAt, notes: input.notes, isBillable: input.isBillable, source: "mcp" });
+  const result = await createTimeEntry(ctx, { userId: input.userId, projectId: input.projectId, taskId: input.taskId, spentOn, durationSeconds, startedAt, endedAt, notes: input.notes, isBillable: input.isBillable, source: "api" });
   return { data: result };
 }
 
@@ -39,8 +54,10 @@ export async function mcpTimeEdit(ctx: Ctx, id: string, input: Input) {
   const before = await getTimeEntry(ctx, id);
   if (before.userId !== ctx.actor.userId) { const check = await confirmed(ctx, "time.edit.other", "time_entry", input, id); if (!check.confirmed) return check; }
   let startedAt: string | null | undefined, endedAt: string | null | undefined;
+  let durationSeconds: number | undefined = input.durationSeconds;
   if (input.startedAt !== undefined || input.endedAt !== undefined) {
     if (!input.startedAt || !input.endedAt) throw validationFailed({ startedAt: ["Start and end are required together."] });
+    if (before.timerStartedAt) throw validationFailed({ startedAt: ["Stop the running timer before editing a completed clock range."] });
     const [owner] = await ctx.db.select({ timezone: s.users.timezone }).from(s.users).where(eq(s.users.id, before.userId)).limit(1);
     if (!owner) throw notFound("That person");
     const start = resolveClockTime(input.startedAt), end = resolveClockTime(input.endedAt, { after: start });
@@ -48,8 +65,9 @@ export async function mcpTimeEdit(ctx: Ctx, id: string, input: Input) {
     const spentOn = input.spentOn ?? before.spentOn;
     startedAt = instantAt(spentOn, start, owner.timezone);
     endedAt = instantAt(crossesMidnight(start, end) ? nextIsoDay(spentOn) : spentOn, end, owner.timezone);
+    durationSeconds = clockDuration(startedAt, endedAt, durationSeconds);
   }
-  const data = await updateTimeEntry(ctx, id, { ...input, startedAt, endedAt });
+  const data = await updateTimeEntry(ctx, id, { ...input, durationSeconds, startedAt, endedAt });
   return { data, undoToken: undoToken(ctx) };
 }
 export async function mcpTimeDelete(ctx: Ctx, id: string, input: Input = {}) {

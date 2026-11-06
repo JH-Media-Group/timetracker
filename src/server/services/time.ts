@@ -249,7 +249,8 @@ export interface CreateTimeEntryInput {
   isBillable?: boolean;
   /** Start a timer on the new entry, stopping whatever was running. */
   start?: boolean;
-  source?: string;
+  /** Values allowed by time_entries_source_valid. MCP uses the API source. */
+  source?: "web" | "api" | "import" | "calendar" | "slack";
 }
 
 export interface CreateResult {
@@ -421,7 +422,7 @@ export async function createTimeEntry(ctx: Ctx, input: CreateTimeEntryInput): Pr
       isBillable,
       billableRateCents: isBillable ? rates.billableRateCents : 0,
       costRateCents: rates.costRateCents,
-      source: input.source ?? "web",
+      source: input.source ?? (ctx.actor.kind === "api" ? "api" : "web"),
       createdBy: ctx.actor.userId,
       updatedBy: ctx.actor.userId,
     });

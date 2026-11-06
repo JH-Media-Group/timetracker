@@ -66,7 +66,7 @@ export function createMcpServer() {
 
   server.tool("tally_timer_start", "Start your timer. Resolve project and task IDs with tally_projects_mine first.", {
     project_id: id, task_id: id.optional(), note: z.string().max(2000).optional(), idempotency_key: z.string().max(200).optional(),
-  }, async ({ project_id, task_id, note, idempotency_key }) => safe(async () => requestContext().api.post("/time-entries", { projectId: project_id, taskId: task_id, notes: note, start: true, source: "mcp" }, idempotency_key)));
+  }, async ({ project_id, task_id, note, idempotency_key }) => safe(async () => requestContext().api.post("/time-entries", { projectId: project_id, taskId: task_id, notes: note, start: true }, idempotency_key)));
 
   server.tool("tally_timer_stop", "Stop your running timer.", { idempotency_key: z.string().max(200).optional() }, async ({ idempotency_key }) => safe(async () => requestContext().api.post("/mcp/timer-stop", undefined, idempotency_key)));
 
